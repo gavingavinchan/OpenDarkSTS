@@ -60,6 +60,36 @@
 - YOLOv8 best weights: `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960/weights/best.pt`
 - YOLO26 best weights: `runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt`
 
+## Real Pipeline Smoke Test
+
+- End-to-end pipeline run completed on `workspace/inputs/2020_01_14/2020-01-14 lat 28.40449 long -94.50870 cropped_small.jpg`
+- Output files: `workspace/reports/2020_01_14_pipeline.json` and `workspace/reports/2020_01_14_pipeline.csv`
+- The crop bbox was inferred from `lat 28.40449 long -94.50870.txt` as `[-94.50870, 28.40449, -94.31704, 28.61105]`
+- Result 1: `FULLY_DARK` at `(28.44329114, -94.50266333)` with no AIS vessels found within 1000 m
+- Result 2: `PARTIALLY_DARK` at `(28.58931499, -94.40030482)` with one AIS match: `APL HOLLAND` (`MMSI 563754000`) at `696.364 m`
+
+### Spatial Match Warning
+
+- The source image is visually a daytime scene, but the nearest matched AIS ping was `2020-01-14T07:44:43`
+- If that AIS timestamp is interpreted as UTC and converted to Texas local time, it becomes `2020-01-14 01:44:43 CST`, which conflicts with the daytime appearance of the image
+- Because the satellite filename only encodes the date and daily range (`00_00` to `23_59`), it should currently be treated as a full-day composite or day-level asset, not an exact capture timestamp
+- More importantly, this mismatch is a warning that the current georeferencing or spatial match may be wrong, not just that the timestamp is ambiguous
+- The current run used a bbox inferred from `lat 28.40449 long -94.50870.txt`; that inferred crop extent may not align exactly with `cropped_small.jpg`, so the computed lat/lon may be offset enough to create a misleading AIS match
+- Therefore the current pipeline must not treat this AIS hit as a trusted spatial confirmation until the crop georeferencing is validated against real image metadata or a known bbox for the exact crop
+- Follow-up needed: validate the exact crop bbox, verify the timezone semantics of `BaseDateTime`, recover actual Sentinel acquisition/overpass time if available, and add temporal filtering before treating AIS matches as contemporaneous with the image
+
+## GeoTIFF Timing Check
+
+- GeoTIFF tested: `2020-01-14-00_00_2020-01-14-23_59_Sentinel-2_L2A_True_color.tiff`
+- Rasterio-confirmed bounds: `left=-94.52739715576173`, `bottom=28.391796786663782`, `right=-94.48362350463867`, `top=28.41682429748743`
+- Pipeline result: one `ships` detection centered at `(28.40532401, -94.50881605)` with `AIS_PRESENT`
+- Nearest same-day AIS pair near that detection was `EAGLE KLANG` (`MMSI 564329000`) and `MANIFA` (`MMSI 403560000`)
+- Their closest matched pings in the current full-day correlation were at `2020-01-14T17:01:19` and `2020-01-14T17:03:23`, roughly `11:01-11:03 AM CST`, and only `91.293 m` / `115.271 m` from the TIFF detection center
+- If Sentinel-2 local acquisition is assumed to be about `10:30 AM CST`, the nearest AIS pings to that time were `2020-01-14T16:30:29` and `2020-01-14T16:29:43`
+- At `~10:30 AM CST`, those two AIS vessels were still `1221.649 m` and `1299.552 m` from the TIFF detection center, and both were outside the georeferenced YOLO bbox footprint
+- This is a notable inconsistency: a supposedly correct Sentinel-2 daytime image does not align tightly with the AIS pair at the expected `~10:30 AM` time, while it does align much better about 30 minutes later
+- Working interpretation: either the assumed local acquisition time is wrong for this asset, the AIS timestamps need timezone/latency validation, or there is still residual spatial/georeferencing error even in the GeoTIFF workflow
+
 ## Suggested Next Steps
 
 - Inspect false positives and false negatives from the best YOLO26 model

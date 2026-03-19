@@ -245,6 +245,18 @@ OpenDarkSTS/
 - **AIS temporal filtering:** Currently uses all AIS records for the full day. A future
   improvement would be to use the Sentinel-2 overpass time (typically ~10:30 local) to
   narrow AIS matches to a ±1h window, reducing false positives in busy shipping lanes.
+- **Timestamp semantics:** A real smoke test produced a daytime-looking image whose nearest
+  AIS ping would convert to `01:44 CST` if `BaseDateTime` is UTC. This means the pipeline
+  must not infer the image's local capture time from AIS alone; the timezone basis of AIS
+  timestamps and the actual satellite acquisition time both need to be verified.
+- **Spatial validation:** That same smoke test also suggests the current spatial match may be
+  wrong, because the crop bbox was inferred rather than read from exact image metadata. The
+  pipeline needs a validated bbox or native georeferencing for each image before AIS matches
+  can be treated as reliable spatial evidence.
+- **Overpass-time mismatch:** A GeoTIFF test aligned well with AIS around `11:01-11:03 AM CST`,
+  but the same vessel pair sat about `1.2-1.3 km` away at `~10:30 AM CST`, which is close to
+  the commonly cited Sentinel-2 local overpass time. The pipeline therefore needs explicit
+  verification of actual acquisition time per image instead of assuming `10:30 local`.
 - **Confidence threshold tuning:** The 0.25 default may produce low-quality `ships`
   detections. Should be evaluated against ground truth.
 - **Multiple AIS matches:** When `ais_count >= 2`, the two closest vessels are reported.
