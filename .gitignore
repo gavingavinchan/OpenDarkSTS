@@ -1,0 +1,73 @@
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+*.secrets
+
+# Editors
+.idea/
+.vscode/
+.cursor/
+
+# OS and logs
+*.log
+
+# Build artifacts
+build/
+dist/
+
+# ML/CV datasets and outputs
+data/
+datasets/
+images/
+labels/
+annotations/
+models/
+weights/
+checkpoints/
+runs/
+outputs/
+predictions/
+artifacts/
+
+# Common archive and export formats
+*.zip
+*.tar
+*.gz
+*.bz2
+*.7z
+*.csv
+*.parquet
+*.sqlite
+*.db
+
+# Media generated during analysis
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+*.mp4
