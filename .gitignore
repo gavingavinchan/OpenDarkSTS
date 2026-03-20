@@ -79,3 +79,4 @@ test_model.py
 *.pt
 runs/
 test_model.py
+test_model_2.py
