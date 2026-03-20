@@ -73,3 +73,9 @@ workspace/
 *.jpg
 *.jpeg
 *.mp4
+*.pt
+runs/
+test_model.py
+*.pt
+runs/
+test_model.py
