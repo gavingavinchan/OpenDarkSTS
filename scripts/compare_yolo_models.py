@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from time import time
 
-from ultralytics import YOLO
-
 
 def extract_metrics(result) -> dict:
     metrics = {}
@@ -32,6 +30,14 @@ def extract_metrics(result) -> dict:
 
 
 def train_and_evaluate(model_name: str, args: argparse.Namespace, output_dir: Path) -> dict:
+    try:
+        # Import lazily so `--help` works even if ultralytics isn't installed.
+        from ultralytics import YOLO
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "Missing dependency `ultralytics`. Install it with `pip install ultralytics`."
+        ) from e
+
     run_name = f"{Path(model_name).stem}_e{args.epochs}_img{args.imgsz}"
     model = YOLO(model_name)
 
@@ -80,10 +86,20 @@ def train_and_evaluate(model_name: str, args: argparse.Namespace, output_dir: Pa
 
 
 def main() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
     parser = argparse.ArgumentParser(description="Train YOLOv8 and YOLO26 and compare test metrics.")
     parser.add_argument("--data", required=True, help="Path to YOLO data.yaml")
-    parser.add_argument("--output-dir", default="workspace/runs/model_compare", help="Training output directory")
-    parser.add_argument("--report", default="workspace/reports/yolo_compare_summary.json", help="Path to JSON summary")
+    parser.add_argument(
+        "--output-dir",
+        default=str(repo_root / "workspace" / "runs" / "model_compare"),
+        help="Training output directory",
+    )
+    parser.add_argument(
+        "--report",
+        default=str(repo_root / "workspace" / "reports" / "yolo_compare_summary.json"),
+        help="Path to JSON summary",
+    )
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--imgsz", type=int, default=960)
     parser.add_argument("--batch", type=int, default=8)
@@ -112,7 +128,7 @@ def main() -> None:
         "seed": args.seed,
         "results": results,
     }
-    report_path.write_text(json.dumps(summary, indent=2))
+    report_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
 
