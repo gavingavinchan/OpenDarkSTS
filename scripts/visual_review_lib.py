@@ -15,7 +15,7 @@ from PIL import Image
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE_DIR = Path("/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/")
 WORKSPACE_DIR = ROOT_DIR / "workspace"
-DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache" / "sentinel_stitched"
+DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache" / "sentinel_tiles"
 DEFAULT_DATABASE_PATH = WORKSPACE_DIR / "databases" / "visual_detections.sqlite"
 DEFAULT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "visual_preprocess_manifest.json"
 DEFAULT_EXPORT_DIR = WORKSPACE_DIR / "datasets" / "sentinel_reviewed"
@@ -106,15 +106,18 @@ def initialize_database(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS images (
             image_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL UNIQUE,
+            date TEXT NOT NULL,
+            tile_row INTEGER NOT NULL DEFAULT 0,
+            tile_col INTEGER NOT NULL DEFAULT 0,
             width INTEGER NOT NULL,
             height INTEGER NOT NULL,
-            tile_count INTEGER NOT NULL,
+            tile_count INTEGER NOT NULL DEFAULT 1,
             cache_path TEXT,
             review_status TEXT NOT NULL DEFAULT 'pending',
             detail_cursor INTEGER,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            UNIQUE(date, tile_row, tile_col)
         );
 
         CREATE TABLE IF NOT EXISTS image_sources (
@@ -165,6 +168,7 @@ def initialize_database(conn: sqlite3.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_images_review_status ON images(review_status);
+        CREATE INDEX IF NOT EXISTS idx_images_date_tile ON images(date, tile_row, tile_col);
         CREATE INDEX IF NOT EXISTS idx_detections_image_source ON detections(image_id, source_type);
         CREATE INDEX IF NOT EXISTS idx_detections_image_queue ON detections(image_id, is_active, review_order);
         """
@@ -391,6 +395,23 @@ def render_stitched_png(recipe: dict[str, Any], output_path: str | Path) -> dict
     }
 
 
+def render_tile_png(tile: TileInfo, output_path: str | Path) -> dict[str, Any]:
+    output = repo_resolve(output_path)
+    ensure_parent(output)
+    image, metadata = load_tile_image(tile.path)
+    image.save(output, format="PNG")
+    return {
+        "path": repo_relative(output),
+        "width": image.width,
+        "height": image.height,
+        "tile_row": tile.row,
+        "tile_col": tile.col,
+        "tile_path": str(tile.path),
+        "loader": metadata.get("loader"),
+        "rendered_at": utcnow_iso(),
+    }
+
+
 def load_manifest(manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
     manifest = load_json(manifest_path, default={})
     if not isinstance(manifest, dict):
@@ -431,6 +452,31 @@ def update_manifest_entry(
     save_manifest(manifest_path, manifest)
 
 
+def update_tile_manifest_entry(
+    manifest_path: str | Path,
+    date_value: str,
+    tile: TileInfo,
+    render_info: dict[str, Any],
+    model_info: dict[str, Any],
+    merge_info: dict[str, Any],
+) -> None:
+    manifest = load_manifest(manifest_path)
+    key = f"{date_value}_tile_{tile.row}_{tile.col}"
+    manifest["images"][key] = {
+        "date": date_value,
+        "tile_row": tile.row,
+        "tile_col": tile.col,
+        "tile_path": str(tile.path),
+        "width": render_info["width"],
+        "height": render_info["height"],
+        "cache": render_info,
+        "models": model_info,
+        "merge": merge_info,
+        "updated_at": utcnow_iso(),
+    }
+    save_manifest(manifest_path, manifest)
+
+
 def get_manifest_entry(date_value: str, manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
     entry = manifest.get("images", {}).get(date_value)
@@ -461,6 +507,26 @@ def ensure_cache_for_date(
     }
     render_info = render_stitched_png(recipe, cache_path)
     update_manifest_entry(manifest_path, recipe, render_info, entry.get("models", {}), entry.get("merge", {}))
+    return cache_path
+
+
+def ensure_cache_for_tile(
+    date_value: str,
+    tile_row: int,
+    tile_col: int,
+    source_dir: str | Path = DEFAULT_SOURCE_DIR,
+    cache_dir: str | Path = DEFAULT_CACHE_DIR,
+) -> Path:
+    cache_path = repo_resolve(Path(cache_dir) / f"{date_value}_tile_{tile_row}_{tile_col}.png")
+    if cache_path.exists():
+        return cache_path
+
+    grouped = discover_tiles(source_dir)
+    tiles = grouped.get(date_value, [])
+    match = next((t for t in tiles if t.row == tile_row and t.col == tile_col), None)
+    if match is None:
+        raise FileNotFoundError(f"Tile ({tile_row},{tile_col}) for {date_value} not found in {source_dir}")
+    render_tile_png(match, cache_path)
     return cache_path
 
 
@@ -622,8 +688,24 @@ def delete_image_by_date(conn: sqlite3.Connection, date_value: str) -> None:
     conn.commit()
 
 
+def delete_image_by_tile(conn: sqlite3.Connection, date_value: str, tile_row: int, tile_col: int) -> None:
+    conn.execute(
+        "DELETE FROM images WHERE date = ? AND tile_row = ? AND tile_col = ?",
+        (date_value, tile_row, tile_col),
+    )
+    conn.commit()
+
+
 def image_exists(conn: sqlite3.Connection, date_value: str) -> bool:
     row = conn.execute("SELECT 1 FROM images WHERE date = ?", (date_value,)).fetchone()
+    return row is not None
+
+
+def tile_exists(conn: sqlite3.Connection, date_value: str, tile_row: int, tile_col: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM images WHERE date = ? AND tile_row = ? AND tile_col = ?",
+        (date_value, tile_row, tile_col),
+    ).fetchone()
     return row is not None
 
 
@@ -720,12 +802,104 @@ def insert_preprocessed_image(
     return image_id
 
 
+def insert_preprocessed_tile(
+    conn: sqlite3.Connection,
+    date_value: str,
+    tile: TileInfo,
+    cache_path: str | Path,
+    width: int,
+    height: int,
+    raw_detections: list[dict[str, Any]],
+    merged_detections: list[dict[str, Any]],
+) -> int:
+    timestamp = utcnow_iso()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO images (date, tile_row, tile_col, width, height, tile_count, cache_path, review_status, detail_cursor, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, 'pending', NULL, ?, ?)
+        """,
+        (date_value, tile.row, tile.col, width, height, repo_relative(cache_path), timestamp, timestamp),
+    )
+    image_id = require_lastrowid(cursor)
+
+    cursor.execute(
+        """
+        INSERT INTO image_sources (image_id, tile_path, tile_row, tile_col, tile_mtime, tile_size_bytes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (image_id, str(tile.path), tile.row, tile.col, tile.mtime, tile.size_bytes, timestamp),
+    )
+
+    raw_detection_ids: dict[str, int] = {}
+    for raw in raw_detections:
+        cursor.execute(
+            """
+            INSERT INTO detections (
+                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
+                confidence, x_center, y_center, width, height, review_label, is_active,
+                reviewed, review_order, reviewed_at, created_at, updated_at
+            ) VALUES (?, 'raw_model', ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, NULL, ?, ?)
+            """,
+            (
+                image_id,
+                raw["source_model"],
+                raw["class_id"],
+                raw["class_name"],
+                raw["confidence"],
+                raw["x_center"],
+                raw["y_center"],
+                raw["width"],
+                raw["height"],
+                timestamp,
+                timestamp,
+            ),
+        )
+        raw_detection_ids[raw["temp_id"]] = require_lastrowid(cursor)
+
+    for merged in merged_detections:
+        cursor.execute(
+            """
+            INSERT INTO detections (
+                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
+                confidence, x_center, y_center, width, height, review_label, is_active,
+                reviewed, review_order, reviewed_at, created_at, updated_at
+            ) VALUES (?, 'merged', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)
+            """,
+            (
+                image_id,
+                merged["class_id"],
+                merged["class_name"],
+                merged["confidence"],
+                merged["x_center"],
+                merged["y_center"],
+                merged["width"],
+                merged["height"],
+                merged["review_order"],
+                timestamp,
+                timestamp,
+            ),
+        )
+        merged_id = require_lastrowid(cursor)
+        for raw_id in merged["source_raw_ids"]:
+            cursor.execute(
+                """
+                INSERT INTO detection_sources (detection_id, raw_detection_id, source_model)
+                VALUES (?, ?, ?)
+                """,
+                (merged_id, raw_detection_ids[raw_id], raw_id.split(":", 1)[0]),
+            )
+
+    conn.commit()
+    return image_id
+
+
 def get_image_queue(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT image_id, date, review_status, detail_cursor, width, height, tile_count, cache_path
+        SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path
         FROM images
-        ORDER BY date ASC
+        ORDER BY date ASC, tile_row ASC, tile_col ASC
         """
     ).fetchall()
 
@@ -733,7 +907,7 @@ def get_image_queue(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def get_image_row(conn: sqlite3.Connection, image_id: int) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT image_id, date, review_status, detail_cursor, width, height, tile_count, cache_path,
+        SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path,
                created_at, updated_at
         FROM images
         WHERE image_id = ?
@@ -744,7 +918,7 @@ def get_image_row(conn: sqlite3.Connection, image_id: int) -> sqlite3.Row | None
 
 def get_image_row_by_date(conn: sqlite3.Connection, date_value: str) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT image_id, date, review_status, detail_cursor, width, height, tile_count, cache_path FROM images WHERE date = ?",
+        "SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path FROM images WHERE date = ?",
         (date_value,),
     ).fetchone()
 
@@ -816,9 +990,9 @@ def detection_payload(row: sqlite3.Row, image_width: int, image_height: int) -> 
         "width": width,
         "height": height,
         "x1_px": round((x_center - width / 2.0) * image_width, 3),
-        "y1_px": round((y_center - height / 2.0) * image_height, 3),
+        "y1_px": round((1.0 - y_center - height / 2.0) * image_height, 3),
         "x2_px": round((x_center + width / 2.0) * image_width, 3),
-        "y2_px": round((y_center + height / 2.0) * image_height, 3),
+        "y2_px": round((1.0 - y_center + height / 2.0) * image_height, 3),
         "review_label": row["review_label"],
         "is_active": bool(row["is_active"]),
         "reviewed": bool(row["reviewed"]),

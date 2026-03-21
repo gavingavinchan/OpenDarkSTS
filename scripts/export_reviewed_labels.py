@@ -10,7 +10,8 @@ try:
         DEFAULT_DATABASE_PATH,
         DEFAULT_EXPORT_DIR,
         DEFAULT_MANIFEST_PATH,
-        ensure_cache_for_date,
+        DEFAULT_SOURCE_DIR,
+        ensure_cache_for_tile,
         exportable_detections,
         get_db,
         initialize_database,
@@ -23,7 +24,8 @@ except ImportError:
         DEFAULT_DATABASE_PATH,
         DEFAULT_EXPORT_DIR,
         DEFAULT_MANIFEST_PATH,
-        ensure_cache_for_date,
+        DEFAULT_SOURCE_DIR,
+        ensure_cache_for_tile,
         exportable_detections,
         get_db,
         initialize_database,
@@ -54,26 +56,29 @@ def main() -> None:
     initialize_database(conn)
     if args.include_incomplete:
         image_rows = conn.execute(
-            "SELECT image_id, date FROM images ORDER BY date ASC"
+            "SELECT image_id, date, tile_row, tile_col FROM images ORDER BY date ASC, tile_row ASC, tile_col ASC"
         ).fetchall()
     else:
         image_rows = conn.execute(
-            "SELECT image_id, date FROM images WHERE review_status = 'completed' ORDER BY date ASC"
+            "SELECT image_id, date, tile_row, tile_col FROM images WHERE review_status = 'completed' ORDER BY date ASC, tile_row ASC, tile_col ASC"
         ).fetchall()
 
     exported = 0
     for row in image_rows:
         date_value = row["date"]
+        tile_row = int(row["tile_row"])
+        tile_col = int(row["tile_col"])
         image_id = int(row["image_id"])
-        source_png = ensure_cache_for_date(date_value, manifest_path=args.manifest)
-        target_png = images_dir / f"{date_value}.png"
+        tile_stem = f"{date_value}_tile_{tile_row}_{tile_col}"
+        source_png = ensure_cache_for_tile(date_value, tile_row, tile_col)
+        target_png = images_dir / f"{tile_stem}.png"
         shutil.copy2(source_png, target_png)
 
         detections = exportable_detections(conn, image_id)
-        label_path = labels_dir / f"{date_value}.txt"
+        label_path = labels_dir / f"{tile_stem}.txt"
         write_yolo_label_file(label_path, detections)
         exported += 1
-        print(f"Exported {date_value}: {len(detections)} labels")
+        print(f"Exported {tile_stem}: {len(detections)} labels")
 
     write_data_yaml(output_dir)
     conn.close()

@@ -17,7 +17,8 @@ try:
         complete_image_review,
         create_manual_detection,
         detection_payload,
-        ensure_cache_for_date,
+        DEFAULT_SOURCE_DIR,
+        ensure_cache_for_tile,
         get_active_detection_queue,
         get_db,
         get_image_queue,
@@ -45,7 +46,8 @@ except ImportError:
         complete_image_review,
         create_manual_detection,
         detection_payload,
-        ensure_cache_for_date,
+        DEFAULT_SOURCE_DIR,
+        ensure_cache_for_tile,
         get_active_detection_queue,
         get_db,
         get_image_queue,
@@ -128,6 +130,8 @@ def build_state(conn, image_id: int | None) -> dict:
             {
                 "image_id": int(row["image_id"]),
                 "date": row["date"],
+                "tile_row": int(row["tile_row"]),
+                "tile_col": int(row["tile_col"]),
                 "review_status": row["review_status"],
                 "queue_index": index,
             }
@@ -136,7 +140,7 @@ def build_state(conn, image_id: int | None) -> dict:
     if image is None:
         raise KeyError(f"Image {selected_image_id} not found")
 
-    cache_path = ensure_cache_for_date(image["date"], manifest_path=MANIFEST_PATH)
+    cache_path = ensure_cache_for_tile(image["date"], int(image["tile_row"]), int(image["tile_col"]), source_dir=DEFAULT_SOURCE_DIR)
     if repo_relative(cache_path) != image["cache_path"]:
         conn.execute(
             "UPDATE images SET cache_path = ?, updated_at = CURRENT_TIMESTAMP WHERE image_id = ?",
@@ -171,6 +175,8 @@ def build_state(conn, image_id: int | None) -> dict:
         "image": {
             "image_id": int(image["image_id"]),
             "date": image["date"],
+            "tile_row": int(image["tile_row"]),
+            "tile_col": int(image["tile_col"]),
             "width": int(image["width"]),
             "height": int(image["height"]),
             "tile_count": int(image["tile_count"]),
@@ -438,7 +444,7 @@ def render_app_html(default_image_id: int | None) -> str:
     <div class="topbar">
       <div class="brand">
         <h1>Visual Detection Reviewer</h1>
-        <p>Review stitched Sentinel imagery, correct detections, and export clean YOLO labels.</p>
+        <p>Review Sentinel tile imagery, correct detections, and export clean YOLO labels.</p>
       </div>
       <div class="queue-meta" id="queueMeta"></div>
     </div>
@@ -519,7 +525,7 @@ def render_app_html(default_image_id: int | None) -> str:
       host.innerHTML = `
         <span class="pill">${{state.queue.completed_images}} / ${{state.queue.total_images}} completed</span>
         <span class="pill">Queue position ${{currentIndex}}</span>
-        <span class="pill">${{state.image ? state.image.date : 'No images loaded'}}</span>
+        <span class="pill">${{state.image ? state.image.date + ' (' + state.image.tile_row + ',' + state.image.tile_col + ')' : 'No images loaded'}}</span>
       `;
     }}
 
@@ -542,10 +548,10 @@ def render_app_html(default_image_id: int | None) -> str:
             <span class="badge ${{current.review_status}}">${{statusLabels[current.review_status] || current.review_status}}</span>
             <span>${{current.date}}</span>
           </div>
-          <h2 style="margin-top:12px">Image ${{current.date}}</h2>
+          <h2 style="margin-top:12px">${{current.date}} (${{current.tile_row}},${{current.tile_col}})</h2>
           <div class="meta-grid">
-            <div class="meta-block"><label>Tiles</label><strong>${{current.tile_count}}</strong></div>
-            <div class="meta-block"><label>Canvas</label><strong>${{current.width}} x ${{current.height}}</strong></div>
+            <div class="meta-block"><label>Grid</label><strong>(${{current.tile_row}},${{current.tile_col}})</strong></div>
+            <div class="meta-block"><label>Size</label><strong>${{current.width}} x ${{current.height}}</strong></div>
             <div class="meta-block"><label>Active</label><strong>${{counts.active_detections}}</strong></div>
             <div class="meta-block"><label>Reviewed</label><strong>${{counts.reviewed_active_detections}}</strong></div>
           </div>
@@ -614,7 +620,7 @@ def render_app_html(default_image_id: int | None) -> str:
             ${{state.queue.images.map(item => `
               <div class="queue-item ${{item.image_id === current.image_id ? 'active' : ''}}" onclick="openImage(${{item.image_id}})">
                 <div>
-                  <strong>${{item.date}}</strong><br>
+                  <strong>${{item.date}} (${{item.tile_row}},${{item.tile_col}})</strong><br>
                   <small>${{statusLabels[item.review_status] || item.review_status}}</small>
                 </div>
                 <small>#${{item.queue_index + 1}}</small>
@@ -663,7 +669,7 @@ def render_app_html(default_image_id: int | None) -> str:
         const labelClass = detection.review_label === 'neither' || !detection.is_active
           ? 'neither'
           : (detection.class_id === 1 ? 'ships' : 'ship');
-        const labelMarker = L.marker([detection.y1_px, detection.x1_px], {{
+        const labelMarker = L.marker([detection.y2_px, detection.x1_px], {{
           interactive: false,
           keyboard: false,
           zIndexOffset: detection.detection_id === selectedDetectionId ? 2000 : 1000,
@@ -783,9 +789,9 @@ def render_app_html(default_image_id: int | None) -> str:
       const south = bounds.getSouth();
       return {{
         x_center: ((west + east) / 2) / state.image.width,
-        y_center: ((north + south) / 2) / state.image.height,
+        y_center: 1.0 - ((north + south) / 2) / state.image.height,
         width: (east - west) / state.image.width,
-        height: (south - north) / state.image.height,
+        height: (north - south) / state.image.height,
       }};
     }}
 

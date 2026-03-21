@@ -10,18 +10,17 @@ try:
         DEFAULT_DATABASE_PATH,
         DEFAULT_MANIFEST_PATH,
         DEFAULT_SOURCE_DIR,
-        delete_image_by_date,
+        delete_image_by_tile,
         discover_tiles,
         get_db,
-        image_exists,
         initialize_database,
-        insert_preprocessed_image,
+        insert_preprocessed_tile,
         load_yolo_models,
-        render_stitched_png,
-        update_manifest_entry,
-        build_stitch_recipe,
+        render_tile_png,
+        update_tile_manifest_entry,
         merge_detections_class_aware,
         run_model_predictions,
+        tile_exists,
     )
 except ImportError:
     from visual_review_lib import (
@@ -29,18 +28,17 @@ except ImportError:
         DEFAULT_DATABASE_PATH,
         DEFAULT_MANIFEST_PATH,
         DEFAULT_SOURCE_DIR,
-        delete_image_by_date,
+        delete_image_by_tile,
         discover_tiles,
         get_db,
-        image_exists,
         initialize_database,
-        insert_preprocessed_image,
+        insert_preprocessed_tile,
         load_yolo_models,
-        render_stitched_png,
-        update_manifest_entry,
-        build_stitch_recipe,
+        render_tile_png,
+        update_tile_manifest_entry,
         merge_detections_class_aware,
         run_model_predictions,
+        tile_exists,
     )
 
 
@@ -53,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-dir", default=str(DEFAULT_SOURCE_DIR), help="Read-only directory containing Sentinel GeoTIFF tiles")
     parser.add_argument("--db", default=str(DEFAULT_DATABASE_PATH), help="SQLite database for review state")
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH), help="JSON manifest for reproducibility")
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR), help="Cache directory for stitched PNG review images")
+    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR), help="Cache directory for tile PNG review images")
     parser.add_argument("--weights-yolov8n", default=str(DEFAULT_YOLOV8), help="YOLOv8n weights path")
     parser.add_argument("--weights-yolo26n", default=str(DEFAULT_YOLO26), help="YOLO26n weights path")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold for model inference")
@@ -89,57 +87,57 @@ def main() -> None:
     processed = 0
     skipped = 0
     for date_value in dates:
-        already_exists = image_exists(conn, date_value)
-        if already_exists and not args.force:
-            print(f"Skipping {date_value}: already present in database (use --force to replace)")
-            skipped += 1
-            continue
-        if already_exists and args.force:
-            delete_image_by_date(conn, date_value)
-
         tiles = grouped_tiles[date_value]
-        recipe = build_stitch_recipe(tiles)
-        cache_path = Path(args.cache_dir) / f"{date_value}.png"
-        render_info = render_stitched_png(recipe, cache_path)
-        raw_detections = run_model_predictions(cache_path, models=models, conf_threshold=args.conf)
-        merged_detections = merge_detections_class_aware(raw_detections, iou_threshold=args.iou)
+        for tile in tiles:
+            already = tile_exists(conn, date_value, tile.row, tile.col)
+            if already and not args.force:
+                print(f"Skipping {date_value} tile ({tile.row},{tile.col}): already present")
+                skipped += 1
+                continue
+            if already and args.force:
+                delete_image_by_tile(conn, date_value, tile.row, tile.col)
 
-        insert_preprocessed_image(
-            conn,
-            date_value=date_value,
-            cache_path=cache_path,
-            width=int(render_info["width"]),
-            height=int(render_info["height"]),
-            tiles=tiles,
-            raw_detections=raw_detections,
-            merged_detections=merged_detections,
-        )
+            cache_path = Path(args.cache_dir) / f"{date_value}_tile_{tile.row}_{tile.col}.png"
+            render_info = render_tile_png(tile, cache_path)
+            raw_detections = run_model_predictions(cache_path, models=models, conf_threshold=args.conf)
+            merged_detections = merge_detections_class_aware(raw_detections, iou_threshold=args.iou)
 
-        update_manifest_entry(
-            args.manifest,
-            recipe=recipe,
-            render_info=render_info,
-            model_info={
-                "weights": {name: str(path) for name, path in model_paths.items()},
-                "confidence_threshold": args.conf,
-            },
-            merge_info={
-                "strategy": "class_aware_nms_keep_best_box",
-                "iou_threshold": args.iou,
-                "raw_detection_count": len(raw_detections),
-                "merged_detection_count": len(merged_detections),
-                "class_conflicts": "preserve overlapping ship and ships detections for manual review",
-            },
-        )
+            insert_preprocessed_tile(
+                conn,
+                date_value=date_value,
+                tile=tile,
+                cache_path=cache_path,
+                width=int(render_info["width"]),
+                height=int(render_info["height"]),
+                raw_detections=raw_detections,
+                merged_detections=merged_detections,
+            )
 
-        processed += 1
-        print(
-            f"Processed {date_value}: {len(tiles)} tiles, {len(raw_detections)} raw detections, "
-            f"{len(merged_detections)} merged detections"
-        )
+            update_tile_manifest_entry(
+                args.manifest,
+                date_value=date_value,
+                tile=tile,
+                render_info=render_info,
+                model_info={
+                    "weights": {name: str(path) for name, path in model_paths.items()},
+                    "confidence_threshold": args.conf,
+                },
+                merge_info={
+                    "strategy": "class_aware_nms_keep_best_box",
+                    "iou_threshold": args.iou,
+                    "raw_detection_count": len(raw_detections),
+                    "merged_detection_count": len(merged_detections),
+                },
+            )
+
+            processed += 1
+            print(
+                f"Processed {date_value} tile ({tile.row},{tile.col}): "
+                f"{len(raw_detections)} raw detections, {len(merged_detections)} merged"
+            )
 
     conn.close()
-    print(f"Done. processed={processed} skipped={skipped} total_requested={len(dates)}")
+    print(f"Done. processed={processed} skipped={skipped} total_dates={len(dates)}")
 
 
 if __name__ == "__main__":
