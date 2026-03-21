@@ -85,6 +85,9 @@ def pick_image_id(queue_rows, requested_image_id: int | None) -> int | None:
     if requested_image_id in queue_ids:
         return requested_image_id
     for row in queue_rows:
+        if row["review_status"] not in {"completed", "overview_2"}:
+            return int(row["image_id"])
+    for row in queue_rows:
         if row["review_status"] != "completed":
             return int(row["image_id"])
     return int(queue_rows[0]["image_id"])
@@ -345,6 +348,29 @@ def render_app_html(default_image_id: int | None) -> str:
     .queue-item.active {{ border-color: rgba(15, 118, 110, 0.24); background: rgba(15, 118, 110, 0.08); }}
     .queue-item small {{ color: var(--muted); }}
     .leaflet-container {{ background: #0f172a; }}
+    .bbox-label-anchor {{ background: transparent; border: 0; }}
+    .bbox-label {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 2px solid currentColor;
+      background: rgba(255, 250, 242, 0.96);
+      box-shadow: 0 8px 20px rgba(16, 35, 48, 0.18);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      transform: translate(8px, -8px);
+    }}
+    .bbox-label.ship {{ color: #2563eb; }}
+    .bbox-label.ships {{ color: #c81e1e; }}
+    .bbox-label.neither {{ color: #7c6f64; }}
+    .bbox-label.selected {{
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(255, 250, 242, 0.85), 0 10px 24px rgba(16, 35, 48, 0.28);
+    }}
     .viewer-hint {{
       position: absolute;
       right: 16px;
@@ -398,11 +424,12 @@ def render_app_html(default_image_id: int | None) -> str:
     let selectedDetectionId = null;
     let drawHandler = null;
     let isEditing = false;
+    let layerIndex = new Map();
+    let labelIndex = new Map();
 
     function colorForDetection(detection) {{
       if (detection.review_label === 'neither' || !detection.is_active) return '#7c6f64';
-      if (!detection.reviewed) return '#b93824';
-      if (detection.class_id === 1) return '#16803c';
+      if (detection.class_id === 1) return '#c81e1e';
       return '#2563eb';
     }}
 
@@ -468,7 +495,7 @@ def render_app_html(default_image_id: int | None) -> str:
       const counts = state.counts;
       const currentDetection = state.detail_queue.find(item => item.detection_id === state.current_detection_id) || null;
       const selectedDetection = state.detections.find(item => item.detection_id === selectedDetectionId) || null;
-      const defaultClassValue = currentDetection ? currentDetection.class_id : 0;
+      const defaultClassValue = selectedDetection ? selectedDetection.class_id : (currentDetection ? currentDetection.class_id : 0);
 
       host.innerHTML = `
         <div class="card">
@@ -488,19 +515,19 @@ def render_app_html(default_image_id: int | None) -> str:
         <div class="card">
           <h3>Legend</h3>
           <div class="legend">
-            <div><span class="swatch" style="background:#16803c"></span> Reviewed STS</div>
-            <div><span class="swatch" style="background:#2563eb"></span> Reviewed ship</div>
-            <div><span class="swatch" style="background:#b93824"></span> Needs review</div>
-            <div><span class="swatch" style="background:#7c6f64"></span> Neither / inactive</div>
+            <div><span class="swatch" style="background:#2563eb"></span> ship</div>
+            <div><span class="swatch" style="background:#c81e1e"></span> ships</div>
+            <div><span class="swatch" style="background:#7c6f64"></span> neither</div>
+            <div><span class="swatch" style="background:#f8fafc;border:1px solid rgba(16,35,48,0.18)"></span> Selected / editing</div>
           </div>
-          <p class="note" style="margin-top:12px">New boxes are saved as manual detections and added to the detail queue. The final export keeps only standard YOLO labels.</p>
+          <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Press Delete or Backspace to mark the selected box as neither.</p>
         </div>
 
         <div class="card controls">
           <h3>Overview Controls</h3>
           <div class="button-row">
             <button class="accent" onclick="startDraw()">Draw Box</button>
-            <button class="secondary" onclick="toggleEditSelected()">${{isEditing ? 'Finish Edit' : 'Edit Selected'}}</button>
+            <button class="secondary" onclick="toggleEditSelected()">${{isEditing ? 'Pause Edit' : 'Edit Selected'}}</button>
           </div>
           <div class="button-row">
             <select id="newClassSelect">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
@@ -514,7 +541,7 @@ def render_app_html(default_image_id: int | None) -> str:
             <button class="accent" onclick="startDetail()">Start Detail Review</button>
             <button class="secondary" onclick="completeImage()">Complete Image</button>
           </div>
-          <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to inspect or edit it.'}}</p>
+          <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode immediately.'}}</p>
         </div>
 
         <div class="card controls">
@@ -565,11 +592,17 @@ def render_app_html(default_image_id: int | None) -> str:
         map = L.map('map', {{ crs: L.CRS.Simple, minZoom: -4, zoomSnap: 0.25, attributionControl: false }});
         detectionGroup = L.featureGroup().addTo(map);
         map.on('draw:created', onDrawCreated);
+        map.on('click', event => {{
+          if (event.originalEvent && event.originalEvent.target && event.originalEvent.target.closest('.leaflet-interactive')) return;
+          if (!drawHandler || !drawHandler._enabled) clearSelection();
+        }});
       }}
       if (!state.image) return;
 
       if (overlay) overlay.remove();
       detectionGroup.clearLayers();
+      layerIndex = new Map();
+      labelIndex = new Map();
       const bounds = [[0, 0], [state.image.height, state.image.width]];
       overlay = L.imageOverlay(state.image.cache_url, bounds).addTo(map);
       map.fitBounds(bounds, {{ padding: [24, 24] }});
@@ -577,15 +610,33 @@ def render_app_html(default_image_id: int | None) -> str:
       state.detections.forEach(detection => {{
         const layer = L.rectangle(
           [[detection.y1_px, detection.x1_px], [detection.y2_px, detection.x2_px]],
-          {{ color: colorForDetection(detection), weight: detection.detection_id === selectedDetectionId ? 4 : 2, fillOpacity: 0.03 }}
+          {{ color: colorForDetection(detection), weight: detection.detection_id === selectedDetectionId ? 5 : 3, opacity: 1, fillOpacity: detection.detection_id === selectedDetectionId ? 0.08 : 0.03, dashArray: detection.detection_id === selectedDetectionId ? '10 6' : null }}
         );
         layer.detection = detection;
         layer.on('click', () => selectLayer(layer));
         detectionGroup.addLayer(layer);
-        if (detection.detection_id === selectedDetectionId) {{
-          layer.setStyle({{ weight: 4 }});
-        }}
+        layerIndex.set(detection.detection_id, layer);
+
+        const labelClass = detection.review_label === 'neither' || !detection.is_active
+          ? 'neither'
+          : (detection.class_id === 1 ? 'ships' : 'ship');
+        const labelMarker = L.marker([detection.y1_px, detection.x1_px], {{
+          interactive: false,
+          keyboard: false,
+          zIndexOffset: detection.detection_id === selectedDetectionId ? 2000 : 1000,
+          icon: L.divIcon({{
+            className: 'bbox-label-anchor',
+            html: `<div class="bbox-label ${{labelClass}} ${{detection.detection_id === selectedDetectionId ? 'selected' : ''}}">${{detectionName(detection)}}</div>`,
+          }}),
+        }});
+        labelMarker.addTo(detectionGroup);
+        labelIndex.set(detection.detection_id, labelMarker);
       }});
+
+      if (selectedDetectionId) {{
+        const selectedLayer = findLayerByDetectionId(selectedDetectionId);
+        if (selectedLayer) selectLayer(selectedLayer, false);
+      }}
 
       if (state.image.review_status === 'detail' && state.current_detection_id) {{
         const currentLayer = findLayerByDetectionId(state.current_detection_id);
@@ -597,23 +648,66 @@ def render_app_html(default_image_id: int | None) -> str:
     }}
 
     function selectLayer(layer, rerender=true) {{
+      disableAllEditing();
       selectedDetectionId = layer.detection.detection_id;
-      detectionGroup.eachLayer(item => item.setStyle({{ weight: item === layer ? 4 : 2 }}));
-      document.getElementById('viewerHint').textContent = `Selected detection #${{layer.detection.detection_id}}. Edit geometry, mark neither, or label it in detail mode.`;
+      layerIndex.forEach((item, detectionId) => {{
+        const selected = item === layer;
+        item.setStyle({{
+          color: colorForDetection(item.detection),
+          weight: selected ? 5 : 3,
+          opacity: 1,
+          fillOpacity: selected ? 0.08 : 0.03,
+          dashArray: selected ? '10 6' : null,
+        }});
+        if (selected) item.bringToFront();
+        const labelMarker = labelIndex.get(detectionId);
+        if (labelMarker) {{
+          const labelClass = item.detection.review_label === 'neither' || !item.detection.is_active
+            ? 'neither'
+            : (item.detection.class_id === 1 ? 'ships' : 'ship');
+          labelMarker.setIcon(L.divIcon({{
+            className: 'bbox-label-anchor',
+            html: `<div class="bbox-label ${{labelClass}} ${{selected ? 'selected' : ''}}">${{detectionName(item.detection)}}</div>`,
+          }}));
+          if (selected && labelMarker.getElement()) labelMarker.getElement().style.zIndex = '2000';
+        }}
+      }});
+      if (layer.editing) layer.editing.enable();
+      isEditing = true;
+      document.getElementById('viewerHint').textContent = `Selected detection #${{layer.detection.detection_id}}. Drag corners or the center handle to resize or move it. Press Delete to mark it as neither.`;
       if (rerender) renderSidebar();
     }}
 
     function clearSelection() {{
+      disableAllEditing();
       selectedDetectionId = null;
       isEditing = false;
-      detectionGroup.eachLayer(item => item.setStyle({{ weight: 2 }}));
+      layerIndex.forEach((item, detectionId) => {{
+        item.setStyle({{ color: colorForDetection(item.detection), weight: 3, opacity: 1, fillOpacity: 0.03, dashArray: null }});
+        const labelMarker = labelIndex.get(detectionId);
+        if (labelMarker) {{
+          const labelClass = item.detection.review_label === 'neither' || !item.detection.is_active
+            ? 'neither'
+            : (item.detection.class_id === 1 ? 'ships' : 'ship');
+          labelMarker.setIcon(L.divIcon({{
+            className: 'bbox-label-anchor',
+            html: `<div class="bbox-label ${{labelClass}}">${{detectionName(item.detection)}}</div>`,
+          }}));
+        }}
+      }});
+      document.getElementById('viewerHint').textContent = 'Click a box to enter edit mode immediately, or draw a new box for a missed detection.';
       renderSidebar();
     }}
 
     function findLayerByDetectionId(detectionId) {{
-      let match = null;
-      detectionGroup.eachLayer(layer => {{ if (layer.detection && layer.detection.detection_id === detectionId) match = layer; }});
-      return match;
+      return layerIndex.get(detectionId) || null;
+    }}
+
+    function disableAllEditing() {{
+      layerIndex.forEach(layer => {{
+        if (layer.editing) layer.editing.disable();
+      }});
+      isEditing = false;
     }}
 
     function focusLayer(layer) {{
@@ -690,6 +784,7 @@ def render_app_html(default_image_id: int | None) -> str:
       if (!selectedDetectionId) return;
       await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
       selectedDetectionId = null;
+      isEditing = false;
       await fetchState(state.image.image_id);
     }}
 
@@ -727,6 +822,7 @@ def render_app_html(default_image_id: int | None) -> str:
         height: geometry.height,
       }});
       selectedDetectionId = null;
+      isEditing = false;
       await fetchState(state.image.image_id);
     }}
 
@@ -756,6 +852,15 @@ def render_app_html(default_image_id: int | None) -> str:
       if (!response.ok || data.error) throw new Error(data.error || 'Request failed');
       return data;
     }}
+
+    document.addEventListener('keydown', event => {{
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedDetectionId) {{
+        event.preventDefault();
+        markSelectedNeither();
+      }}
+    }});
 
     fetchState(getImageIdFromUrl());
   </script>
