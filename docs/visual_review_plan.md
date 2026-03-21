@@ -23,8 +23,8 @@ The AIS candidate reviewer reviews AIS-derived events. This tool reviews satelli
 
 Run both available models on each stitched image:
 
-1. **YOLOv8n** (150 epochs, mAP50 0.808): `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960/weights/best.pt`
-2. **YOLO26n** (150 epochs, mAP50 0.826): `runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt`
+1. **YOLOv8n** (rectbbox dataset, 150 max epochs, test mAP50 0.800): `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+2. **YOLO26n** (rectbbox dataset, 150 max epochs, test mAP50 0.830): `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
 
 Classes: `ship` (class 0, single vessel), `ships` (class 1, STS pair)
 

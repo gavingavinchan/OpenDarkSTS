@@ -58,7 +58,7 @@ There are two pipelines:
 ### YOLO Models
 - **STS YOLO** (existing): YOLO26n / YOLOv8n trained on `data-science-dark-fleet` dataset
   - Classes: `ship` (class 0), `ships` (class 1 — active STS, bbox around both vessels)
-  - Best weights: `runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt`
+  - Best weights: `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
 - **Dot-detector YOLO** (to be trained): YOLO26n / YOLOv8n on zoomed-out false-color imagery
   - Classes: `ship` (a dot on the ocean)
   - Training data: generated via Pipeline A + manual annotation

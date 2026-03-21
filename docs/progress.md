@@ -5,6 +5,7 @@
 - Source copied from read-only folder: `/home/gavin/Downloads/AIS data/Madhulika/data science dark fleet.v7i.yolov8 (1).zip`
 - Working copy stored at `workspace/datasets/raw/data_science_dark_fleet_v7i_yolov8.zip`
 - Extracted dataset stored at `workspace/datasets/extracted/madhulika_yolov8`
+- Rectangular bbox copy stored at `workspace/datasets/derived/madhulika_yolov8_rectbbox`
 - Dataset split sizes: 336 train, 27 valid, 18 test
 - Current classes in `workspace/datasets/extracted/madhulika_yolov8/data.yaml`: `ship`, `ships`
 
@@ -21,7 +22,7 @@
 - YOLO26 test metrics: precision 0.7295, recall 0.7575, mAP50 0.7902, mAP50-95 0.4933
 - Initial conclusion: results were very close; YOLOv8 was slightly better overall and faster, while YOLO26 had slightly better recall
 
-## YOLO Benchmark: 150 Epochs Max
+## YOLO Benchmark: 150 Epochs Max (Mixed Labels)
 
 - Report: `workspace/reports/yolo_compare_summary_150.json`
 - YOLOv8 run directory: `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960`
@@ -43,22 +44,64 @@
 - YOLOv8: precision 0.8753, recall 0.6421, mAP50 0.8079, mAP50-95 0.4970
 - YOLO26: precision 0.8601, recall 0.7020, mAP50 0.8263, mAP50-95 0.5251
 
-### Current Conclusion
+### Conclusion For Mixed-Label Run
 
 - With longer training, YOLO26 is the stronger model on the current test split
 - YOLOv8 keeps slightly higher precision
 - YOLO26 now has better recall and better mAP, which is promising for candidate STS event detection
 
-## Known Dataset Issue
+## Mixed-Label Dataset Issue
 
 - Ultralytics warned that the dataset appears to mix boxes and segments
 - Training proceeded using boxes only
 - This dataset should be cleaned or standardized before treating current metrics as final
 
+## Rectangular BBox Dataset Conversion
+
+- Conversion script: `scripts/copy_yolo_dataset_as_bboxes.py`
+- Copied dataset: `workspace/datasets/extracted/madhulika_yolov8` -> `workspace/datasets/derived/madhulika_yolov8_rectbbox`
+- Conversion result: `381` label files scanned, `377` files changed, `932` polygon annotations converted, `19` existing bbox annotations kept
+- Verification result: `0` polygon lines remain in `train`, `valid`, or `test`
+
+## YOLO Benchmark: 150 Epochs Max (Rectangular BBoxes)
+
+- Report: `workspace/reports/yolo_compare_rectbbox_summary_150.json`
+- YOLOv8 run directory: `runs/detect/workspace/runs/model_compare_rectbbox_150/yolov8n_e150_img960`
+- YOLO26 run directory: `runs/detect/workspace/runs/model_compare_rectbbox_150/yolo26n_e150_img960`
+
+### Early Stopping Behavior
+
+- YOLOv8 stopped early after epoch `84`; best validation mAP50-95 was at epoch `64`
+- YOLO26 stopped early after epoch `82`; best validation mAP50-95 was at epoch `62`
+- Conclusion: both models still plateaued before the 150-epoch cap under `patience=20`
+
+### Best Validation Scores
+
+- YOLOv8: best val mAP50 `0.8892`, best val mAP50-95 `0.5229`
+- YOLO26: best val mAP50 `0.8853`, best val mAP50-95 `0.5520`
+
+### Test Set Results From Best Weights
+
+- YOLOv8: precision `0.8624`, recall `0.6447`, mAP50 `0.8000`, mAP50-95 `0.4775`
+- YOLO26: precision `0.7556`, recall `0.7144`, mAP50 `0.8303`, mAP50-95 `0.5301`
+
+### Current Conclusion
+
+- The bbox-only retrain removes the mixed polygon/box ambiguity from the training set
+- YOLO26 remains the stronger overall model on the test split
+- YOLOv8 keeps higher test precision, but YOLO26 has better recall and better mAP50/mAP50-95
+
+## Named Weight Copies
+
+- Archived mixed-label YOLOv8 weights: `workspace/model_weights/yolov8n_madhulika_mixed_labels_e150_img960_2026-03-19_best.pt`
+- Archived mixed-label YOLO26 weights: `workspace/model_weights/yolo26n_madhulika_mixed_labels_e150_img960_2026-03-19_best.pt`
+- Current rectbbox YOLOv8 weights: `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+- Current rectbbox YOLO26 weights: `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+
 ## Current Best Weights
 
-- YOLOv8 best weights: `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960/weights/best.pt`
-- YOLO26 best weights: `runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt`
+- YOLOv8 best weights: `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+- YOLO26 best weights: `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
 
 ## Real Pipeline Smoke Test
 
@@ -92,8 +135,8 @@
 
 ## Suggested Next Steps
 
-- Inspect false positives and false negatives from the best YOLO26 model
-- Clean the mixed box/segment dataset issue and rerun the benchmark
+- Inspect false positives and false negatives from the bbox-trained YOLO26 model
+- Compare old mixed-label and new rectbbox weights on the same held-out imagery
 - Decide whether to force a full 150-epoch run with early stopping disabled for curve inspection
 
 ## Denmark AIS Test Scan

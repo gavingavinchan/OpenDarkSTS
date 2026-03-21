@@ -44,8 +44,8 @@ except ImportError:
     )
 
 
-DEFAULT_YOLOV8 = Path("runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960/weights/best.pt")
-DEFAULT_YOLO26 = Path("runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt")
+DEFAULT_YOLOV8 = Path("workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt")
+DEFAULT_YOLO26 = Path("workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt")
 
 
 def parse_args() -> argparse.Namespace:

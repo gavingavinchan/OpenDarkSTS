@@ -306,6 +306,45 @@ def render_app_html(default_image_id: int | None) -> str:
       padding: 11px 12px;
       font: inherit;
     }}
+    .class-picker {{
+      display: grid;
+      gap: 6px;
+    }}
+    .class-picker select {{
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 14px;
+      color: white;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='white'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      transition: background-color 180ms ease;
+    }}
+    .class-picker select.cls-ship {{ background-color: var(--ship); }}
+    .class-picker select.cls-ships {{ background-color: var(--ships); }}
+    .class-picker .shortcut-hint {{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }}
+    .class-picker .shortcut-hint kbd {{
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 5px;
+      border: 1px solid rgba(16, 35, 48, 0.18);
+      background: rgba(16, 35, 48, 0.06);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.4;
+    }}
     button {{
       cursor: pointer;
       background: var(--ink);
@@ -525,23 +564,27 @@ def render_app_html(default_image_id: int | None) -> str:
 
         <div class="card controls">
           <h3>Overview Controls</h3>
+          <div class="class-picker">
+            <select id="newClassSelect" class="cls-${{defaultClassValue === 1 ? 'ships' : 'ship'}}" onchange="onClassSelectChange(this)">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
+            <div class="shortcut-hint"><kbd>Tab</kbd> toggle Ship / Ships</div>
+          </div>
+          <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode.'}}</p>
           <div class="button-row">
             <button class="accent" onclick="startDraw()">Draw Box</button>
             <button class="secondary" onclick="toggleEditSelected()">${{isEditing ? 'Pause Edit' : 'Edit Selected'}}</button>
           </div>
           <div class="button-row">
-            <select id="newClassSelect">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
             <button class="flat" onclick="saveSelectedGeometry()">Save Geometry</button>
-          </div>
-          <div class="button-row">
-            <button class="warn" onclick="markSelectedNeither()">Mark Neither</button>
             <button class="secondary" onclick="clearSelection()">Clear Selection</button>
           </div>
           <div class="button-row">
-            <button class="accent" onclick="startDetail()">Start Detail Review</button>
+            <button class="warn" onclick="markSelectedNeither()">Mark Neither</button>
             <button class="secondary" onclick="completeImage()">Complete Image</button>
           </div>
-          <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode immediately.'}}</p>
+          <hr style="border:none;border-top:1px solid rgba(16,35,48,0.08);margin:4px 0">
+          <div class="button-row">
+            <button class="accent" onclick="startDetail()">Start Detail Review</button>
+          </div>
         </div>
 
         <div class="card controls">
@@ -551,16 +594,16 @@ def render_app_html(default_image_id: int | None) -> str:
             <span>${{counts.pending_active_detections}} pending</span>
           </div>
           <div class="button-row">
+            <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>&#9664; Back</button>
+            <button class="secondary" onclick="navigateDetail('next')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>Next &#9654;</button>
+          </div>
+          <div class="button-row">
             <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}}>Ships (STS)</button>
             <button class="ship" onclick="labelCurrent('ship_non_sts')" ${{currentDetection ? '' : 'disabled'}}>Ship (non-STS)</button>
           </div>
           <div class="button-row">
             <button class="warn" onclick="labelCurrent('neither')" ${{currentDetection ? '' : 'disabled'}}>Neither</button>
-            <button class="secondary" onclick="saveSelectedGeometry()">Save Current Box</button>
-          </div>
-          <div class="button-row">
-            <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>Back</button>
-            <button class="secondary" onclick="navigateDetail('next')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>Next</button>
+            <button class="flat" onclick="saveSelectedGeometry()">Save Box</button>
           </div>
           <p class="note">Need to split one detection into two? Draw replacement boxes, then mark the old one as neither.</p>
         </div>
@@ -853,9 +896,25 @@ def render_app_html(default_image_id: int | None) -> str:
       return data;
     }}
 
+    function onClassSelectChange(selectEl) {{
+      selectEl.className = selectEl.value === '1' ? 'cls-ships' : 'cls-ship';
+    }}
+
+    function toggleClassSelect() {{
+      const selectEl = document.getElementById('newClassSelect');
+      if (!selectEl) return;
+      selectEl.value = selectEl.value === '1' ? '0' : '1';
+      onClassSelectChange(selectEl);
+    }}
+
     document.addEventListener('keydown', event => {{
       const activeTag = document.activeElement ? document.activeElement.tagName : '';
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+      if (event.key === 'Tab') {{
+        event.preventDefault();
+        toggleClassSelect();
+        return;
+      }}
       if ((event.key === 'Delete' || event.key === 'Backspace') && selectedDetectionId) {{
         event.preventDefault();
         markSelectedNeither();
