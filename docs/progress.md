@@ -95,3 +95,13 @@
 - Inspect false positives and false negatives from the best YOLO26 model
 - Clean the mixed box/segment dataset issue and rerun the benchmark
 - Decide whether to force a full 150-epoch run with early stopping disabled for curve inspection
+
+## Denmark AIS Test Scan
+
+- Scanner script added at `scripts/scan_ais_sts_candidates.py`
+- Criteria note stored at `docs/ais_denmark_sts_criteria.md`
+- Test source scanned: `/home/gavin/Downloads/AIS data/AIS Denmark/AIS DK 2026/aisdk-2026-01-01.zip`
+- Output database written to `workspace/databases/ais_denmark_candidates.sqlite`
+- Scan summary: `14,516,337` rows read, `12,883,565` usable `Class A` rows, `288` five-minute bins processed
+- Candidate output inserted with criteria version `ais_denmark_v1`: `37` events total (`25` `HIGH`, `12` `MEDIUM`) and `2,148` supporting point rows
+- Many candidates carry `anchor_status_present`, which suggests the next precision improvement should be an anchorage/port-distance filter before bulk ingesting more Denmark dates
