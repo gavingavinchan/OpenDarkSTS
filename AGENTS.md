@@ -9,3 +9,7 @@ The folder `/home/gavin/Downloads/AIS data` is read-only. Agents must never modi
 # Workspace Rule
 
 Agents must do all working steps in their own workspace inside this repository and copy only the inputs they need from the read-only source when appropriate.
+
+# Server Rule
+
+When running a local development server or long-lived process, agents must start it as a detached background process so the LLM session remains usable. Prefer `nohup ... > workspace/reports/<name>.log 2>&1 < /dev/null &` and then verify it with `pgrep` or a targeted health check instead of leaving it attached to the current session.

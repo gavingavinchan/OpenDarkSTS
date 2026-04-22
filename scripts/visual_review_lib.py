@@ -1177,6 +1177,18 @@ def mark_detection_neither(conn: sqlite3.Connection, image_id: int, detection_id
     return advance_detail_cursor(conn, image_id)
 
 
+def delete_detection(conn: sqlite3.Connection, image_id: int, detection_id: int) -> tuple[str, int | None]:
+    """Permanently remove a detection row from the database."""
+    image = get_image_row(conn, image_id)
+    conn.execute("DELETE FROM detections WHERE detection_id = ? AND image_id = ?", (detection_id, image_id))
+    conn.commit()
+    if image is None:
+        raise KeyError(f"Image {image_id} not found")
+    if image["review_status"] != "detail":
+        return image["review_status"], image["detail_cursor"]
+    return advance_detail_cursor(conn, image_id)
+
+
 def start_detail_mode(conn: sqlite3.Connection, image_id: int) -> tuple[str, int | None]:
     pending_index = first_unreviewed_active_index(conn, image_id)
     if pending_index is None:
@@ -1206,9 +1218,15 @@ def navigate_detail_cursor(conn: sqlite3.Connection, image_id: int, direction: s
 
     current = image["detail_cursor"] or 0
     if direction == "prev":
-        next_cursor = max(0, current - 1)
+        if current <= 0:
+            set_image_status(conn, image_id, "overview_1", None)
+            return "overview_1", None
+        next_cursor = current - 1
     else:
-        next_cursor = min(len(active) - 1, current + 1)
+        if current >= len(active) - 1:
+            set_image_status(conn, image_id, "overview_2", None)
+            return "overview_2", None
+        next_cursor = current + 1
     set_image_status(conn, image_id, "detail", next_cursor)
     return "detail", next_cursor
 

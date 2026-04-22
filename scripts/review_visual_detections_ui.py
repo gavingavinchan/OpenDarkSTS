@@ -16,6 +16,7 @@ try:
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
         create_manual_detection,
+        delete_detection,
         detection_payload,
         DEFAULT_SOURCE_DIR,
         ensure_cache_for_tile,
@@ -45,6 +46,7 @@ except ImportError:
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
         create_manual_detection,
+        delete_detection,
         detection_payload,
         DEFAULT_SOURCE_DIR,
         ensure_cache_for_tile,
@@ -236,7 +238,7 @@ def render_app_html(default_image_id: int | None) -> str:
       --accent: #0f766e;
       --accent-strong: #115e59;
       --ship: #2563eb;
-      --ships: #16803c;
+      --ships: #c81e1e;
       --pending: #b93824;
       --neither: #7c6f64;
       --shadow: 0 18px 48px rgba(16, 35, 48, 0.14);
@@ -251,8 +253,9 @@ def render_app_html(default_image_id: int | None) -> str:
         linear-gradient(180deg, #d9e8eb 0%, #f1ebdd 52%, #efe6d5 100%);
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
       min-height: 100vh;
+      overflow: hidden;
     }}
-    .shell {{ display: grid; grid-template-rows: auto 1fr; min-height: 100vh; }}
+    .shell {{ display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden; }}
     .topbar {{
       display: flex;
       justify-content: space-between;
@@ -278,14 +281,15 @@ def render_app_html(default_image_id: int | None) -> str:
       background: rgba(16, 35, 48, 0.07);
       color: var(--ink);
     }}
-    .layout {{ display: grid; grid-template-columns: 390px 1fr; min-height: 0; }}
+    .layout {{ display: grid; grid-template-columns: 390px 1fr; min-height: 0; overflow: hidden; }}
     .sidebar {{
       padding: 20px;
       border-right: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,250,242,0.88), rgba(250,244,232,0.78));
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
     }}
-    .viewer {{ position: relative; min-height: 520px; }}
+    .viewer {{ position: relative; min-height: 520px; overflow: hidden; }}
     #map {{ width: 100%; height: calc(100vh - 88px); }}
     .card {{
       background: var(--panel);
@@ -365,12 +369,66 @@ def render_app_html(default_image_id: int | None) -> str:
     button.warn {{ background: var(--pending); }}
     button.flat {{ background: rgba(16, 35, 48, 0.08); color: var(--ink); }}
     button:disabled {{ opacity: 0.45; cursor: not-allowed; transform: none; }}
+    [data-tooltip] {{ position: relative; }}
+    [data-tooltip]:hover::after {{
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 7px 11px;
+      border-radius: 9px;
+      background: var(--ink);
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      z-index: 9999;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(16, 35, 48, 0.25);
+    }}
+    [data-tooltip]:disabled:hover::after {{ display: none; }}
+    .hotkey-overlay {{
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+      background: rgba(16, 35, 48, 0.5);
+      backdrop-filter: blur(4px);
+    }}
+    .hotkey-overlay.visible {{ display: flex; }}
+    .hotkey-card {{
+      background: var(--paper-strong);
+      border-radius: 20px;
+      padding: 28px 32px;
+      box-shadow: 0 24px 64px rgba(16, 35, 48, 0.28);
+      max-width: 520px;
+      width: 90%;
+    }}
+    .hotkey-card h2 {{ margin: 0 0 16px; font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif; }}
+    .hotkey-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; font-size: 13px; }}
+    .hotkey-row {{ display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }}
+    .hotkey-row kbd {{
+      display: inline-block;
+      min-width: 24px;
+      padding: 2px 7px;
+      border-radius: 5px;
+      border: 1px solid rgba(16, 35, 48, 0.18);
+      background: rgba(16, 35, 48, 0.06);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.4;
+      text-align: center;
+    }}
     .status-line {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }}
     .badge {{ border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700; }}
     .badge.overview_1 {{ background: rgba(185, 56, 36, 0.12); color: var(--pending); }}
     .badge.detail {{ background: rgba(15, 118, 110, 0.12); color: var(--accent-strong); }}
     .badge.overview_2 {{ background: rgba(37, 99, 235, 0.12); color: var(--ship); }}
-    .badge.completed {{ background: rgba(22, 128, 60, 0.12); color: var(--ships); }}
+    .badge.completed {{ background: rgba(22, 128, 60, 0.12); color: #16803c; }}
     .legend {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; font-size: 13px; }}
     .legend div {{ display: flex; align-items: center; gap: 8px; }}
     .swatch {{ width: 12px; height: 12px; border-radius: 3px; }}
@@ -430,12 +488,85 @@ def render_app_html(default_image_id: int | None) -> str:
       font-size: 13px;
       line-height: 1.45;
     }}
+    .map-nav-buttons {{
+      position: absolute;
+      right: 16px;
+      bottom: 80px;
+      z-index: 500;
+      display: flex;
+      gap: 6px;
+    }}
+    .map-nav-buttons button {{
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1px solid rgba(16, 35, 48, 0.15);
+      background: rgba(255, 250, 242, 0.92);
+      font-size: 18px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      color: var(--fg);
+    }}
+    .map-nav-buttons button:hover {{
+      background: var(--accent);
+      color: #fff;
+    }}
+    .review-progress {{
+      position: fixed;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 900;
+      width: min(640px, calc(100vw - 32px));
+      padding: 10px 14px;
+      border: 1px solid rgba(16, 35, 48, 0.08);
+      border-radius: 16px;
+      background: rgba(255, 250, 242, 0.95);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+    }}
+    .review-progress-track {{
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(8px, 1fr);
+      gap: 4px;
+      align-items: center;
+    }}
+    .review-progress-segment {{
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(16, 35, 48, 0.11);
+      border: 1px solid rgba(16, 35, 48, 0.08);
+    }}
+    .review-progress-segment.filled {{
+      background: linear-gradient(180deg, #0f766e, #115e59);
+      border-color: rgba(15, 118, 110, 0.3);
+    }}
+    .review-progress-count {{
+      text-align: right;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--ink);
+      white-space: nowrap;
+    }}
+    .review-progress.empty-state {{
+      width: 220px;
+    }}
     @media (max-width: 980px) {{
       .layout {{ grid-template-columns: 1fr; }}
       .sidebar {{ border-right: 0; border-bottom: 1px solid var(--line); }}
       #map {{ height: 60vh; }}
       .topbar {{ flex-direction: column; align-items: flex-start; }}
       .queue-meta {{ justify-content: flex-start; }}
+      .review-progress {{
+        width: min(420px, calc(100vw - 24px));
+        bottom: 10px;
+      }}
     }}
   </style>
 </head>
@@ -453,7 +584,41 @@ def render_app_html(default_image_id: int | None) -> str:
       <main class="viewer">
         <div id="map"></div>
         <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
+        <div class="review-progress" id="reviewProgress"></div>
+        <div class="map-nav-buttons">
+          <button onclick="retreatReview()" data-tooltip="Previous [Left arrow]">&#9664;</button>
+          <button onclick="advanceReview()" data-tooltip="Next [Right arrow / Space]">&#9654;</button>
+        </div>
       </main>
+    </div>
+  </div>
+
+  <div class="hotkey-overlay" id="hotkeyOverlay" onclick="if(event.target===this)toggleHotkeyOverlay()">
+    <div class="hotkey-card">
+      <h2>Keyboard Shortcuts</h2>
+      <div class="hotkey-grid">
+        <div>
+          <div class="hotkey-row"><span>Label Ships (STS)</span><kbd>S</kbd></div>
+          <div class="hotkey-row"><span>Label Ship (non-STS)</span><kbd>D</kbd></div>
+          <div class="hotkey-row"><span>Mark Neither (background)</span><kbd>N</kbd></div>
+          <div class="hotkey-row"><span>Delete box permanently</span><kbd>Del</kbd></div>
+          <div class="hotkey-row"><span>Cycle Ship / Ships / Neither</span><kbd>Tab</kbd></div>
+          <div class="hotkey-row"><span>Start Detail Review</span><kbd>R</kbd></div>
+          <div class="hotkey-row"><span>Complete Image</span><kbd>C</kbd></div>
+          <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
+        </div>
+        <div>
+          <div class="hotkey-row"><span>Advance review</span><kbd>Space</kbd></div>
+          <div class="hotkey-row"><span>Prev detection</span><kbd>&#9664;</kbd></div>
+          <div class="hotkey-row"><span>Next detection</span><kbd>&#9654;</kbd></div>
+          <div class="hotkey-row"><span>Previous image</span><kbd>[</kbd></div>
+          <div class="hotkey-row"><span>Next image</span><kbd>]</kbd></div>
+          <div class="hotkey-row"><span>Draw Box</span><kbd>B</kbd></div>
+          <div class="hotkey-row"><span>Edit selected</span><kbd>E</kbd></div>
+          <div class="hotkey-row"><span>Save Geometry</span><kbd>G</kbd></div>
+          <div class="hotkey-row"><span>Cancel / Deselect</span><kbd>Esc</kbd></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -505,6 +670,7 @@ def render_app_html(default_image_id: int | None) -> str:
       const query = imageId ? `?image_id=${{encodeURIComponent(imageId)}}` : '';
       const response = await fetch('/api/state' + query);
       state = await response.json();
+      syncReviewCursorFromState();
       if (state.image) setImageIdInUrl(state.image.image_id);
       renderAll();
     }}
@@ -513,6 +679,73 @@ def render_app_html(default_image_id: int | None) -> str:
       renderTopbar();
       renderSidebar();
       renderMap();
+      renderReviewProgress();
+    }}
+
+    function getPersistedTraversalCount() {{
+      if (!state || !state.image) return 0;
+      const total = state.counts?.active_detections || 0;
+      const reviewed = state.counts?.reviewed_active_detections || 0;
+      if (total <= 0) return 0;
+      if (state.image.review_status === 'overview_2' || state.image.review_status === 'completed') return total;
+      if (state.image.review_status === 'detail') {{
+        const detailCursor = Number.isInteger(state.image.detail_cursor) ? state.image.detail_cursor : null;
+        if (detailCursor !== null) return Math.max(reviewed, Math.min(detailCursor + 1, total));
+      }}
+      return Math.min(reviewed, total);
+    }}
+
+    function syncReviewCursorFromState() {{
+      if (!state || !state.image) {{
+        reviewCursorIndex = -1;
+        return;
+      }}
+      const total = state.counts?.active_detections || 0;
+      const reviewed = state.counts?.reviewed_active_detections || 0;
+      if (total <= 0) {{
+        reviewCursorIndex = -1;
+        return;
+      }}
+      if (state.image.review_status === 'overview_2' || state.image.review_status === 'completed') {{
+        reviewCursorIndex = total;
+        return;
+      }}
+      if (state.image.review_status === 'detail' && Number.isInteger(state.image.detail_cursor)) {{
+        reviewCursorIndex = Math.max(0, Math.min(state.image.detail_cursor, total - 1));
+        return;
+      }}
+      reviewCursorIndex = reviewed > 0 ? Math.min(reviewed - 1, total - 1) : -1;
+    }}
+
+    function getCycleReviewedCount() {{
+      if (!state || !state.counts) return 0;
+      const total = state.counts.active_detections || 0;
+      if (total <= 0) return 0;
+      const persistedCount = getPersistedTraversalCount();
+      const liveCount = reviewCursorIndex < 0 ? 0 : Math.min(reviewCursorIndex + 1, total);
+      return Math.max(persistedCount, liveCount);
+    }}
+
+    function renderReviewProgress() {{
+      const host = document.getElementById('reviewProgress');
+      if (!host || !state || !state.image) return;
+      const total = state.counts?.active_detections || 0;
+      const reviewed = getCycleReviewedCount();
+      if (total <= 0) {{
+        host.className = 'review-progress empty-state';
+        host.innerHTML = `
+          <div class="review-progress-count">0/0</div>
+        `;
+        return;
+      }}
+
+      host.className = 'review-progress';
+      host.innerHTML = `
+        <div class="review-progress-track">
+          ${{Array.from({{ length: total }}, (_, index) => `<span class="review-progress-segment ${{index < reviewed ? 'filled' : ''}}"></span>`).join('')}}
+        </div>
+        <div class="review-progress-count">${{reviewed}}/${{total}}</div>
+      `;
     }}
 
     function renderTopbar() {{
@@ -565,31 +798,34 @@ def render_app_html(default_image_id: int | None) -> str:
             <div><span class="swatch" style="background:#7c6f64"></span> neither</div>
             <div><span class="swatch" style="background:#f8fafc;border:1px solid rgba(16,35,48,0.18)"></span> Selected / editing</div>
           </div>
-          <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Press Delete or Backspace to mark the selected box as neither.</p>
+          <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Use <kbd>N</kbd> to mark it as neither, or <kbd>Del</kbd> to permanently delete it.</p>
         </div>
 
         <div class="card controls">
           <h3>Overview Controls</h3>
           <div class="class-picker">
             <select id="newClassSelect" class="cls-${{defaultClassValue === 1 ? 'ships' : 'ship'}}" onchange="onClassSelectChange(this)">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
-            <div class="shortcut-hint"><kbd>Tab</kbd> toggle Ship / Ships</div>
+            <div class="shortcut-hint"><kbd>Tab</kbd> cycle Ship / Ships / Neither</div>
           </div>
           <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode.'}}</p>
           <div class="button-row">
-            <button class="accent" onclick="startDraw()">Draw Box</button>
-            <button class="secondary" onclick="toggleEditSelected()">${{isEditing ? 'Pause Edit' : 'Edit Selected'}}</button>
+            <button class="accent" onclick="startDraw()" data-tooltip="Draw a new bounding box [B]">Draw Box</button>
+            <button class="secondary" onclick="toggleEditSelected()" data-tooltip="Toggle geometry editing [E]">${{isEditing ? 'Pause Edit' : 'Edit Selected'}}</button>
           </div>
           <div class="button-row">
-            <button class="flat" onclick="saveSelectedGeometry()">Save Geometry</button>
-            <button class="secondary" onclick="clearSelection()">Clear Selection</button>
+            <button class="flat" onclick="saveSelectedGeometry()" data-tooltip="Save box position [G]">Save Geometry</button>
+            <button class="secondary" onclick="clearSelection()" data-tooltip="Deselect current box [Esc]">Clear Selection</button>
           </div>
           <div class="button-row">
-            <button class="warn" onclick="markSelectedNeither()">Mark Neither</button>
-            <button class="secondary" onclick="completeImage()">Complete Image</button>
+            <button class="warn" onclick="markSelectedNeither()" data-tooltip="Mark as background/false-positive for training [N]">Mark Neither</button>
+            <button onclick="deleteSelectedDetection()" style="background:#7f1d1d;color:#fca5a5" data-tooltip="Permanently remove this box [Del]">Delete Box</button>
+          </div>
+          <div class="button-row">
+            <button class="secondary" onclick="completeImage()" data-tooltip="Mark image review complete [C]">Complete Image</button>
           </div>
           <hr style="border:none;border-top:1px solid rgba(16,35,48,0.08);margin:4px 0">
           <div class="button-row">
-            <button class="accent" onclick="startDetail()">Start Detail Review</button>
+            <button class="accent" onclick="startDetail()" data-tooltip="Enter per-detection review [R]">Start Detail Review</button>
           </div>
         </div>
 
@@ -600,22 +836,23 @@ def render_app_html(default_image_id: int | None) -> str:
             <span>${{counts.pending_active_detections}} pending</span>
           </div>
           <div class="button-row">
-            <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>&#9664; Back</button>
-            <button class="secondary" onclick="navigateDetail('next')" ${{current.review_status === 'detail' ? '' : 'disabled'}}>Next &#9654;</button>
+            <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Previous detection [Left arrow]">&#9664; Back</button>
+            <button class="secondary" onclick="navigateDetail('next')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Next detection [Right arrow / Space]">Next &#9654;</button>
           </div>
           <div class="button-row">
-            <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}}>Ships (STS)</button>
-            <button class="ship" onclick="labelCurrent('ship_non_sts')" ${{currentDetection ? '' : 'disabled'}}>Ship (non-STS)</button>
+            <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">Ships (STS)</button>
+            <button class="ship" onclick="labelCurrent('ship_non_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as single ship [D]">Ship (non-STS)</button>
           </div>
           <div class="button-row">
-            <button class="warn" onclick="labelCurrent('neither')" ${{currentDetection ? '' : 'disabled'}}>Neither</button>
-            <button class="flat" onclick="saveSelectedGeometry()">Save Box</button>
+            <button class="warn" onclick="labelCurrent('neither')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Mark as false positive [N]">Neither</button>
+            <button class="flat" onclick="saveSelectedGeometry()" data-tooltip="Save box position [G]">Save Box</button>
           </div>
           <p class="note">Need to split one detection into two? Draw replacement boxes, then mark the old one as neither.</p>
         </div>
 
         <div class="card">
           <h3>Queue</h3>
+          <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; <kbd>?</kbd> all shortcuts</p>
           <div class="queue-list">
             ${{state.queue.images.map(item => `
               <div class="queue-item ${{item.image_id === current.image_id ? 'active' : ''}}" onclick="openImage(${{item.image_id}})">
@@ -630,8 +867,8 @@ def render_app_html(default_image_id: int | None) -> str:
         </div>
 
         <div class="footer-nav">
-          <button class="secondary" onclick="openImage(${{state.queue.prev_image_id}})" ${{state.queue.prev_image_id ? '' : 'disabled'}}>Previous Image</button>
-          <button class="secondary" onclick="openImage(${{state.queue.next_image_id}})" ${{state.queue.next_image_id ? '' : 'disabled'}}>Next Image</button>
+          <button class="secondary" onclick="openImage(${{state.queue.prev_image_id}})" ${{state.queue.prev_image_id ? '' : 'disabled'}} data-tooltip="Go to previous image [[]">Previous Image</button>
+          <button class="secondary" onclick="openImage(${{state.queue.next_image_id}})" ${{state.queue.next_image_id ? '' : 'disabled'}} data-tooltip="Go to next image []]">Next Image</button>
         </div>
       `;
     }}
@@ -696,7 +933,8 @@ def render_app_html(default_image_id: int | None) -> str:
       }}
     }}
 
-    function selectLayer(layer, rerender=true) {{
+    async function selectLayer(layer, rerender=true) {{
+      await autoSaveGeometryIfNeeded();
       disableAllEditing();
       selectedDetectionId = layer.detection.detection_id;
       layerIndex.forEach((item, detectionId) => {{
@@ -727,7 +965,8 @@ def render_app_html(default_image_id: int | None) -> str:
       if (rerender) renderSidebar();
     }}
 
-    function clearSelection() {{
+    async function clearSelection() {{
+      await autoSaveGeometryIfNeeded();
       disableAllEditing();
       selectedDetectionId = null;
       isEditing = false;
@@ -761,6 +1000,84 @@ def render_app_html(default_image_id: int | None) -> str:
 
     function focusLayer(layer) {{
       map.fitBounds(layer.getBounds(), {{ padding: [80, 80], maxZoom: 2 }});
+    }}
+
+    async function zoomToOverview() {{
+      if (!map || !state.image) return;
+      await clearSelection();
+      const bounds = [[0, 0], [state.image.height, state.image.width]];
+      map.fitBounds(bounds, {{ padding: [24, 24] }});
+    }}
+
+    // Review cycle state: -1 = initial overview, 0..n-1 = detections traversed, n = final overview
+    let reviewCursorIndex = -1;
+
+    function getActiveDetections() {{
+      return state.detections.filter(d => d.is_active && d.review_label !== 'neither');
+    }}
+
+    async function advanceReview() {{
+      if (!state || !state.image) return;
+      const active = getActiveDetections();
+      reviewCursorIndex++;
+
+      if (active.length === 0) {{
+        // No detections — skip to next image
+        await navigateQueue(1);
+        return;
+      }}
+
+      if (reviewCursorIndex >= 0 && reviewCursorIndex < active.length) {{
+        const det = active[reviewCursorIndex];
+        const layer = findLayerByDetectionId(det.detection_id);
+        renderReviewProgress();
+        if (layer) {{
+          await selectLayer(layer, true);
+          focusLayer(layer);
+        }}
+        return;
+      }}
+
+      if (reviewCursorIndex === active.length) {{
+        // Final overview pass
+        renderReviewProgress();
+        await zoomToOverview();
+        return;
+      }}
+
+      // Past final overview — go to next image
+      await navigateQueue(1);
+    }}
+
+    async function retreatReview() {{
+      if (!state || !state.image) return;
+      const active = getActiveDetections();
+
+      if (reviewCursorIndex <= 0) {{
+        // Already at or before overview — go to previous image
+        await navigateQueue(-1);
+        return;
+      }}
+
+      reviewCursorIndex--;
+
+      if (reviewCursorIndex < 0) {{
+        // Back to initial overview
+        reviewCursorIndex = -1;
+        renderReviewProgress();
+        await zoomToOverview();
+        return;
+      }}
+
+      const det = active[reviewCursorIndex];
+      renderReviewProgress();
+      if (det) {{
+        const layer = findLayerByDetectionId(det.detection_id);
+        if (layer) {{
+          await selectLayer(layer, true);
+          focusLayer(layer);
+        }}
+      }}
     }}
 
     function startDraw() {{
@@ -829,9 +1146,38 @@ def render_app_html(default_image_id: int | None) -> str:
       await fetchState(state.image.image_id);
     }}
 
+    async function autoSaveGeometryIfNeeded() {{
+      if (!selectedDetectionId || !isEditing) return;
+      const layer = findLayerByDetectionId(selectedDetectionId);
+      if (!layer) return;
+      const geometry = boundsToGeometry(layer.getBounds());
+      const classId = parseInt(document.getElementById('newClassSelect')?.value || String(layer.detection.class_id), 10);
+      try {{
+        await postJson('/api/save-detection', {{
+          image_id: state.image.image_id,
+          detection_id: selectedDetectionId,
+          class_id: classId,
+          x_center: geometry.x_center,
+          y_center: geometry.y_center,
+          width: geometry.width,
+          height: geometry.height,
+        }});
+      }} catch (e) {{
+        console.warn('Autosave failed:', e);
+      }}
+    }}
+
     async function markSelectedNeither() {{
       if (!selectedDetectionId) return;
       await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
+      selectedDetectionId = null;
+      isEditing = false;
+      await fetchState(state.image.image_id);
+    }}
+
+    async function deleteSelectedDetection() {{
+      if (!selectedDetectionId) return;
+      await postJson('/api/delete-detection', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
       selectedDetectionId = null;
       isEditing = false;
       await fetchState(state.image.image_id);
@@ -843,8 +1189,44 @@ def render_app_html(default_image_id: int | None) -> str:
     }}
 
     async function navigateDetail(direction) {{
+      await autoSaveGeometryIfNeeded();
       await postJson('/api/navigate-detail', {{ image_id: state.image.image_id, direction }});
       await fetchState(state.image.image_id);
+    }}
+
+    async function cycleSelectedLabel() {{
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return;
+      const layer = findLayerByDetectionId(targetId);
+      const det = layer ? layer.detection : (state.detail_queue || []).find(d => d.detection_id === targetId);
+      if (!det) return;
+      const cycle = ['ship_non_sts', 'ships_sts', 'neither'];
+      const currentLabel = det.review_label || (det.class_id === 1 ? 'ships_sts' : 'ship_non_sts');
+      const idx = cycle.indexOf(currentLabel);
+      const nextLabel = cycle[(idx + 1) % cycle.length];
+
+      // Apply label but keep the box selected and in view
+      if (nextLabel === 'neither') {{
+        await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
+      }} else {{
+        const geometry = layer ? boundsToGeometry(layer.getBounds()) : det;
+        const classId = nextLabel === 'ships_sts' ? 1 : 0;
+        await postJson('/api/label-detection', {{
+          image_id: state.image.image_id,
+          detection_id: targetId,
+          review_label: nextLabel,
+          class_id: classId,
+          x_center: geometry.x_center, y_center: geometry.y_center,
+          width: geometry.width, height: geometry.height,
+        }});
+      }}
+      const keepId = selectedDetectionId;
+      await fetchState(state.image.image_id);
+      // Re-select the same box after state refresh
+      if (keepId) {{
+        const reselect = findLayerByDetectionId(keepId);
+        if (reselect) selectLayer(reselect, true);
+      }}
     }}
 
     async function labelCurrent(reviewLabel) {{
@@ -884,11 +1266,13 @@ def render_app_html(default_image_id: int | None) -> str:
       }}
     }}
 
-    function openImage(imageId) {{
+    async function openImage(imageId) {{
       if (!imageId) return;
+      await autoSaveGeometryIfNeeded();
       selectedDetectionId = null;
       isEditing = false;
-      fetchState(imageId);
+      reviewCursorIndex = -1;
+      await fetchState(imageId);
     }}
 
     async function postJson(url, payload) {{
@@ -913,17 +1297,131 @@ def render_app_html(default_image_id: int | None) -> str:
       onClassSelectChange(selectEl);
     }}
 
-    document.addEventListener('keydown', event => {{
+    function toggleHotkeyOverlay() {{
+      const overlay = document.getElementById('hotkeyOverlay');
+      if (!overlay) return;
+      overlay.classList.toggle('visible');
+    }}
+
+    async function navigateQueue(direction) {{
+      if (!state.queue || !state.queue.images || !state.image) return;
+      const currentIdx = state.queue.images.findIndex(q => q.image_id === state.image.image_id);
+      if (currentIdx < 0) return;
+      const nextIdx = currentIdx + direction;
+      if (nextIdx >= 0 && nextIdx < state.queue.images.length) {{
+        await openImage(state.queue.images[nextIdx].image_id);
+      }}
+    }}
+
+    document.addEventListener('keydown', async event => {{
       const activeTag = document.activeElement ? document.activeElement.tagName : '';
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
-      if (event.key === 'Tab') {{
+
+      const key = event.key;
+
+      if (key === '?') {{
         event.preventDefault();
-        toggleClassSelect();
+        toggleHotkeyOverlay();
         return;
       }}
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedDetectionId) {{
+      if (key === 'Tab') {{
         event.preventDefault();
-        markSelectedNeither();
+        if (selectedDetectionId || state.current_detection_id) {{
+          await cycleSelectedLabel();
+        }} else {{
+          toggleClassSelect();
+        }}
+        return;
+      }}
+      if (key === 'Escape') {{
+        event.preventDefault();
+        if (drawHandler) {{
+          drawHandler.disable();
+          drawHandler = null;
+        }} else {{
+          await clearSelection();
+          reviewCursorIndex = -1;
+        }}
+        return;
+      }}
+
+      // Space: advance through review cycle
+      if (key === ' ') {{
+        event.preventDefault();
+        await advanceReview();
+        return;
+      }}
+
+      // Navigation: [ previous image, ] next image
+      if (key === '[') {{
+        event.preventDefault();
+        await navigateQueue(-1);
+        return;
+      }}
+      if (key === ']') {{
+        event.preventDefault();
+        await navigateQueue(1);
+        return;
+      }}
+
+      // Left/Right arrows: prev/next detection
+      if (key === 'ArrowLeft') {{
+        event.preventDefault();
+        await retreatReview();
+        return;
+      }}
+      if (key === 'ArrowRight') {{
+        event.preventDefault();
+        await advanceReview();
+        return;
+      }}
+
+      // Labelling: S = Ships (STS), D = Ship (non-STS), N = Neither
+      if (key === 's' || key === 'S') {{
+        event.preventDefault();
+        await labelCurrent('ships_sts');
+        return;
+      }}
+      if (key === 'd' || key === 'D') {{
+        event.preventDefault();
+        await labelCurrent('ship_non_sts');
+        return;
+      }}
+      if (key === 'n' || key === 'N') {{
+        event.preventDefault();
+        await labelCurrent('neither');
+        return;
+      }}
+
+      // Actions
+      if (key === 'r' || key === 'R') {{
+        event.preventDefault();
+        await startDetail();
+        return;
+      }}
+      if (key === 'b' || key === 'B') {{
+        event.preventDefault();
+        startDraw();
+        return;
+      }}
+      if (key === 'e' || key === 'E') {{
+        event.preventDefault();
+        toggleEditSelected();
+        return;
+      }}
+      if (key === 'g' || key === 'G') {{
+        event.preventDefault();
+        await saveSelectedGeometry();
+        return;
+      }}
+      if (key === 'c' || key === 'C') {{
+        event.preventDefault();
+        await completeImage();
+        return;
+      }}
+      if ((key === 'Delete' || key === 'Backspace') && selectedDetectionId) {{
+        event.preventDefault();
+        await deleteSelectedDetection();
       }}
     }});
 
@@ -1011,6 +1509,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 reopen_if_completed(conn, image_id)
                 detection_id = int(payload["detection_id"])
                 mark_detection_neither(conn, image_id, detection_id)
+                self._respond_json(build_state(conn, image_id))
+            elif parsed.path == "/api/delete-detection":
+                image_id = parse_image_id(payload)
+                reopen_if_completed(conn, image_id)
+                detection_id = int(payload["detection_id"])
+                delete_detection(conn, image_id, detection_id)
                 self._respond_json(build_state(conn, image_id))
             elif parsed.path == "/api/complete-image":
                 image_id = parse_image_id(payload)

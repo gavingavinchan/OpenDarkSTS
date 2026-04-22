@@ -6,11 +6,12 @@ The AIS candidate reviewer reviews AIS-derived events. This tool reviews satelli
 
 ## Input Data
 
-- **Source**: `/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/`
+- **Primary source**: `/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/`
+- **Additional source**: `/home/gavin/Downloads/AIS data/Sentinel 2A/2020/ship_tiles/`
 - **Location**: Off the coast of Houston
 - **Format**: RGB GeoTIFF tiles, ~1578x1474 px each, ~3 MB per tile
 - **Tiling**: Multiple tiles per date, named `{date}_tile_{row}_{col}.tiff`
-- **Volume**: 700 tiles across 175 dates, currently 4 tiles per date (2x2 grid) but tile count may vary for future datasets
+- **Volume**: The existing `sentinel2/` subset is 700 tiles across 175 dates; there is also a larger `2020/ship_tiles/` collection with 1,257 additional tiles. Tile count per date varies and should not be assumed to stay at a 2x2 grid.
 
 ## Storage Rules
 
@@ -168,6 +169,10 @@ If new boxes are added during the second overview pass, the image should return 
 
 - Progress indicator: `3 / 175 images reviewed`
 - Per-image detection count: `12 detections (8 reviewed)`
+- Bottom-center per-image detection review progress bar with discrete segments, where each segment represents one active bounding box in the current image
+- The per-image bar should be compact and flat, with the `reviewed/total` count such as `5/10` shown on the right side of the bar
+- During keyboard review flow, pressing `Space` to advance through detections should also advance the per-image progress bar by one segment until all detections for that image have been traversed
+- The per-image progress bar should be reconstructed from saved review state when the page reloads, so progress does not reset on refresh
 - Next/Back to move between images
 - Re-opening the UI should resume each image at its saved review stage and detail cursor
 
@@ -223,6 +228,8 @@ Generate a `data.yaml` pointing to the reviewed dataset so it can be merged with
 - Color-coded boxes: green = `ships` (STS), blue = `ship`, red = unreviewed
 - Toolbar: Add Box, Hide/Mark Neither, Start Detail Review, Complete
 - Detection count summary
+- Mouse wheel over the image should zoom only the image viewer; the page itself should not vertically scroll
+- Vertical scrolling should be confined to the sidebar when the cursor is over the sidebar
 
 ### Detail Mode Layout
 
@@ -231,6 +238,7 @@ Generate a `data.yaml` pointing to the reviewed dataset so it can be merged with
 - Label buttons: `Ships (STS)`, `Ship (non-STS)`, `Neither`
 - Navigation: Back, Next
 - Detection progress: `4 / 12`
+- Static bottom-center discrete progress bar mirroring per-image detection review progress, with the count label on the right side of the bar
 
 ## Dependencies
 
