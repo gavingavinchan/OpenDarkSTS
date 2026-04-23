@@ -11,6 +11,8 @@ The main requirement is simple collaboration:
 - completed work can be recombined later without database merging
 - the final merged review set can be exported directly to YOLO labels
 
+The review format must also preserve per-location false-positive signal. When a reviewer rejects an auto detection with the `neither` label, that detection is not a YOLO class and is not exported as a label, but its position and the fact that the model was wrong at that location must be retained in the review file. This signal informs later dataset curation — deciding which reviewed images to include in the training set. Dataset curation reads per-image review JSONs directly; the export step does not emit a separate sidecar report.
+
 ## Decision
 
 Do not use a shared or primary SQLite database for visual review state.
@@ -43,7 +45,6 @@ This manifest defines the shared image universe and reproducibility settings:
 - image dimensions
 - model weights
 - inference settings
-- merged raw detections
 - a stable `image_key` per image
 
 The manifest is generated once from preprocessing and is shared with all collaborators.
@@ -68,7 +69,6 @@ It stores:
 - detail cursor
 - all current detections for that image
 - review labels
-- active/inactive state
 - manual edits
 - provenance needed for merge validation
 
@@ -86,16 +86,34 @@ Recommended rule:
 
 This avoids baking tile assumptions into the collaboration model. Some datasets may be tiled, while others may be standalone images with arbitrary but unique filenames.
 
-If needed, include a stronger fingerprint in metadata:
-
-- source tile paths
-- source tile mtimes or hashes
-- width/height
-- original image filename
-
 The key rule is that collaborators must generate the same `image_key` for the same review image.
 
 Do not use local auto-increment database IDs as the collaboration identity.
+
+## Preprocessing Fingerprint
+
+Each review file records a `preprocess_fingerprint` identifying the exact preprocessing inputs it was produced against. This replaces any notion of a single global manifest version.
+
+Fingerprint rule:
+
+- compute a SHA256 over the canonical JSON of the per-image manifest entry
+- inputs to the fingerprint include:
+  - source tile paths
+  - source tile mtimes or content hashes
+  - width and height
+  - model weights identifier
+  - inference settings
+- the resulting value is stored on the review file as `preprocess_fingerprint`
+
+Why per-image and not global:
+
+- adding new unreviewed images to the manifest must not invalidate existing completed reviews
+- re-running detection on one image must only affect that image's fingerprint
+
+Merge validation:
+
+- on merge, each review file is checked against the current manifest's fingerprint for its `image_key`
+- a mismatch flags the review for reconciliation rather than silently trusting stale state
 
 ## Review File Schema
 
@@ -107,7 +125,7 @@ Each file should contain at minimum:
   "image_key": "2020-01-04_tile_1_0",
   "image_filename": "2020-01-04_tile_1_0.png",
   "reviewer": "gavin",
-  "manifest_version": "2026-04-22",
+  "preprocess_fingerprint": "sha256:3f2a9c8e...",
   "date": "2020-01-04",
   "tile_row": 1,
   "tile_col": 0,
@@ -130,9 +148,7 @@ Each file should contain at minimum:
       "width": 0.03,
       "height": 0.02,
       "review_label": "ship_non_sts",
-      "is_active": true,
       "reviewed": true,
-      "review_order": 4,
       "reviewed_at": "2026-04-22T18:28:00Z",
       "source_models": []
     }
@@ -142,24 +158,95 @@ Each file should contain at minimum:
 
 Notes:
 
-- `detection_id` should become a stable per-image string, not a DB row ID
-- raw-model provenance can be kept as metadata, but YOLO export will only use active reviewed detections
+- `detection_id` is a simple per-image counter such as `auto-0001` or `manual-0001`, unique only within the image file
+- `detection_id` is not stable across re-preprocessing — re-running detection regenerates auto ids
+- `source_type` is `auto` (produced by model inference) or `manual` (human added)
+- auto detections the human rejects are kept in the file with `review_label = "neither"` as per-location false-positive signal for dataset curation; not exported as a YOLO class
+- manual detections the user adds and then removes are deleted from the array outright — no audit record is kept for those
+- `reviewed` distinguishes "human has looked at this box" from "human has assigned a label"; a box can be unreviewed with `review_label = null`
+- there is no `is_active` flag — inclusion in the array plus `review_label` determine state, using the rules below
+- array order is the canonical per-image traversal order, and `detail_cursor` indexes into that array directly
 - `review_status` still supports `overview_1`, `detail`, `overview_2`, `completed`
 - `detail_cursor` is persisted so reloading resumes the exact review step
 - `image_filename` should preserve the actual unique review image filename even when the dataset is not tile-based
+- `preprocess_fingerprint` is the per-image manifest fingerprint this review was produced against (see Preprocessing Fingerprint)
+
+State rules without `is_active`:
+
+- detection present with `review_label = null` means it is still active in the review queue and has not been labeled yet
+- detection present with `review_label = ship_non_sts` or `ships_sts` means it is active and exportable
+- auto detection present with `review_label = neither` means the model produced a false positive at that location; the detection is retained as per-location false-positive signal, excluded from the active review queue and from YOLO export
+- manual detection removed from the array means it no longer exists and is excluded from both queue and export
+
+## False-Positive Signal
+
+`neither`-labeled detections are retained as a per-location record that the model predicted a ship at that position and a human confirmed it was wrong. They are the primary purpose of the `neither` label, not an audit byproduct.
+
+Intent:
+
+- preserve where and how often each image's model was wrong
+- let downstream dataset curation reason about per-image false-positive rate when deciding which images to include in training
+
+Rules:
+
+- `neither` detections keep their original geometry and are never deleted from the review file
+- they are not exported as YOLO labels (no YOLO class corresponds to `neither`)
+- dataset curation reads the per-image review JSONs directly to assess false-positive profile — the export step does not emit a separate sidecar report
 
 ## What Gets Saved
 
 Persist in each image file:
 
-- all active reviewed detections
-- all active unreviewed detections
-- inactive `neither` detections if we want review history and auditability
-- manual additions
-- geometry edits
-- review progress state
+- all current auto and manual detections
+- each detection's current `review_label` (including `neither` for auto detections the human rejected)
+- each detection's `reviewed` flag
+- review progress state (`review_status`, `detail_cursor`)
+- geometry edits to any detection
+- preprocessing fingerprint so merges can detect staleness
 
 Do not persist only final labels. We need the in-progress state too so interrupted work can resume and be handed off if needed.
+
+Do not persist an `is_active` flag. Auto detections the human rejects stay in the file with `review_label = "neither"`. Manual detections the user adds then removes are deleted from the array entirely.
+
+Do not persist a `review_order` field. Array order is the single source of truth for per-image traversal order, and `detail_cursor` resumes against that stored order directly.
+
+Do not persist an undo history. Undo is in-memory only (see Undo section).
+
+## Re-run Detections
+
+The review UI exposes a per-image "Re-run detections" button that regenerates auto detections for a single image without affecting any other image's review state.
+
+Behavior when pressed:
+
+- wipe all detections where `source_type = auto`, including any human labels attached to them
+- preserve all detections where `source_type = manual` exactly as they are
+- reset `review_status` to `overview_1`
+- reset `detail_cursor` to `0`
+- run fresh model inference and populate new auto detections with new `detection_id` values
+- recompute and update `preprocess_fingerprint`
+
+This is always an explicit user action. Preprocessing never rewrites review state on its own. Re-running detection on one image is the supported way to pick up new model weights or inference settings for that image.
+
+## Undo
+
+Undo is session-only and in-memory. When the reviewer UI is closed or the user switches away from the current image, the undo stack for that image is discarded.
+
+Rationale:
+
+- most undo use is correcting the most recent mislabel or misedit
+- persisting an undo log in the review file would grow the file over time and complicate merges
+- worst case a reviewer loses undo history for the single image currently open, which is acceptable
+
+Scope of in-memory undo within a session:
+
+- label changes
+- geometry edits
+- manual box additions and removals
+- detail cursor advances
+- review status transitions
+- re-run detections on the currently open image
+
+Cross-session undo, cross-image undo, and undo persistence are out of scope.
 
 ## Collaboration Workflow
 
@@ -208,8 +295,8 @@ The final export step should read directly from per-image review files.
 
 For each image file:
 
-- include only detections with `is_active = true` and review labels `ship_non_sts` or `ships_sts`
-- exclude detections labeled `neither`
+- include only detections whose `review_label` is `ship_non_sts` or `ships_sts`
+- exclude detections labeled `neither` or with a null label
 - map review labels to YOLO classes exactly as the current code does:
   - `ship_non_sts` -> class `0` (`ship`)
   - `ships_sts` -> class `1` (`ships`)
@@ -311,5 +398,7 @@ Not needed for the first file-based version:
 - multi-user concurrent editing of the same image
 - automatic conflict resolution for duplicate edits
 - centralized network database
+- cross-session or persistent undo history
+- global manifest version strings (replaced by per-image `preprocess_fingerprint`)
 
 The simpler rule is better: one image, one reviewer, one review file.

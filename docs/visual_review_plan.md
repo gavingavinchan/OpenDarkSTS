@@ -12,17 +12,19 @@ The AIS candidate reviewer reviews AIS-derived events. This tool reviews satelli
 - **Format**: RGB GeoTIFF tiles, ~1578x1474 px each, ~3 MB per tile
 - **Tiling**: Multiple tiles per date, named `{date}_tile_{row}_{col}.tiff`
 - **Volume**: The existing `sentinel2/` subset is 700 tiles across 175 dates; there is also a larger `2020/ship_tiles/` collection with 1,257 additional tiles. Tile count per date varies and should not be assumed to stay at a 2x2 grid.
+- Future datasets may also arrive as standalone review images with unique filenames rather than tile grids. The reviewer workflow should support both tiled inputs and already-prepared single images.
 
 ## Storage Rules
 
 - The source folder in `/home/gavin/Downloads/AIS data/` is read-only. This workflow must never modify source tiles.
 - All generated outputs must live under `workspace/`.
 - Do not store regenerable intermediates by default. If a stitched review image or merged detection set can be rebuilt from source tiles plus recorded settings, treat it as cache.
-- Persist only the review database, final YOLO exports, and enough provenance metadata to reproduce cached artifacts.
+- Persist review state as one metadata file per image plus enough provenance metadata to reproduce cached artifacts.
+- The authoritative storage, collaboration, merge, and schema rules live in `docs/visual_review_file_storage_plan.md`.
 
 ## YOLO Models
 
-Run both available models on each stitched image:
+Run both available models on each review image:
 
 1. **YOLOv8n** (rectbbox dataset, 150 max epochs, test mAP50 0.800): `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
 2. **YOLO26n** (rectbbox dataset, 150 max epochs, test mAP50 0.830): `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
@@ -46,94 +48,60 @@ A script (`scripts/preprocess_sentinel_tiles.py`) that:
 2. **Builds a per-date render recipe**:
    - Parse row/col indices from filenames
    - Build grid dynamically (do not hardcode 2x2 - future datasets may have different tile counts)
-   - Record source tile paths, tile layout, and stitched image dimensions in a manifest
-3. **Renders a stitched PNG review image** for browser use:
-   - Use PNG, not GeoTIFF, for the web UI
-   - Store rendered review images under `workspace/cache/sentinel_stitched/` only as a rebuildable cache
-   - If a cached PNG is missing, regenerate it from the manifest recipe
-4. **Runs both YOLO models** on each stitched PNG review image
+    - Record source tile paths, tile layout, and review image dimensions in a manifest
+3. **Renders a browser-ready review image**:
+    - Use PNG, not GeoTIFF, for the web UI
+    - Store rendered review images under `workspace/cache/sentinel_stitched/` only as a rebuildable cache
+    - If the input is tiled, regenerate the cached PNG from the manifest recipe
+    - If the input is already a standalone review image, keep or copy it into the cache without forcing a stitched workflow
+4. **Runs both YOLO models** on each cached review image
 5. **Merges detections** from both models with class-aware NMS (IoU threshold ~0.5, configurable)
 6. **Saves results**:
-   - Detection metadata to `workspace/databases/visual_detections.sqlite`
    - Reproducibility metadata to `workspace/manifests/visual_preprocess_manifest.json`
+   - Initial per-image review JSON stubs under `workspace/reviews/`
 
 The preprocessing step should not write initial YOLO label files alongside cached images. Those are regenerable and should be exported only after human review.
-
-### Database Schema: `visual_detections.sqlite`
-
-#### `images` table
-
-- `image_id` (primary key, auto-increment)
-- `date` (e.g., `2020-01-04`)
-- `width`, `height` (pixels)
-- `tile_count` (number of source tiles)
-- `cache_path` (nullable path to cached stitched PNG review image)
-- `review_status` (`pending`, `overview_1`, `detail`, `overview_2`, `completed`)
-- `detail_cursor` (integer index of current detection in detail mode, nullable)
-- `created_at`
-- `updated_at`
-
-#### `image_sources` table
-
-- `image_source_id` (primary key, auto-increment)
-- `image_id` (foreign key)
-- `tile_path` (source GeoTIFF path)
-- `tile_row`, `tile_col`
-- `tile_mtime`
-- `tile_size_bytes`
-- `created_at`
-
-#### `detections` table
-
-- `detection_id` (primary key, auto-increment)
-- `image_id` (foreign key)
-- `source_type` (`raw_model`, `merged`, `manual`)
-- `source_model` (`yolov8n`, `yolo26n`, null)
-- `parent_detection_id` (nullable, for manual edits derived from another detection)
-- `class_id` (0 = ship, 1 = ships)
-- `class_name` (`ship` or `ships`)
-- `confidence` (YOLO confidence, null for manual additions)
-- `x_center`, `y_center`, `width`, `height` (YOLO normalized format, 0-1)
-- `review_label` (`ships_sts`, `ship_non_sts`, `neither`, null)
-- `is_active` (boolean, default true)
-- `reviewed` (boolean, default false)
-- `review_order` (integer, stable per-image detail review order)
-- `reviewed_at`
-- `created_at`
-
-#### `detection_sources` table
-
-- `detection_source_id` (primary key, auto-increment)
-- `detection_id` (foreign key to merged/manual detection)
-- `raw_detection_id` (foreign key to raw model detection)
-- `source_model` (`yolov8n` or `yolo26n`)
 
 ### Preprocess Manifest: `workspace/manifests/visual_preprocess_manifest.json`
 
 Store reproducibility metadata outside the YOLO label files. At minimum include:
 
-- source tile paths and tile grid layout per date
+- source tile paths and tile grid layout per date when applicable
+- original input image filename when the source is already a standalone image
 - source tile mtimes or hashes
-- GeoTIFF -> PNG render settings
-- stitched image dimensions
+- GeoTIFF -> PNG render settings when applicable
+- review image dimensions
 - model weight paths
 - inference thresholds
 - class-aware NMS settings
 
+### Review Files
+
+Persist one review JSON file per image under `workspace/reviews/<reviewer>/<image_key>.json`.
+
+These files store:
+
+- image identity and filename-based `image_key`
+- review progress state (`review_status`, `detail_cursor`)
+- detections and human review labels
+- preprocessing fingerprint for merge validation
+
+The full file schema and collaboration rules are defined in `docs/visual_review_file_storage_plan.md`.
+
 ## Review Workflow
 
-The reviewer processes one image (date) at a time, in this order:
+The reviewer processes one image at a time, in this order:
 
 ### Step 1: Overview Mode (first pass)
 
-Show the full stitched image with all active bounding boxes overlaid.
+Show the full review image with all current bounding boxes overlaid, including `neither` boxes rendered in muted gray so false-positive locations remain visible.
 
 Purpose: quick scan to see if YOLO missed anything obvious.
 
 Controls:
 - Zoom and pan freely
 - Add new bounding boxes (for missed detections)
-- Mark boxes as `neither` or hide them from the active queue
+- Mark boxes as `neither` to record that the model produced a false positive at that location (removes them from the active queue; retained in the review file as per-location false-positive signal for later dataset curation)
 - Click "Start Detail Review" to proceed
 
 ### Step 2: Detail Mode (per-detection)
@@ -147,7 +115,7 @@ For each detection:
 - Label buttons: `Ships (STS)`, `Ship (non-STS)`, `Neither`
   - `Ships (STS)` -> class 1 (`ships`)
   - `Ship (non-STS)` -> class 0 (`ship`)
-  - `Neither` -> mark this detection inactive and exclude it from export
+  - `Neither` -> label this detection `neither`; excluded from exported YOLO labels, but kept in the review file as per-location false-positive signal for later dataset curation
 - Auto-advance to next detection after labeling
 - Back button to revisit previous detection
 - Use a stable per-image detection order so interrupted reviews can resume exactly where they left off
@@ -169,7 +137,7 @@ If new boxes are added during the second overview pass, the image should return 
 
 - Progress indicator: `3 / 175 images reviewed`
 - Per-image detection count: `12 detections (8 reviewed)`
-- Bottom-center per-image detection review progress bar with discrete segments, where each segment represents one active bounding box in the current image
+- Bottom-center per-image detection review progress bar with discrete segments, where each segment represents one box in the active review queue for the current image (`neither` boxes are not counted in this bar)
 - The per-image bar should be compact and flat, with the `reviewed/total` count such as `5/10` shown on the right side of the bar
 - During keyboard review flow, pressing `Space` to advance through detections should also advance the per-image progress bar by one segment until all detections for that image have been traversed
 - The per-image progress bar should be reconstructed from saved review state when the page reloads, so progress does not reset on refresh
@@ -180,7 +148,7 @@ If new boxes are added during the second overview pass, the image should return 
 
 - `ships_sts` - two vessels in STS configuration (YOLO class 1: `ships`)
 - `ship_non_sts` - single vessel, not STS (YOLO class 0: `ship`)
-- `neither` - false positive, no vessel present (kept in the database for history, excluded from export)
+- `neither` - the model produced a false positive at this location. `neither` is not a YOLO class and is excluded from exported labels, but the detection and its location are kept in the review file so the image's false-positive profile can inform dataset curation decisions — which images to include in, or exclude from, the training set. Dataset curation consumes per-image review JSONs directly; no separate sidecar report is emitted by the export step.
 
 ## Output Format
 
@@ -191,12 +159,12 @@ After review, export corrected annotations in standard YOLO format:
 ```
 workspace/datasets/sentinel_reviewed/
   images/
-    2020-01-04.png
-    2020-01-19.png
+    2020-01-04_tile_1_0.png
+    houston_pass_014.png
     ...
   labels/
-    2020-01-04.txt
-    2020-01-19.txt
+    2020-01-04_tile_1_0.txt
+    houston_pass_014.txt
     ...
 ```
 
@@ -206,7 +174,7 @@ Only include detections labeled `ships_sts` or `ship_non_sts`. Detections labele
 
 Keep the exported label files strictly standard YOLO format. Do not embed provenance, review notes, model metadata, or any other extra fields in the `.txt` labels.
 
-Store all non-YOLO metadata separately in the review database and preprocess manifest.
+Store all non-YOLO metadata separately in per-image review files and the preprocess manifest.
 
 ### data.yaml
 
@@ -220,13 +188,13 @@ Generate a `data.yaml` pointing to the reviewed dataset so it can be merged with
 - Frontend: HTML + JavaScript
 - Image viewing: Leaflet with `L.CRS.Simple` for pixel-coordinate image overlay
 - Bounding box editing: Leaflet Draw plugin for add/delete/move/resize rectangles
-- Serve cached stitched PNG review images as static files
+- Serve cached review images as static files
 
 ### Overview Mode Layout
 
-- Full-width image viewer with all active bounding boxes shown
-- Color-coded boxes: green = `ships` (STS), blue = `ship`, red = unreviewed
-- Toolbar: Add Box, Hide/Mark Neither, Start Detail Review, Complete
+- Full-width image viewer with all current bounding boxes shown, with `neither`-labeled boxes rendered in muted gray
+- Color-coded boxes: green = `ships` (STS), blue = `ship`, red = unreviewed, muted gray = `neither`
+- Toolbar: Add Box, Mark Neither, Start Detail Review, Complete
 - Detection count summary
 - Mouse wheel over the image should zoom only the image viewer; the page itself should not vertically scroll
 - Vertical scrolling should be confined to the sidebar when the cursor is over the sidebar
@@ -249,10 +217,10 @@ Generate a `data.yaml` pointing to the reviewed dataset so it can be merged with
 
 ## Implementation Order
 
-1. Pre-processing script: manifest + cached PNG render + YOLO + save to database
+1. Pre-processing script: manifest + cached PNG render + YOLO + write initial review JSON stubs
 2. Review UI: overview mode with bbox add/delete
 3. Review UI: detail mode with bbox edit + labeling + resume support
-4. Export script: database -> YOLO training format
+4. Export script: review JSON files -> YOLO training format
 
 ## File Naming
 
