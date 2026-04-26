@@ -10,68 +10,70 @@ from urllib.parse import parse_qs, urlparse
 
 try:
     from .visual_review_lib import (
-        DEFAULT_DATABASE_PATH,
         DEFAULT_MANIFEST_PATH,
+        DEFAULT_REVIEWER,
+        DEFAULT_REVIEWS_DIR,
         CLASS_ID_TO_NAME,
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
+        ensure_cache_for_image_key,
         create_manual_detection,
         delete_detection,
         detection_payload,
-        DEFAULT_SOURCE_DIR,
-        ensure_cache_for_tile,
-        get_active_detection_queue,
-        get_db,
-        get_image_queue,
-        get_image_row,
-        get_reviewable_detections,
-        initialize_database,
         label_detection,
+        list_review_documents,
+        load_review_document,
         mark_detection_neither,
         navigate_detail_cursor,
         queue_progress,
         repo_relative,
         repo_resolve,
         review_counts,
-        set_image_status,
+        review_file_path,
+        save_review_document,
+        set_review_status,
         start_detail_mode,
-        sync_image_review_status,
+        sync_review_status,
+        utcnow_iso,
         update_detection_geometry,
     )
 except ImportError:
     from visual_review_lib import (
-        DEFAULT_DATABASE_PATH,
         DEFAULT_MANIFEST_PATH,
+        DEFAULT_REVIEWER,
+        DEFAULT_REVIEWS_DIR,
         CLASS_ID_TO_NAME,
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
+        ensure_cache_for_image_key,
         create_manual_detection,
         delete_detection,
         detection_payload,
-        DEFAULT_SOURCE_DIR,
-        ensure_cache_for_tile,
-        get_active_detection_queue,
-        get_db,
-        get_image_queue,
-        get_image_row,
-        get_reviewable_detections,
-        initialize_database,
         label_detection,
+        list_review_documents,
+        load_review_document,
         mark_detection_neither,
         navigate_detail_cursor,
         queue_progress,
         repo_relative,
         repo_resolve,
         review_counts,
-        set_image_status,
+        review_file_path,
+        save_review_document,
+        set_review_status,
         start_detail_mode,
-        sync_image_review_status,
+        sync_review_status,
+        utcnow_iso,
         update_detection_geometry,
     )
 
 
-DB_PATH = DEFAULT_DATABASE_PATH
 MANIFEST_PATH = DEFAULT_MANIFEST_PATH
+REVIEWS_DIR = DEFAULT_REVIEWS_DIR
+REVIEWER = DEFAULT_REVIEWER
+
+# DELETE BEFORE SHIP: temporary interaction logger for diagnosing missed UI saves.
+DEBUG_INTERACTION_LOG_PATH = repo_resolve("workspace/reports/visual_review_interactions_DELETE_BEFORE_SHIP.jsonl")
 
 
 def json_body(handler: BaseHTTPRequestHandler) -> dict:
@@ -82,24 +84,59 @@ def json_body(handler: BaseHTTPRequestHandler) -> dict:
     return json.loads(raw.decode("utf-8")) if raw else {}
 
 
-def pick_image_id(queue_rows, requested_image_id: int | None) -> int | None:
+def append_debug_interaction_event(payload: dict) -> None:
+    # DELETE BEFORE SHIP: temporary click/key logger. Remove this helper and endpoint before release.
+    DEBUG_INTERACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "server_received_at": utcnow_iso(),
+        "reviewer": REVIEWER,
+        "event": payload,
+    }
+    with DEBUG_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def pick_image_id(queue_rows, requested_image_id: str | None) -> str | None:
     if not queue_rows:
         return None
-    queue_ids = [int(row["image_id"]) for row in queue_rows]
+    queue_ids = [str(row["image_key"]) for row in queue_rows]
     if requested_image_id in queue_ids:
         return requested_image_id
     for row in queue_rows:
         if row["review_status"] not in {"completed", "overview_2"}:
-            return int(row["image_id"])
+            return str(row["image_key"])
     for row in queue_rows:
         if row["review_status"] != "completed":
-            return int(row["image_id"])
-    return int(queue_rows[0]["image_id"])
+            return str(row["image_key"])
+    return str(queue_rows[0]["image_key"])
 
 
-def build_state(conn, image_id: int | None) -> dict:
-    queue_rows = get_image_queue(conn)
-    progress = queue_progress(conn)
+def load_review_by_image_id(image_id: str) -> tuple[dict, Path]:
+    path = review_file_path(image_id, REVIEWER, REVIEWS_DIR)
+    if not path.exists():
+        raise KeyError(f"Review file not found for image_id={image_id} reviewer={REVIEWER}")
+    return load_review_document(path), path
+
+
+def save_review(review: dict, review_path: Path) -> None:
+    sync_review_status(review)
+    save_review_document(review, review_path)
+
+
+def synced_review_queue() -> list[dict]:
+    reviews = list_review_documents(REVIEWER, REVIEWS_DIR)
+    for review in reviews:
+        before = (review.get("review_status"), review.get("detail_cursor"))
+        sync_review_status(review)
+        after = (review.get("review_status"), review.get("detail_cursor"))
+        if before != after and review.get("_path") is not None:
+            save_review_document(review, review["_path"])
+    return reviews
+
+
+def build_state(image_id: str | None) -> dict:
+    queue_rows = synced_review_queue()
+    progress = queue_progress(queue_rows)
     selected_image_id = pick_image_id(queue_rows, image_id)
 
     if selected_image_id is None:
@@ -124,47 +161,42 @@ def build_state(conn, image_id: int | None) -> dict:
             },
         }
 
-    sync_image_review_status(conn, selected_image_id)
-    queue_rows = get_image_queue(conn)
+    review, review_path = load_review_by_image_id(selected_image_id)
+    sync_review_status(review)
+    save_review(review, review_path)
+    queue_rows = synced_review_queue()
     queue_payload = []
     for index, row in enumerate(queue_rows):
         queue_payload.append(
             {
-                "image_id": int(row["image_id"]),
+                "image_id": row["image_key"],
+                "image_key": row["image_key"],
                 "date": row["date"],
-                "tile_row": int(row["tile_row"]),
-                "tile_col": int(row["tile_col"]),
+                "tile_row": int(row.get("tile_row") or 0),
+                "tile_col": int(row.get("tile_col") or 0),
                 "review_status": row["review_status"],
                 "queue_index": index,
             }
         )
-    image = get_image_row(conn, selected_image_id)
+    image = next((row for row in queue_rows if row["image_key"] == selected_image_id), None)
     if image is None:
         raise KeyError(f"Image {selected_image_id} not found")
 
-    cache_path = ensure_cache_for_tile(image["date"], int(image["tile_row"]), int(image["tile_col"]), source_dir=DEFAULT_SOURCE_DIR)
-    if repo_relative(cache_path) != image["cache_path"]:
-        conn.execute(
-            "UPDATE images SET cache_path = ?, updated_at = CURRENT_TIMESTAMP WHERE image_id = ?",
-            (repo_relative(cache_path), selected_image_id),
-        )
-        conn.commit()
-        image = get_image_row(conn, selected_image_id)
-        if image is None:
-            raise KeyError(f"Image {selected_image_id} not found after cache update")
+    cache_path = ensure_cache_for_image_key(selected_image_id, MANIFEST_PATH)
 
-    detections = [detection_payload(row, image["width"], image["height"]) for row in get_reviewable_detections(conn, selected_image_id)]
-    detail_rows = get_active_detection_queue(conn, selected_image_id)
-    detail_payload = [detection_payload(row, image["width"], image["height"]) for row in detail_rows]
+    detections = [detection_payload(row, int(review["width"]), int(review["height"]), selected_image_id) for row in review["detections"]]
+    detail_payload = [item for item in detections if item["is_active"]]
 
-    current_index = next(index for index, row in enumerate(queue_rows) if int(row["image_id"]) == selected_image_id)
-    prev_image_id = int(queue_rows[current_index - 1]["image_id"]) if current_index > 0 else None
-    next_image_id = int(queue_rows[current_index + 1]["image_id"]) if current_index < len(queue_rows) - 1 else None
+    current_index = next(index for index, row in enumerate(queue_rows) if row["image_key"] == selected_image_id)
+    prev_image_id = queue_rows[current_index - 1]["image_key"] if current_index > 0 else None
+    next_image_id = queue_rows[current_index + 1]["image_key"] if current_index < len(queue_rows) - 1 else None
 
     current_detection_id = None
-    detail_cursor = image["detail_cursor"]
-    if image["review_status"] == "detail" and detail_cursor is not None and 0 <= detail_cursor < len(detail_payload):
-        current_detection_id = detail_payload[detail_cursor]["detection_id"]
+    detail_cursor = review.get("detail_cursor")
+    if review["review_status"] == "detail" and isinstance(detail_cursor, int) and 0 <= detail_cursor < len(review["detections"]):
+        current_candidate = review["detections"][detail_cursor]
+        if current_candidate.get("review_label") != "neither":
+            current_detection_id = current_candidate["detection_id"]
 
     return {
         "queue": {
@@ -175,29 +207,33 @@ def build_state(conn, image_id: int | None) -> dict:
             **progress,
         },
         "image": {
-            "image_id": int(image["image_id"]),
-            "date": image["date"],
-            "tile_row": int(image["tile_row"]),
-            "tile_col": int(image["tile_col"]),
-            "width": int(image["width"]),
-            "height": int(image["height"]),
-            "tile_count": int(image["tile_count"]),
-            "review_status": image["review_status"],
-            "detail_cursor": image["detail_cursor"],
+            "image_id": review["image_key"],
+            "image_key": review["image_key"],
+            "date": review.get("date"),
+            "tile_row": int(review.get("tile_row") or 0),
+            "tile_col": int(review.get("tile_col") or 0),
+            "width": int(review["width"]),
+            "height": int(review["height"]),
+            "tile_count": 1,
+            "review_status": review["review_status"],
+            "detail_cursor": review.get("detail_cursor"),
             "cache_url": "/cache/" + repo_relative(cache_path),
         },
         "detections": detections,
         "detail_queue": detail_payload,
         "current_detection_id": current_detection_id,
-        "counts": review_counts(conn, selected_image_id),
+        "counts": review_counts(review),
     }
 
 
-def parse_image_id(payload: dict) -> int:
+def parse_image_id(payload: dict) -> str:
     image_id = payload.get("image_id")
     if image_id is None:
         raise ValueError("image_id is required")
-    return int(image_id)
+    value = str(image_id).strip()
+    if not value:
+        raise ValueError("image_id must be non-empty")
+    return value
 
 
 def parse_detection_geometry(payload: dict) -> tuple[float, float, float, float]:
@@ -209,14 +245,13 @@ def parse_detection_geometry(payload: dict) -> tuple[float, float, float, float]
     )
 
 
-def reopen_if_completed(conn, image_id: int) -> None:
-    image = get_image_row(conn, image_id)
-    if image is not None and image["review_status"] == "completed":
-        set_image_status(conn, image_id, "overview_2", None)
+def reopen_if_completed(review: dict) -> None:
+    if review.get("review_status") == "completed":
+        set_review_status(review, "overview_2", None)
 
 
-def render_app_html(default_image_id: int | None) -> str:
-    initial_image = "null" if default_image_id is None else str(default_image_id)
+def render_app_html(default_image_id: str | None) -> str:
+    initial_image = json.dumps(default_image_id)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -448,10 +483,12 @@ def render_app_html(default_image_id: int | None) -> str:
       cursor: pointer;
       background: rgba(16, 35, 48, 0.04);
     }}
-    .queue-item.active {{ border-color: rgba(15, 118, 110, 0.24); background: rgba(15, 118, 110, 0.08); }}
+    .queue-item.completed {{ border-color: rgba(22, 101, 52, 0.24); background: rgba(34, 197, 94, 0.16); }}
+    .queue-item.active {{ border-color: rgba(15, 118, 110, 0.36); background: rgba(15, 118, 110, 0.1); }}
+    .queue-item.completed.active {{ border-color: rgba(22, 101, 52, 0.4); background: rgba(34, 197, 94, 0.22); }}
     .queue-item small {{ color: var(--muted); }}
     .leaflet-container {{ background: #0f172a; }}
-    .bbox-label-anchor {{ background: transparent; border: 0; }}
+    .bbox-label-anchor {{ background: transparent; border: 0; width: auto !important; height: auto !important; }}
     .bbox-label {{
       display: inline-flex;
       align-items: center;
@@ -465,7 +502,8 @@ def render_app_html(default_image_id: int | None) -> str:
       font-weight: 700;
       line-height: 1;
       white-space: nowrap;
-      transform: translate(8px, -8px);
+      transform: translate(0, -100%);
+      transform-origin: left bottom;
     }}
     .bbox-label.ship {{ color: #2563eb; }}
     .bbox-label.ships {{ color: #c81e1e; }}
@@ -495,14 +533,17 @@ def render_app_html(default_image_id: int | None) -> str:
       z-index: 500;
       display: flex;
       gap: 6px;
+      align-items: center;
     }}
     .map-nav-buttons button {{
-      width: 40px;
+      min-width: 40px;
       height: 40px;
-      border-radius: 50%;
+      border-radius: 999px;
       border: 1px solid rgba(16, 35, 48, 0.15);
       background: rgba(255, 250, 242, 0.92);
-      font-size: 18px;
+      padding: 0 13px;
+      font-size: 14px;
+      font-weight: 700;
       cursor: pointer;
       box-shadow: var(--shadow);
       color: var(--fg);
@@ -586,8 +627,10 @@ def render_app_html(default_image_id: int | None) -> str:
         <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
         <div class="review-progress" id="reviewProgress"></div>
         <div class="map-nav-buttons">
-          <button onclick="retreatReview()" data-tooltip="Previous [Left arrow]">&#9664;</button>
-          <button onclick="advanceReview()" data-tooltip="Next [Right arrow / Space]">&#9654;</button>
+          <button onclick="navigateQueue(-1)" data-tooltip="Previous image [[">Previous Image</button>
+          <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
+          <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
+          <button onclick="navigateQueue(1)" data-tooltip="Next image []]">Next Image</button>
         </div>
       </main>
     </div>
@@ -600,11 +643,10 @@ def render_app_html(default_image_id: int | None) -> str:
         <div>
           <div class="hotkey-row"><span>Label Ships (STS)</span><kbd>S</kbd></div>
           <div class="hotkey-row"><span>Label Ship (non-STS)</span><kbd>D</kbd></div>
-          <div class="hotkey-row"><span>Mark Neither (background)</span><kbd>N</kbd></div>
+          <div class="hotkey-row"><span>Mark Neither (background)</span><kbd>N</kbd> / <kbd>Backspace</kbd></div>
           <div class="hotkey-row"><span>Delete box permanently</span><kbd>Del</kbd></div>
           <div class="hotkey-row"><span>Cycle Ship / Ships / Neither</span><kbd>Tab</kbd></div>
           <div class="hotkey-row"><span>Start Detail Review</span><kbd>R</kbd></div>
-          <div class="hotkey-row"><span>Complete Image</span><kbd>C</kbd></div>
           <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
         </div>
         <div>
@@ -632,6 +674,8 @@ def render_app_html(default_image_id: int | None) -> str:
     let overlay = null;
     let detectionGroup = null;
     let selectedDetectionId = null;
+    let renderedImageId = null;
+    let lastFocusedDetectionId = null;
     let drawHandler = null;
     let isEditing = false;
     let layerIndex = new Map();
@@ -644,18 +688,15 @@ def render_app_html(default_image_id: int | None) -> str:
     }}
 
     function detectionName(detection) {{
-      if (detection.review_label === 'ships_sts') return 'Ships (STS)';
-      if (detection.review_label === 'ship_non_sts') return 'Ship (non-STS)';
-      if (detection.review_label === 'neither') return 'Neither';
-      return detection.class_id === 1 ? 'Ships' : 'Ship';
+      if (detection.review_label === 'neither') return 'neither';
+      return detection.class_id === 1 ? 'ships' : 'ship';
     }}
 
     function getImageIdFromUrl() {{
       const params = new URLSearchParams(window.location.search);
       const raw = params.get('image_id');
       if (!raw) return initialImageId;
-      const parsed = parseInt(raw, 10);
-      return Number.isFinite(parsed) ? parsed : initialImageId;
+      return raw;
     }}
 
     function setImageIdInUrl(imageId) {{
@@ -689,8 +730,8 @@ def render_app_html(default_image_id: int | None) -> str:
       if (total <= 0) return 0;
       if (state.image.review_status === 'overview_2' || state.image.review_status === 'completed') return total;
       if (state.image.review_status === 'detail') {{
-        const detailCursor = Number.isInteger(state.image.detail_cursor) ? state.image.detail_cursor : null;
-        if (detailCursor !== null) return Math.max(reviewed, Math.min(detailCursor + 1, total));
+        const currentIndex = (state.detail_queue || []).findIndex(item => item.detection_id === state.current_detection_id);
+        if (currentIndex >= 0) return Math.max(reviewed, Math.min(currentIndex + 1, total));
       }}
       return Math.min(reviewed, total);
     }}
@@ -710,11 +751,18 @@ def render_app_html(default_image_id: int | None) -> str:
         reviewCursorIndex = total;
         return;
       }}
-      if (state.image.review_status === 'detail' && Number.isInteger(state.image.detail_cursor)) {{
-        reviewCursorIndex = Math.max(0, Math.min(state.image.detail_cursor, total - 1));
+      if (state.image.review_status === 'detail') {{
+        const currentIndex = (state.detail_queue || []).findIndex(item => item.detection_id === state.current_detection_id);
+        if (currentIndex >= 0) {{
+          reviewCursorIndex = currentIndex;
+          return;
+        }}
+      }}
+      if (reviewed > 0) {{
+        reviewCursorIndex = Math.min(reviewed - 1, total - 1);
         return;
       }}
-      reviewCursorIndex = reviewed > 0 ? Math.min(reviewed - 1, total - 1) : -1;
+      reviewCursorIndex = -1;
     }}
 
     function getCycleReviewedCount() {{
@@ -772,6 +820,7 @@ def render_app_html(default_image_id: int | None) -> str:
       const current = state.image;
       const counts = state.counts;
       const currentDetection = state.detail_queue.find(item => item.detection_id === state.current_detection_id) || null;
+      const currentDetectionIndex = currentDetection ? state.detail_queue.findIndex(item => item.detection_id === currentDetection.detection_id) + 1 : 0;
       const selectedDetection = state.detections.find(item => item.detection_id === selectedDetectionId) || null;
       const defaultClassValue = selectedDetection ? selectedDetection.class_id : (currentDetection ? currentDetection.class_id : 0);
 
@@ -798,7 +847,7 @@ def render_app_html(default_image_id: int | None) -> str:
             <div><span class="swatch" style="background:#7c6f64"></span> neither</div>
             <div><span class="swatch" style="background:#f8fafc;border:1px solid rgba(16,35,48,0.18)"></span> Selected / editing</div>
           </div>
-          <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Use <kbd>N</kbd> to mark it as neither, or <kbd>Del</kbd> to permanently delete it.</p>
+          <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Use <kbd>N</kbd> or <kbd>Backspace</kbd> to mark it as neither, or <kbd>Del</kbd> to permanently delete it.</p>
         </div>
 
         <div class="card controls">
@@ -820,9 +869,7 @@ def render_app_html(default_image_id: int | None) -> str:
             <button class="warn" onclick="markSelectedNeither()" data-tooltip="Mark as background/false-positive for training [N]">Mark Neither</button>
             <button onclick="deleteSelectedDetection()" style="background:#7f1d1d;color:#fca5a5" data-tooltip="Permanently remove this box [Del]">Delete Box</button>
           </div>
-          <div class="button-row">
-            <button class="secondary" onclick="completeImage()" data-tooltip="Mark image review complete [C]">Complete Image</button>
-          </div>
+          <p class="note">Image completion is automatic once every active bbox has been reviewed.</p>
           <hr style="border:none;border-top:1px solid rgba(16,35,48,0.08);margin:4px 0">
           <div class="button-row">
             <button class="accent" onclick="startDetail()" data-tooltip="Enter per-detection review [R]">Start Detail Review</button>
@@ -832,12 +879,12 @@ def render_app_html(default_image_id: int | None) -> str:
         <div class="card controls">
           <h3>Detail Controls</h3>
           <div class="status-line">
-            <span>${{currentDetection ? `Detection ${{(current.detail_cursor || 0) + 1}} / ${{state.detail_queue.length}}` : 'No active detail target'}}</span>
+            <span>${{currentDetection ? `Detection ${{currentDetectionIndex}} / ${{state.detail_queue.length}}` : 'No active detail target'}}</span>
             <span>${{counts.pending_active_detections}} pending</span>
           </div>
           <div class="button-row">
             <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Previous detection [Left arrow]">&#9664; Back</button>
-            <button class="secondary" onclick="navigateDetail('next')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Next detection [Right arrow / Space]">Next &#9654;</button>
+            <button class="secondary" onclick="advanceReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Right arrow / Space]">Accept / Next &#9654;</button>
           </div>
           <div class="button-row">
             <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">Ships (STS)</button>
@@ -855,7 +902,7 @@ def render_app_html(default_image_id: int | None) -> str:
           <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; <kbd>?</kbd> all shortcuts</p>
           <div class="queue-list">
             ${{state.queue.images.map(item => `
-              <div class="queue-item ${{item.image_id === current.image_id ? 'active' : ''}}" onclick="openImage(${{item.image_id}})">
+              <div class="queue-item ${{item.review_status === 'completed' ? 'completed' : ''}} ${{item.image_id === current.image_id ? 'active' : ''}}" onclick='openImage(${{JSON.stringify(item.image_id)}})'>
                 <div>
                   <strong>${{item.date}} (${{item.tile_row}},${{item.tile_col}})</strong><br>
                   <small>${{statusLabels[item.review_status] || item.review_status}}</small>
@@ -867,8 +914,8 @@ def render_app_html(default_image_id: int | None) -> str:
         </div>
 
         <div class="footer-nav">
-          <button class="secondary" onclick="openImage(${{state.queue.prev_image_id}})" ${{state.queue.prev_image_id ? '' : 'disabled'}} data-tooltip="Go to previous image [[]">Previous Image</button>
-          <button class="secondary" onclick="openImage(${{state.queue.next_image_id}})" ${{state.queue.next_image_id ? '' : 'disabled'}} data-tooltip="Go to next image []]">Next Image</button>
+          <button class="secondary" onclick='openImage(${{JSON.stringify(state.queue.prev_image_id)}})' ${{state.queue.prev_image_id ? '' : 'disabled'}} data-tooltip="Go to previous image [[]">Previous Image</button>
+          <button class="secondary" onclick='openImage(${{JSON.stringify(state.queue.next_image_id)}})' ${{state.queue.next_image_id ? '' : 'disabled'}} data-tooltip="Go to next image []]">Next Image</button>
         </div>
       `;
     }}
@@ -885,13 +932,19 @@ def render_app_html(default_image_id: int | None) -> str:
       }}
       if (!state.image) return;
 
-      if (overlay) overlay.remove();
+      const imageChanged = renderedImageId !== state.image.image_id;
+      const bounds = [[0, 0], [state.image.height, state.image.width]];
+      if (imageChanged) {{
+        if (overlay) overlay.remove();
+        overlay = L.imageOverlay(state.image.cache_url, bounds).addTo(map);
+        map.fitBounds(bounds, {{ padding: [24, 24] }});
+        renderedImageId = state.image.image_id;
+        lastFocusedDetectionId = null;
+      }}
+
       detectionGroup.clearLayers();
       layerIndex = new Map();
       labelIndex = new Map();
-      const bounds = [[0, 0], [state.image.height, state.image.width]];
-      overlay = L.imageOverlay(state.image.cache_url, bounds).addTo(map);
-      map.fitBounds(bounds, {{ padding: [24, 24] }});
 
       state.detections.forEach(detection => {{
         const layer = L.rectangle(
@@ -906,7 +959,7 @@ def render_app_html(default_image_id: int | None) -> str:
         const labelClass = detection.review_label === 'neither' || !detection.is_active
           ? 'neither'
           : (detection.class_id === 1 ? 'ships' : 'ship');
-        const labelMarker = L.marker([detection.y2_px, detection.x1_px], {{
+        const labelMarker = L.marker([detection.y1_px, detection.x2_px], {{
           interactive: false,
           keyboard: false,
           zIndexOffset: detection.detection_id === selectedDetectionId ? 2000 : 1000,
@@ -928,7 +981,10 @@ def render_app_html(default_image_id: int | None) -> str:
         const currentLayer = findLayerByDetectionId(state.current_detection_id);
         if (currentLayer) {{
           selectLayer(currentLayer, false);
-          focusLayer(currentLayer);
+          if (imageChanged || lastFocusedDetectionId !== state.current_detection_id) {{
+            focusLayer(currentLayer);
+            lastFocusedDetectionId = state.current_detection_id;
+          }}
         }}
       }}
     }}
@@ -961,7 +1017,7 @@ def render_app_html(default_image_id: int | None) -> str:
       }});
       if (layer.editing) layer.editing.enable();
       isEditing = true;
-      document.getElementById('viewerHint').textContent = `Selected detection #${{layer.detection.detection_id}}. Drag corners or the center handle to resize or move it. Press Delete to mark it as neither.`;
+      document.getElementById('viewerHint').textContent = `Selected detection #${{layer.detection.detection_id}}. Drag corners or the center handle to resize or move it. Press Backspace to mark it as neither, or Delete to remove it.`;
       if (rerender) renderSidebar();
     }}
 
@@ -1007,6 +1063,7 @@ def render_app_html(default_image_id: int | None) -> str:
       await clearSelection();
       const bounds = [[0, 0], [state.image.height, state.image.width]];
       map.fitBounds(bounds, {{ padding: [24, 24] }});
+      lastFocusedDetectionId = null;
     }}
 
     // Review cycle state: -1 = initial overview, 0..n-1 = detections traversed, n = final overview
@@ -1016,8 +1073,27 @@ def render_app_html(default_image_id: int | None) -> str:
       return state.detections.filter(d => d.is_active && d.review_label !== 'neither');
     }}
 
+    function reviewLabelForClassId(classId) {{
+      return Number(classId) === 1 ? 'ships_sts' : 'ship_non_sts';
+    }}
+
+    function getCurrentReviewTarget() {{
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return null;
+      return state.detections.find(item => item.detection_id === targetId) || null;
+    }}
+
+    async function acceptCurrentIfUnreviewed() {{
+      // A bbox becomes reviewed only when a review decision is saved. Space/Right accepts the current class.
+      const target = getCurrentReviewTarget();
+      if (!target || target.reviewed || target.review_label === 'neither' || !target.is_active) return false;
+      await labelCurrent(reviewLabelForClassId(target.class_id));
+      return true;
+    }}
+
     async function advanceReview() {{
       if (!state || !state.image) return;
+      if (await acceptCurrentIfUnreviewed()) return;
       const active = getActiveDetections();
       reviewCursorIndex++;
 
@@ -1034,6 +1110,7 @@ def render_app_html(default_image_id: int | None) -> str:
         if (layer) {{
           await selectLayer(layer, true);
           focusLayer(layer);
+          lastFocusedDetectionId = det.detection_id;
         }}
         return;
       }}
@@ -1076,6 +1153,7 @@ def render_app_html(default_image_id: int | None) -> str:
         if (layer) {{
           await selectLayer(layer, true);
           focusLayer(layer);
+          lastFocusedDetectionId = det.detection_id;
         }}
       }}
     }}
@@ -1110,6 +1188,14 @@ def render_app_html(default_image_id: int | None) -> str:
         width: (east - west) / state.image.width,
         height: (north - south) / state.image.height,
       }};
+    }}
+
+    function geometryMatchesDetection(geometry, detection) {{
+      const tolerance = 0.0000005;
+      return Math.abs(geometry.x_center - detection.x_center) <= tolerance
+        && Math.abs(geometry.y_center - detection.y_center) <= tolerance
+        && Math.abs(geometry.width - detection.width) <= tolerance
+        && Math.abs(geometry.height - detection.height) <= tolerance;
     }}
 
     async function onDrawCreated(event) {{
@@ -1152,6 +1238,7 @@ def render_app_html(default_image_id: int | None) -> str:
       if (!layer) return;
       const geometry = boundsToGeometry(layer.getBounds());
       const classId = parseInt(document.getElementById('newClassSelect')?.value || String(layer.detection.class_id), 10);
+      if (geometryMatchesDetection(geometry, layer.detection) && classId === layer.detection.class_id) return;
       try {{
         await postJson('/api/save-detection', {{
           image_id: state.image.image_id,
@@ -1168,16 +1255,18 @@ def render_app_html(default_image_id: int | None) -> str:
     }}
 
     async function markSelectedNeither() {{
-      if (!selectedDetectionId) return;
-      await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return;
+      await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
       selectedDetectionId = null;
       isEditing = false;
       await fetchState(state.image.image_id);
     }}
 
     async function deleteSelectedDetection() {{
-      if (!selectedDetectionId) return;
-      await postJson('/api/delete-detection', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return;
+      await postJson('/api/delete-detection', {{ image_id: state.image.image_id, detection_id: targetId }});
       selectedDetectionId = null;
       isEditing = false;
       await fetchState(state.image.image_id);
@@ -1286,6 +1375,71 @@ def render_app_html(default_image_id: int | None) -> str:
       return data;
     }}
 
+    // DELETE BEFORE SHIP: temporary full click/key logger for diagnosing missed review saves.
+    // DELETE BEFORE SHIP: remove logDebugInteraction plus both capture listeners before release.
+    function summarizeTarget(target) {{
+      if (!target) return null;
+      const text = (target.innerText || target.textContent || '').replace(/\\s+/g, ' ').trim();
+      return {{
+        tag: target.tagName || null,
+        id: target.id || null,
+        class_name: typeof target.className === 'string' ? target.className : null,
+        name: target.getAttribute ? target.getAttribute('name') : null,
+        type: target.getAttribute ? target.getAttribute('type') : null,
+        aria_label: target.getAttribute ? target.getAttribute('aria-label') : null,
+        title: target.getAttribute ? target.getAttribute('title') : null,
+        text: text.slice(0, 120),
+      }};
+    }}
+
+    function logDebugInteraction(kind, event) {{
+      // DELETE BEFORE SHIP: this intentionally logs every click and keydown.
+      const payload = {{
+        kind,
+        browser_time: new Date().toISOString(),
+        url: window.location.href,
+        image_id: state?.image?.image_id || null,
+        review_status: state?.image?.review_status || null,
+        selected_detection_id: selectedDetectionId || null,
+        current_detection_id: state?.current_detection_id || null,
+        target: summarizeTarget(event.target),
+        event_phase: event.eventPhase,
+        default_prevented_at_capture: event.defaultPrevented,
+      }};
+      if (kind === 'click') {{
+        payload.button = event.button;
+        payload.buttons = event.buttons;
+        payload.client_x = event.clientX;
+        payload.client_y = event.clientY;
+        payload.ctrl_key = event.ctrlKey;
+        payload.shift_key = event.shiftKey;
+        payload.alt_key = event.altKey;
+        payload.meta_key = event.metaKey;
+      }} else if (kind === 'keydown') {{
+        payload.key = event.key;
+        payload.code = event.code;
+        payload.repeat = event.repeat;
+        payload.ctrl_key = event.ctrlKey;
+        payload.shift_key = event.shiftKey;
+        payload.alt_key = event.altKey;
+        payload.meta_key = event.metaKey;
+        payload.active_tag = document.activeElement ? document.activeElement.tagName : null;
+      }}
+
+      console.debug('[DELETE BEFORE SHIP visual-review-interaction]', payload);
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {{
+        navigator.sendBeacon('/api/debug-interaction', new Blob([body], {{ type: 'application/json' }}));
+        return;
+      }}
+      fetch('/api/debug-interaction', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body,
+        keepalive: true,
+      }}).catch(() => {{}});
+    }}
+
     function onClassSelectChange(selectEl) {{
       selectEl.className = selectEl.value === '1' ? 'cls-ships' : 'cls-ship';
     }}
@@ -1312,6 +1466,10 @@ def render_app_html(default_image_id: int | None) -> str:
         await openImage(state.queue.images[nextIdx].image_id);
       }}
     }}
+
+    // DELETE BEFORE SHIP: temporary capture-phase diagnostics for every click and keydown.
+    document.addEventListener('click', event => logDebugInteraction('click', event), true);
+    document.addEventListener('keydown', event => logDebugInteraction('keydown', event), true);
 
     document.addEventListener('keydown', async event => {{
       const activeTag = document.activeElement ? document.activeElement.tagName : '';
@@ -1414,12 +1572,12 @@ def render_app_html(default_image_id: int | None) -> str:
         await saveSelectedGeometry();
         return;
       }}
-      if (key === 'c' || key === 'C') {{
+      if (key === 'Backspace' && (selectedDetectionId || state.current_detection_id)) {{
         event.preventDefault();
-        await completeImage();
+        await markSelectedNeither();
         return;
       }}
-      if ((key === 'Delete' || key === 'Backspace') && selectedDetectionId) {{
+      if (key === 'Delete' && (selectedDetectionId || state.current_detection_id)) {{
         event.preventDefault();
         await deleteSelectedDetection();
       }}
@@ -1437,19 +1595,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/" or path == "":
-            conn = get_db(DB_PATH)
-            initialize_database(conn)
-            queue_rows = get_image_queue(conn)
+            queue_rows = synced_review_queue()
             default_image_id = pick_image_id(queue_rows, self._query_image_id(parsed))
-            conn.close()
             self._respond_html(render_app_html(default_image_id))
             return
 
         if path == "/api/state":
-            conn = get_db(DB_PATH)
-            initialize_database(conn)
-            payload = build_state(conn, self._query_image_id(parsed))
-            conn.close()
+            payload = build_state(self._query_image_id(parsed))
             self._respond_json(payload)
             return
 
@@ -1462,29 +1614,33 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         payload = json_body(self)
-        conn = get_db(DB_PATH)
-        initialize_database(conn)
+
+        if parsed.path == "/api/debug-interaction":
+            # DELETE BEFORE SHIP: temporary diagnostic endpoint for click/key logging.
+            append_debug_interaction_event(payload)
+            self._respond_json({"ok": True})
+            return
 
         try:
+            image_id = parse_image_id(payload)
+            review, review_path = load_review_by_image_id(image_id)
             if parsed.path == "/api/start-detail":
-                image_id = parse_image_id(payload)
-                start_detail_mode(conn, image_id)
-                self._respond_json(build_state(conn, image_id))
+                start_detail_mode(review)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/navigate-detail":
-                image_id = parse_image_id(payload)
                 direction = payload.get("direction", "next")
-                navigate_detail_cursor(conn, image_id, direction)
-                self._respond_json(build_state(conn, image_id))
+                navigate_detail_cursor(review, direction)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/save-detection":
-                image_id = parse_image_id(payload)
-                reopen_if_completed(conn, image_id)
+                reopen_if_completed(review)
                 x_center, y_center, width, height = parse_detection_geometry(payload)
                 detection_id = payload.get("detection_id")
                 class_id = int(payload.get("class_id", 0))
                 if detection_id is None:
                     create_manual_detection(
-                        conn,
-                        image_id=image_id,
+                        review,
                         class_id=class_id,
                         x_center=x_center,
                         y_center=y_center,
@@ -1493,52 +1649,49 @@ class ReviewHandler(BaseHTTPRequestHandler):
                         parent_detection_id=payload.get("parent_detection_id"),
                     )
                 else:
-                    update_detection_geometry(conn, int(detection_id), x_center, y_center, width, height, class_id=class_id)
-                self._respond_json(build_state(conn, image_id))
+                    update_detection_geometry(review, str(detection_id), x_center, y_center, width, height, class_id=class_id)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/label-detection":
-                image_id = parse_image_id(payload)
-                reopen_if_completed(conn, image_id)
-                detection_id = int(payload["detection_id"])
+                reopen_if_completed(review)
+                detection_id = str(payload["detection_id"])
                 review_label = payload["review_label"]
                 class_id = int(payload.get("class_id", REVIEW_LABEL_TO_CLASS[review_label]))
                 x_center, y_center, width, height = parse_detection_geometry(payload)
-                label_detection(conn, image_id, detection_id, review_label, class_id, x_center, y_center, width, height)
-                self._respond_json(build_state(conn, image_id))
+                label_detection(review, detection_id, review_label, class_id, x_center, y_center, width, height)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/mark-neither":
-                image_id = parse_image_id(payload)
-                reopen_if_completed(conn, image_id)
-                detection_id = int(payload["detection_id"])
-                mark_detection_neither(conn, image_id, detection_id)
-                self._respond_json(build_state(conn, image_id))
+                reopen_if_completed(review)
+                detection_id = str(payload["detection_id"])
+                mark_detection_neither(review, detection_id)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/delete-detection":
-                image_id = parse_image_id(payload)
-                reopen_if_completed(conn, image_id)
-                detection_id = int(payload["detection_id"])
-                delete_detection(conn, image_id, detection_id)
-                self._respond_json(build_state(conn, image_id))
+                reopen_if_completed(review)
+                detection_id = str(payload["detection_id"])
+                delete_detection(review, detection_id)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/complete-image":
-                image_id = parse_image_id(payload)
-                complete_image_review(conn, image_id)
-                self._respond_json(build_state(conn, image_id))
+                complete_image_review(review)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             elif parsed.path == "/api/reopen-image":
-                image_id = parse_image_id(payload)
-                set_image_status(conn, image_id, "overview_2", None)
-                self._respond_json(build_state(conn, image_id))
+                set_review_status(review, "overview_2", None)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
             else:
                 self._respond_json({"error": "not found"}, status=404)
         except Exception as exc:
             self._respond_json({"error": str(exc)}, status=400)
-        finally:
-            conn.close()
 
-    def _query_image_id(self, parsed) -> int | None:
+    def _query_image_id(self, parsed) -> str | None:
         values = parse_qs(parsed.query).get("image_id")
         if not values:
             return None
-        try:
-            return int(values[0])
-        except ValueError:
-            return None
+        value = values[0].strip()
+        return value or None
 
     def _serve_cache_file(self, relative_path: str) -> None:
         target = repo_resolve(relative_path)
@@ -1572,22 +1725,22 @@ class ReviewHandler(BaseHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Visual detection reviewer web UI")
     parser.add_argument("--port", type=int, default=8766, help="Port to serve on")
-    parser.add_argument("--db", default=str(DEFAULT_DATABASE_PATH), help="SQLite database path")
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH), help="Preprocess manifest path")
+    parser.add_argument("--reviews-dir", default=str(DEFAULT_REVIEWS_DIR), help="Root directory containing reviewer subdirectories")
+    parser.add_argument("--reviewer", default=DEFAULT_REVIEWER, help="Reviewer name whose review files should be loaded")
     args = parser.parse_args()
 
-    global DB_PATH, MANIFEST_PATH
-    DB_PATH = args.db
+    global MANIFEST_PATH, REVIEWS_DIR, REVIEWER
     MANIFEST_PATH = args.manifest
+    REVIEWS_DIR = Path(args.reviews_dir)
+    REVIEWER = args.reviewer
 
-    conn = get_db(DB_PATH)
-    initialize_database(conn)
-    progress = queue_progress(conn)
-    conn.close()
+    progress = queue_progress(synced_review_queue())
 
     print("Visual Detection Reviewer")
-    print(f"  Database: {repo_resolve(DB_PATH)}")
     print(f"  Manifest: {repo_resolve(MANIFEST_PATH)}")
+    print(f"  Reviews: {repo_resolve(REVIEWS_DIR)}")
+    print(f"  Reviewer: {REVIEWER}")
     print(f"  Queue: {progress['completed_images']} / {progress['total_images']} completed")
     print(f"  Open http://localhost:{args.port}")
 

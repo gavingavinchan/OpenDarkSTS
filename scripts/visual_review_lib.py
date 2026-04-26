@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import math
-import sqlite3
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,15 +17,18 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE_DIR = Path("/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/")
 WORKSPACE_DIR = ROOT_DIR / "workspace"
 DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache" / "sentinel_tiles"
-DEFAULT_DATABASE_PATH = WORKSPACE_DIR / "databases" / "visual_detections.sqlite"
+DEFAULT_REVIEWS_DIR = WORKSPACE_DIR / "reviews"
 DEFAULT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "visual_preprocess_manifest.json"
 DEFAULT_EXPORT_DIR = WORKSPACE_DIR / "datasets" / "sentinel_reviewed"
+DEFAULT_REVIEWER = os.environ.get("USER") or "default"
 
 TILE_NAME_SUFFIXES = {".tif", ".tiff"}
 TILE_NAME_TEMPLATE = "{date}_tile_{row}_{col}.tiff"
 CLASS_ID_TO_NAME = {0: "ship", 1: "ships"}
 CLASS_NAME_TO_ID = {value: key for key, value in CLASS_ID_TO_NAME.items()}
 REVIEW_LABEL_TO_CLASS = {"ship_non_sts": 0, "ships_sts": 1}
+CLASS_ID_TO_REVIEW_LABEL = {value: key for key, value in REVIEW_LABEL_TO_CLASS.items()}
+EXPORTABLE_REVIEW_LABELS = set(REVIEW_LABEL_TO_CLASS)
 
 
 @dataclass(frozen=True)
@@ -51,12 +55,6 @@ def ensure_parent(path: Path) -> Path:
     return path
 
 
-def require_lastrowid(cursor: sqlite3.Cursor) -> int:
-    if cursor.lastrowid is None:
-        raise RuntimeError("Expected SQLite insert to produce lastrowid")
-    return int(cursor.lastrowid)
-
-
 def repo_relative(path: str | Path) -> str:
     candidate = Path(path).resolve()
     try:
@@ -78,6 +76,10 @@ def json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
+def canonical_json(payload: Any) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=json_default)
+
+
 def load_json(path: str | Path, default: Any | None = None) -> Any:
     target = repo_resolve(path)
     if not target.exists():
@@ -89,91 +91,6 @@ def write_json(path: str | Path, payload: Any) -> None:
     target = repo_resolve(path)
     ensure_parent(target)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True, default=json_default) + "\n")
-
-
-def get_db(db_path: str | Path = DEFAULT_DATABASE_PATH) -> sqlite3.Connection:
-    target = repo_resolve(db_path)
-    ensure_parent(target)
-    conn = sqlite3.connect(str(target))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON;")
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
-
-
-def initialize_database(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS images (
-            image_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            tile_row INTEGER NOT NULL DEFAULT 0,
-            tile_col INTEGER NOT NULL DEFAULT 0,
-            width INTEGER NOT NULL,
-            height INTEGER NOT NULL,
-            tile_count INTEGER NOT NULL DEFAULT 1,
-            cache_path TEXT,
-            review_status TEXT NOT NULL DEFAULT 'pending',
-            detail_cursor INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(date, tile_row, tile_col)
-        );
-
-        CREATE TABLE IF NOT EXISTS image_sources (
-            image_source_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            image_id INTEGER NOT NULL,
-            tile_path TEXT NOT NULL,
-            tile_row INTEGER NOT NULL,
-            tile_col INTEGER NOT NULL,
-            tile_mtime REAL NOT NULL,
-            tile_size_bytes INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (image_id) REFERENCES images(image_id) ON DELETE CASCADE,
-            UNIQUE(image_id, tile_path)
-        );
-
-        CREATE TABLE IF NOT EXISTS detections (
-            detection_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            image_id INTEGER NOT NULL,
-            source_type TEXT NOT NULL,
-            source_model TEXT,
-            parent_detection_id INTEGER,
-            class_id INTEGER NOT NULL,
-            class_name TEXT NOT NULL,
-            confidence REAL,
-            x_center REAL NOT NULL,
-            y_center REAL NOT NULL,
-            width REAL NOT NULL,
-            height REAL NOT NULL,
-            review_label TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1,
-            reviewed INTEGER NOT NULL DEFAULT 0,
-            review_order INTEGER,
-            reviewed_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (image_id) REFERENCES images(image_id) ON DELETE CASCADE,
-            FOREIGN KEY (parent_detection_id) REFERENCES detections(detection_id) ON DELETE SET NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS detection_sources (
-            detection_source_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            detection_id INTEGER NOT NULL,
-            raw_detection_id INTEGER NOT NULL,
-            source_model TEXT NOT NULL,
-            FOREIGN KEY (detection_id) REFERENCES detections(detection_id) ON DELETE CASCADE,
-            FOREIGN KEY (raw_detection_id) REFERENCES detections(detection_id) ON DELETE CASCADE,
-            UNIQUE(detection_id, raw_detection_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_images_review_status ON images(review_status);
-        CREATE INDEX IF NOT EXISTS idx_images_date_tile ON images(date, tile_row, tile_col);
-        CREATE INDEX IF NOT EXISTS idx_detections_image_source ON detections(image_id, source_type);
-        CREATE INDEX IF NOT EXISTS idx_detections_image_queue ON detections(image_id, is_active, review_order);
-        """
-    )
-    conn.commit()
 
 
 def parse_tile_name(tile_path: str | Path) -> TileInfo:
@@ -288,113 +205,6 @@ def load_tile_image(tile_path: str | Path) -> tuple[Image.Image, dict[str, Any]]
         return rgb.copy(), metadata
 
 
-def build_stitch_recipe(tiles: list[TileInfo]) -> dict[str, Any]:
-    if not tiles:
-        raise ValueError("Cannot build stitch recipe without tiles")
-
-    rows = sorted({tile.row for tile in tiles})
-    cols = sorted({tile.col for tile in tiles})
-
-    tile_sizes: dict[tuple[int, int], tuple[int, int]] = {}
-    tile_metadata: dict[str, dict[str, Any]] = {}
-    for tile in tiles:
-        with Image.open(tile.path) as image:
-            tile_sizes[(tile.row, tile.col)] = image.size
-        tile_metadata[str(tile.path)] = {
-            "row": tile.row,
-            "col": tile.col,
-            "mtime": tile.mtime,
-            "size_bytes": tile.size_bytes,
-        }
-
-    column_widths = {
-        col: max(tile_sizes[(tile.row, tile.col)][0] for tile in tiles if tile.col == col)
-        for col in cols
-    }
-    row_heights = {
-        row: max(tile_sizes[(tile.row, tile.col)][1] for tile in tiles if tile.row == row)
-        for row in rows
-    }
-
-    x_offsets: dict[int, int] = {}
-    running_x = 0
-    for col in cols:
-        x_offsets[col] = running_x
-        running_x += column_widths[col]
-
-    y_offsets: dict[int, int] = {}
-    running_y = 0
-    for row in rows:
-        y_offsets[row] = running_y
-        running_y += row_heights[row]
-
-    placements = []
-    for tile in tiles:
-        width, height = tile_sizes[(tile.row, tile.col)]
-        placements.append(
-            {
-                "path": str(tile.path),
-                "row": tile.row,
-                "col": tile.col,
-                "x": x_offsets[tile.col],
-                "y": y_offsets[tile.row],
-                "width": width,
-                "height": height,
-                "mtime": tile.mtime,
-                "size_bytes": tile.size_bytes,
-            }
-        )
-
-    recipe = {
-        "date": tiles[0].date,
-        "tile_count": len(tiles),
-        "rows": rows,
-        "cols": cols,
-        "width": running_x,
-        "height": running_y,
-        "placements": placements,
-        "tile_metadata": tile_metadata,
-    }
-    return recipe
-
-
-def render_stitched_png(recipe: dict[str, Any], output_path: str | Path) -> dict[str, Any]:
-    output = repo_resolve(output_path)
-    ensure_parent(output)
-
-    canvas = Image.new("RGB", (int(recipe["width"]), int(recipe["height"])))
-    tile_render_metadata = []
-    for placement in recipe["placements"]:
-        image, metadata = load_tile_image(placement["path"])
-        canvas.paste(image, (int(placement["x"]), int(placement["y"])))
-        tile_render_metadata.append(
-            {
-                "path": placement["path"],
-                "row": placement["row"],
-                "col": placement["col"],
-                "x": placement["x"],
-                "y": placement["y"],
-                "width": placement["width"],
-                "height": placement["height"],
-                "loader": metadata.get("loader"),
-            }
-        )
-
-    canvas.save(output, format="PNG")
-    return {
-        "path": repo_relative(output),
-        "width": canvas.width,
-        "height": canvas.height,
-        "tile_render_metadata": tile_render_metadata,
-        "rendered_at": utcnow_iso(),
-        "render_settings": {
-            "output_format": "png",
-            "color_mode": "RGB",
-            "conversion": "preserve_uint8_or_minmax_per_band",
-        },
-    }
-
-
 def render_tile_png(tile: TileInfo, output_path: str | Path) -> dict[str, Any]:
     output = repo_resolve(output_path)
     ensure_parent(output)
@@ -416,7 +226,7 @@ def load_manifest(manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> dict[str
     manifest = load_json(manifest_path, default={})
     if not isinstance(manifest, dict):
         manifest = {}
-    manifest.setdefault("version", 1)
+    manifest.setdefault("schema_version", 1)
     manifest.setdefault("updated_at", utcnow_iso())
     manifest.setdefault("source_dir", str(DEFAULT_SOURCE_DIR))
     manifest.setdefault("images", {})
@@ -428,28 +238,60 @@ def save_manifest(manifest_path: str | Path, manifest: dict[str, Any]) -> None:
     write_json(manifest_path, manifest)
 
 
-def update_manifest_entry(
-    manifest_path: str | Path,
-    recipe: dict[str, Any],
+def image_key_for_filename(filename: str) -> str:
+    return Path(filename).stem
+
+
+def build_tile_image_key(date_value: str, tile_row: int, tile_col: int) -> str:
+    return image_key_for_filename(f"{date_value}_tile_{tile_row}_{tile_col}.png")
+
+
+def manifest_fingerprint(entry: dict[str, Any]) -> str:
+    payload = canonical_json(entry).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def build_manifest_entry(
+    *,
+    date_value: str,
+    tile: TileInfo,
     render_info: dict[str, Any],
     model_info: dict[str, Any],
     merge_info: dict[str, Any],
-) -> None:
-    manifest = load_manifest(manifest_path)
-    manifest["images"][recipe["date"]] = {
-        "date": recipe["date"],
-        "tile_count": recipe["tile_count"],
-        "rows": recipe["rows"],
-        "cols": recipe["cols"],
-        "width": recipe["width"],
-        "height": recipe["height"],
-        "placements": recipe["placements"],
-        "cache": render_info,
-        "models": model_info,
-        "merge": merge_info,
+) -> dict[str, Any]:
+    image_filename = f"{date_value}_tile_{tile.row}_{tile.col}.png"
+    image_key = image_key_for_filename(image_filename)
+    return {
+        "image_key": image_key,
+        "image_filename": image_filename,
+        "source_kind": "tile",
+        "date": date_value,
+        "tile_row": tile.row,
+        "tile_col": tile.col,
+        "width": int(render_info["width"]),
+        "height": int(render_info["height"]),
+        "cache_path": render_info["path"],
+        "source_tiles": [
+            {
+                "path": str(tile.path),
+                "row": tile.row,
+                "col": tile.col,
+                "mtime": tile.mtime,
+                "size_bytes": tile.size_bytes,
+            }
+        ],
+        "render": {
+            "loader": render_info.get("loader"),
+            "rendered_at": render_info.get("rendered_at"),
+            "output_format": "png",
+        },
+        "model_weights": dict(model_info.get("weights", {})),
+        "inference_settings": {
+            "confidence_threshold": model_info.get("confidence_threshold"),
+        },
+        "merge_settings": dict(merge_info),
         "updated_at": utcnow_iso(),
     }
-    save_manifest(manifest_path, manifest)
 
 
 def update_tile_manifest_entry(
@@ -459,75 +301,524 @@ def update_tile_manifest_entry(
     render_info: dict[str, Any],
     model_info: dict[str, Any],
     merge_info: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
-    key = f"{date_value}_tile_{tile.row}_{tile.col}"
-    manifest["images"][key] = {
-        "date": date_value,
-        "tile_row": tile.row,
-        "tile_col": tile.col,
-        "tile_path": str(tile.path),
-        "width": render_info["width"],
-        "height": render_info["height"],
-        "cache": render_info,
-        "models": model_info,
-        "merge": merge_info,
-        "updated_at": utcnow_iso(),
-    }
+    entry = build_manifest_entry(
+        date_value=date_value,
+        tile=tile,
+        render_info=render_info,
+        model_info=model_info,
+        merge_info=merge_info,
+    )
+    manifest["images"][entry["image_key"]] = entry
     save_manifest(manifest_path, manifest)
-
-
-def get_manifest_entry(date_value: str, manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
-    manifest = load_manifest(manifest_path)
-    entry = manifest.get("images", {}).get(date_value)
-    if entry is None:
-        raise KeyError(f"No manifest entry found for {date_value}")
     return entry
 
 
-def ensure_cache_for_date(
-    date_value: str,
-    manifest_path: str | Path = DEFAULT_MANIFEST_PATH,
-    cache_dir: str | Path = DEFAULT_CACHE_DIR,
-) -> Path:
-    entry = get_manifest_entry(date_value, manifest_path)
-    cache_path_value = entry.get("cache", {}).get("path")
-    cache_path = repo_resolve(cache_path_value) if cache_path_value else repo_resolve(Path(cache_dir) / f"{date_value}.png")
+def sorted_manifest_entries(manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> list[dict[str, Any]]:
+    manifest = load_manifest(manifest_path)
+    entries = list(manifest.get("images", {}).values())
+    entries.sort(key=lambda item: (item.get("date") or "", int(item.get("tile_row") or 0), int(item.get("tile_col") or 0), item["image_key"]))
+    return entries
+
+
+def get_manifest_entry(image_key: str, manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> dict[str, Any]:
+    manifest = load_manifest(manifest_path)
+    entry = manifest.get("images", {}).get(image_key)
+    if entry is None:
+        raise KeyError(f"No manifest entry found for {image_key}")
+    return entry
+
+
+def ensure_cache_for_image_key(image_key: str, manifest_path: str | Path = DEFAULT_MANIFEST_PATH) -> Path:
+    entry = get_manifest_entry(image_key, manifest_path)
+    cache_path = repo_resolve(entry["cache_path"])
     if cache_path.exists():
         return cache_path
+    if entry.get("source_kind") != "tile":
+        raise FileNotFoundError(f"Cache missing for {image_key} and source_kind={entry.get('source_kind')} is not rebuildable here")
+    source_tiles = entry.get("source_tiles") or []
+    if len(source_tiles) != 1:
+        raise FileNotFoundError(f"Expected exactly one source tile for {image_key}")
+    source = source_tiles[0]
+    tile = parse_tile_name(source["path"])
+    render_tile_png(tile, cache_path)
+    return cache_path
 
-    recipe = {
-        "date": entry["date"],
-        "tile_count": entry["tile_count"],
-        "rows": entry["rows"],
-        "cols": entry["cols"],
-        "width": entry["width"],
-        "height": entry["height"],
-        "placements": entry["placements"],
+
+def review_file_path(image_key: str, reviewer: str, reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> Path:
+    return repo_resolve(Path(reviews_dir) / reviewer / f"{image_key}.json")
+
+
+def detection_source_models(merged_detection: dict[str, Any]) -> list[str]:
+    models = {source_id.split(":", 1)[0] for source_id in merged_detection.get("source_raw_ids", [])}
+    return sorted(models)
+
+
+def build_review_stub(entry: dict[str, Any], reviewer: str, merged_detections: list[dict[str, Any]]) -> dict[str, Any]:
+    fingerprint = manifest_fingerprint(entry)
+    detections = []
+    for index, merged in enumerate(merged_detections, start=1):
+        detections.append(
+            {
+                "detection_id": f"auto-{index:04d}",
+                "source_type": "auto",
+                "parent_detection_id": None,
+                "class_id": int(merged["class_id"]),
+                "class_name": str(merged["class_name"]),
+                "confidence": None if merged.get("confidence") is None else float(merged["confidence"]),
+                "x_center": float(merged["x_center"]),
+                "y_center": float(merged["y_center"]),
+                "width": float(merged["width"]),
+                "height": float(merged["height"]),
+                "review_label": None,
+                "reviewed": False,
+                "reviewed_at": None,
+                "source_models": detection_source_models(merged),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "image_key": entry["image_key"],
+        "image_filename": entry["image_filename"],
+        "reviewer": reviewer,
+        "preprocess_fingerprint": fingerprint,
+        "date": entry.get("date"),
+        "tile_row": entry.get("tile_row"),
+        "tile_col": entry.get("tile_col"),
+        "width": int(entry["width"]),
+        "height": int(entry["height"]),
+        "cache_path": entry["cache_path"],
+        "review_status": "overview_1",
+        "detail_cursor": 0,
+        "updated_at": utcnow_iso(),
+        "detections": detections,
     }
-    render_info = render_stitched_png(recipe, cache_path)
-    update_manifest_entry(manifest_path, recipe, render_info, entry.get("models", {}), entry.get("merge", {}))
-    return cache_path
 
 
-def ensure_cache_for_tile(
-    date_value: str,
-    tile_row: int,
-    tile_col: int,
-    source_dir: str | Path = DEFAULT_SOURCE_DIR,
-    cache_dir: str | Path = DEFAULT_CACHE_DIR,
+def write_review_stub(
+    *,
+    review_doc: dict[str, Any],
+    reviewer: str,
+    reviews_dir: str | Path = DEFAULT_REVIEWS_DIR,
+    overwrite: bool = False,
 ) -> Path:
-    cache_path = repo_resolve(Path(cache_dir) / f"{date_value}_tile_{tile_row}_{tile_col}.png")
-    if cache_path.exists():
-        return cache_path
+    target = review_file_path(review_doc["image_key"], reviewer, reviews_dir)
+    if target.exists() and not overwrite:
+        return target
+    write_json(target, review_doc)
+    return target
 
-    grouped = discover_tiles(source_dir)
-    tiles = grouped.get(date_value, [])
-    match = next((t for t in tiles if t.row == tile_row and t.col == tile_col), None)
-    if match is None:
-        raise FileNotFoundError(f"Tile ({tile_row},{tile_col}) for {date_value} not found in {source_dir}")
-    render_tile_png(match, cache_path)
-    return cache_path
+
+def load_review_document(review_path: str | Path) -> dict[str, Any]:
+    review = load_json(review_path, default={})
+    if not isinstance(review, dict):
+        raise ValueError(f"Review file is not a JSON object: {review_path}")
+    review.setdefault("schema_version", 1)
+    review.setdefault("review_status", "overview_1")
+    review.setdefault("detail_cursor", 0)
+    review.setdefault("detections", [])
+    review.setdefault("updated_at", utcnow_iso())
+    return review
+
+
+def save_review_document(review: dict[str, Any], review_path: str | Path) -> None:
+    review["updated_at"] = utcnow_iso()
+    payload = {key: value for key, value in review.items() if not str(key).startswith("_")}
+    write_json(review_path, payload)
+
+
+def list_review_documents(reviewer: str, reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(Path(reviews_dir) / reviewer)
+    if not root.exists():
+        return []
+    reviews = []
+    for path in sorted(root.glob("*.json")):
+        review = load_review_document(path)
+        review["_path"] = path
+        reviews.append(review)
+    reviews.sort(key=lambda item: (item.get("date") or "", int(item.get("tile_row") or 0), int(item.get("tile_col") or 0), item["image_key"]))
+    return reviews
+
+
+def collect_review_documents(reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(reviews_dir)
+    if not root.exists():
+        return []
+    reviews = []
+    seen_by_key: dict[str, Path] = {}
+    for path in sorted(root.glob("**/*.json")):
+        review = load_review_document(path)
+        image_key = str(review.get("image_key") or "")
+        if not image_key:
+            raise ValueError(f"Review file is missing image_key: {path}")
+        previous = seen_by_key.get(image_key)
+        if previous is not None:
+            raise ValueError(f"Duplicate review file for image_key={image_key}: {previous} and {path}")
+        seen_by_key[image_key] = path
+        review["_path"] = path
+        reviews.append(review)
+    reviews.sort(key=lambda item: (item.get("date") or "", int(item.get("tile_row") or 0), int(item.get("tile_col") or 0), item["image_key"]))
+    return reviews
+
+
+def clamp_norm(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def active_detection(detection: dict[str, Any]) -> bool:
+    return detection.get("review_label") != "neither"
+
+
+def active_detections(review: dict[str, Any]) -> list[dict[str, Any]]:
+    return [detection for detection in review.get("detections", []) if active_detection(detection)]
+
+
+def next_detection_id(review: dict[str, Any], prefix: str) -> str:
+    highest = 0
+    for detection in review.get("detections", []):
+        detection_id = str(detection.get("detection_id") or "")
+        if not detection_id.startswith(f"{prefix}-"):
+            continue
+        try:
+            highest = max(highest, int(detection_id.split("-", 1)[1]))
+        except ValueError:
+            continue
+    return f"{prefix}-{highest + 1:04d}"
+
+
+def detection_payload(detection: dict[str, Any], image_width: int, image_height: int, image_key: str) -> dict[str, Any]:
+    x_center = float(detection["x_center"])
+    y_center = float(detection["y_center"])
+    width = float(detection["width"])
+    height = float(detection["height"])
+    return {
+        "detection_id": str(detection["detection_id"]),
+        "image_id": image_key,
+        "source_type": detection["source_type"],
+        "parent_detection_id": detection.get("parent_detection_id"),
+        "class_id": int(detection["class_id"]),
+        "class_name": detection["class_name"],
+        "confidence": None if detection.get("confidence") is None else float(detection["confidence"]),
+        "x_center": x_center,
+        "y_center": y_center,
+        "width": width,
+        "height": height,
+        "x1_px": round((x_center - width / 2.0) * image_width, 3),
+        "y1_px": round((1.0 - y_center - height / 2.0) * image_height, 3),
+        "x2_px": round((x_center + width / 2.0) * image_width, 3),
+        "y2_px": round((1.0 - y_center + height / 2.0) * image_height, 3),
+        "review_label": detection.get("review_label"),
+        "is_active": active_detection(detection),
+        "reviewed": bool(detection.get("reviewed")),
+        "reviewed_at": detection.get("reviewed_at"),
+        "source_models": list(detection.get("source_models") or []),
+        "updated_at": detection.get("updated_at", detection.get("reviewed_at")),
+    }
+
+
+def first_unreviewed_active_index(review: dict[str, Any]) -> int | None:
+    for index, detection in enumerate(review.get("detections", [])):
+        if active_detection(detection) and not bool(detection.get("reviewed")):
+            return index
+    return None
+
+
+def next_active_index(review: dict[str, Any], start: int) -> int | None:
+    for index in range(start + 1, len(review.get("detections", []))):
+        detection = review["detections"][index]
+        if active_detection(detection):
+            return index
+    return None
+
+
+def prev_active_index(review: dict[str, Any], start: int) -> int | None:
+    for index in range(start - 1, -1, -1):
+        detection = review["detections"][index]
+        if active_detection(detection):
+            return index
+    return None
+
+
+def sync_review_status(review: dict[str, Any]) -> tuple[str, int | None]:
+    current_status = review.get("review_status", "overview_1")
+    pending_index = first_unreviewed_active_index(review)
+
+    if current_status == "completed":
+        if pending_index is None:
+            review["detail_cursor"] = None
+            return "completed", None
+        review["review_status"] = "detail"
+        review["detail_cursor"] = pending_index
+        return "detail", pending_index
+    if pending_index is None:
+        review["review_status"] = "completed"
+        review["detail_cursor"] = None
+        return "completed", None
+    if current_status == "detail":
+        cursor = review.get("detail_cursor")
+        if not isinstance(cursor, int) or cursor < 0 or cursor >= len(review.get("detections", [])):
+            review["detail_cursor"] = pending_index
+            return "detail", pending_index
+        current_detection = review["detections"][cursor]
+        if not active_detection(current_detection):
+            review["detail_cursor"] = pending_index
+            return "detail", pending_index
+        return "detail", cursor
+    if current_status == "overview_2" and pending_index is not None:
+        review["review_status"] = "detail"
+        review["detail_cursor"] = pending_index
+        return "detail", pending_index
+    if current_status not in {"overview_1", "overview_2"}:
+        review["review_status"] = "overview_1"
+    return review["review_status"], review.get("detail_cursor")
+
+
+def set_review_status(review: dict[str, Any], review_status: str, detail_cursor: int | None) -> None:
+    review["review_status"] = review_status
+    review["detail_cursor"] = detail_cursor
+
+
+def start_detail_mode(review: dict[str, Any]) -> tuple[str, int | None]:
+    pending_index = first_unreviewed_active_index(review)
+    if pending_index is None:
+        set_review_status(review, "completed", None)
+        return "completed", None
+    set_review_status(review, "detail", pending_index)
+    return "detail", pending_index
+
+
+def advance_detail_cursor(review: dict[str, Any]) -> tuple[str, int | None]:
+    pending_index = first_unreviewed_active_index(review)
+    if pending_index is None:
+        set_review_status(review, "completed", None)
+        return "completed", None
+    set_review_status(review, "detail", pending_index)
+    return "detail", pending_index
+
+
+def navigate_detail_cursor(review: dict[str, Any], direction: str) -> tuple[str, int | None]:
+    if review.get("review_status") != "detail":
+        return review.get("review_status", "overview_1"), review.get("detail_cursor")
+    detections = review.get("detections", [])
+    if not detections:
+        set_review_status(review, "completed", None)
+        return "completed", None
+
+    current = review.get("detail_cursor")
+    if not isinstance(current, int):
+        current = first_unreviewed_active_index(review)
+    if current is None:
+        set_review_status(review, "completed", None)
+        return "completed", None
+
+    if direction == "prev":
+        previous = prev_active_index(review, current)
+        if previous is None:
+            set_review_status(review, "overview_1", None)
+            return "overview_1", None
+        set_review_status(review, "detail", previous)
+        return "detail", previous
+
+    following = next_active_index(review, current)
+    if following is None:
+        return sync_review_status(review)
+    set_review_status(review, "detail", following)
+    return "detail", following
+
+
+def find_detection(review: dict[str, Any], detection_id: str) -> dict[str, Any]:
+    for detection in review.get("detections", []):
+        if str(detection.get("detection_id")) == str(detection_id):
+            return detection
+    raise KeyError(f"Detection {detection_id} not found in image {review.get('image_key')}")
+
+
+def create_manual_detection(
+    review: dict[str, Any],
+    *,
+    class_id: int,
+    x_center: float,
+    y_center: float,
+    width: float,
+    height: float,
+    parent_detection_id: str | None = None,
+) -> str:
+    detection_id = next_detection_id(review, "manual")
+    reviewed_at = utcnow_iso()
+    review.setdefault("detections", []).append(
+        {
+            "detection_id": detection_id,
+            "source_type": "manual",
+            "parent_detection_id": parent_detection_id,
+            "class_id": int(class_id),
+            "class_name": CLASS_ID_TO_NAME[int(class_id)],
+            "confidence": None,
+            "x_center": clamp_norm(x_center),
+            "y_center": clamp_norm(y_center),
+            "width": clamp_norm(width),
+            "height": clamp_norm(height),
+            "review_label": CLASS_ID_TO_REVIEW_LABEL[int(class_id)],
+            "reviewed": True,
+            "reviewed_at": reviewed_at,
+            "source_models": [],
+        }
+    )
+    return detection_id
+
+
+def update_detection_geometry(
+    review: dict[str, Any],
+    detection_id: str,
+    x_center: float,
+    y_center: float,
+    width: float,
+    height: float,
+    class_id: int | None = None,
+) -> None:
+    detection = find_detection(review, detection_id)
+    reviewed_at = utcnow_iso()
+    detection["x_center"] = clamp_norm(x_center)
+    detection["y_center"] = clamp_norm(y_center)
+    detection["width"] = clamp_norm(width)
+    detection["height"] = clamp_norm(height)
+    if class_id is not None:
+        detection["class_id"] = int(class_id)
+        detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
+        detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(class_id)]
+    elif detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
+        detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(detection["class_id"])]
+    detection["reviewed"] = True
+    detection["reviewed_at"] = reviewed_at
+
+
+def label_detection(
+    review: dict[str, Any],
+    detection_id: str,
+    review_label: str,
+    class_id: int,
+    x_center: float,
+    y_center: float,
+    width: float,
+    height: float,
+) -> tuple[str, int | None]:
+    detection = find_detection(review, detection_id)
+    reviewed_at = utcnow_iso()
+    detection["class_id"] = int(class_id)
+    detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
+    detection["review_label"] = review_label
+    detection["reviewed"] = True
+    detection["reviewed_at"] = reviewed_at
+    detection["x_center"] = clamp_norm(x_center)
+    detection["y_center"] = clamp_norm(y_center)
+    detection["width"] = clamp_norm(width)
+    detection["height"] = clamp_norm(height)
+    return advance_detail_cursor(review)
+
+
+def remove_detection(review: dict[str, Any], detection_id: str) -> tuple[str, int | None]:
+    detections = review.get("detections", [])
+    index = next((idx for idx, detection in enumerate(detections) if str(detection.get("detection_id")) == str(detection_id)), None)
+    if index is None:
+        raise KeyError(f"Detection {detection_id} not found in image {review.get('image_key')}")
+    detections.pop(index)
+    cursor = review.get("detail_cursor")
+    if isinstance(cursor, int):
+        if cursor > index:
+            review["detail_cursor"] = cursor - 1
+        elif cursor >= len(detections):
+            review["detail_cursor"] = len(detections) - 1 if detections else None
+    if review.get("review_status") != "detail":
+        return review.get("review_status", "overview_1"), review.get("detail_cursor")
+    return advance_detail_cursor(review)
+
+
+def mark_detection_neither(review: dict[str, Any], detection_id: str) -> tuple[str, int | None]:
+    detection = find_detection(review, detection_id)
+    if detection.get("source_type") == "manual":
+        return remove_detection(review, detection_id)
+    timestamp = utcnow_iso()
+    detection["review_label"] = "neither"
+    detection["reviewed"] = True
+    detection["reviewed_at"] = timestamp
+    if review.get("review_status") != "detail":
+        return review.get("review_status", "overview_1"), review.get("detail_cursor")
+    return advance_detail_cursor(review)
+
+
+def delete_detection(review: dict[str, Any], detection_id: str) -> tuple[str, int | None]:
+    return remove_detection(review, detection_id)
+
+
+def complete_image_review(review: dict[str, Any]) -> None:
+    pending_count = sum(1 for detection in review.get("detections", []) if active_detection(detection) and not bool(detection.get("reviewed")))
+    if pending_count:
+        raise ValueError("Cannot complete image while active detections remain unlabeled")
+    set_review_status(review, "completed", None)
+
+
+def review_counts(review: dict[str, Any]) -> dict[str, int]:
+    detections = review.get("detections", [])
+    active = [detection for detection in detections if active_detection(detection)]
+    reviewed_active = [detection for detection in active if bool(detection.get("reviewed"))]
+    neither = [detection for detection in detections if detection.get("review_label") == "neither"]
+    return {
+        "total_detections": len(detections),
+        "active_detections": len(active),
+        "reviewed_active_detections": len(reviewed_active),
+        "pending_active_detections": len(active) - len(reviewed_active),
+        "neither_detections": len(neither),
+    }
+
+
+def queue_progress(reviews: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total_images": len(reviews),
+        "completed_images": sum(1 for review in reviews if review.get("review_status") == "completed"),
+    }
+
+
+def exportable_detections(review: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        detection
+        for detection in review.get("detections", [])
+        if detection.get("review_label") in EXPORTABLE_REVIEW_LABELS
+    ]
+
+
+def write_yolo_label_file(label_path: str | Path, detections: list[dict[str, Any]]) -> None:
+    target = repo_resolve(label_path)
+    ensure_parent(target)
+    lines = []
+    for detection in detections:
+        review_label = detection["review_label"]
+        class_id = REVIEW_LABEL_TO_CLASS[review_label]
+        lines.append(
+            " ".join(
+                [
+                    str(class_id),
+                    f"{float(detection['x_center']):.8f}",
+                    f"{float(detection['y_center']):.8f}",
+                    f"{float(detection['width']):.8f}",
+                    f"{float(detection['height']):.8f}",
+                ]
+            )
+        )
+    target.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
+def write_data_yaml(dataset_dir: str | Path) -> None:
+    target = repo_resolve(Path(dataset_dir) / "data.yaml")
+    ensure_parent(target)
+    content = (
+        f"path: {repo_resolve(dataset_dir)}\n"
+        "train: images\n"
+        "val: images\n"
+        "names:\n"
+        "  0: ship\n"
+        "  1: ships\n"
+    )
+    target.write_text(content)
 
 
 def normalize_names_mapping(names: Any) -> dict[int, str]:
@@ -678,653 +969,4 @@ def merge_detections_class_aware(raw_detections: list[dict[str, Any]], iou_thres
             next_index += 1
 
     merged.sort(key=lambda item: (-item["confidence"], item["class_id"], item["temp_id"]))
-    for index, detection in enumerate(merged, start=1):
-        detection["review_order"] = index
     return merged
-
-
-def delete_image_by_date(conn: sqlite3.Connection, date_value: str) -> None:
-    conn.execute("DELETE FROM images WHERE date = ?", (date_value,))
-    conn.commit()
-
-
-def delete_image_by_tile(conn: sqlite3.Connection, date_value: str, tile_row: int, tile_col: int) -> None:
-    conn.execute(
-        "DELETE FROM images WHERE date = ? AND tile_row = ? AND tile_col = ?",
-        (date_value, tile_row, tile_col),
-    )
-    conn.commit()
-
-
-def image_exists(conn: sqlite3.Connection, date_value: str) -> bool:
-    row = conn.execute("SELECT 1 FROM images WHERE date = ?", (date_value,)).fetchone()
-    return row is not None
-
-
-def tile_exists(conn: sqlite3.Connection, date_value: str, tile_row: int, tile_col: int) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM images WHERE date = ? AND tile_row = ? AND tile_col = ?",
-        (date_value, tile_row, tile_col),
-    ).fetchone()
-    return row is not None
-
-
-def insert_preprocessed_image(
-    conn: sqlite3.Connection,
-    date_value: str,
-    cache_path: str | Path,
-    width: int,
-    height: int,
-    tiles: list[TileInfo],
-    raw_detections: list[dict[str, Any]],
-    merged_detections: list[dict[str, Any]],
-) -> int:
-    timestamp = utcnow_iso()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO images (date, width, height, tile_count, cache_path, review_status, detail_cursor, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'pending', NULL, ?, ?)
-        """,
-        (date_value, width, height, len(tiles), repo_relative(cache_path), timestamp, timestamp),
-    )
-    image_id = require_lastrowid(cursor)
-
-    for tile in tiles:
-        cursor.execute(
-            """
-            INSERT INTO image_sources (image_id, tile_path, tile_row, tile_col, tile_mtime, tile_size_bytes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (image_id, str(tile.path), tile.row, tile.col, tile.mtime, tile.size_bytes, timestamp),
-        )
-
-    raw_detection_ids: dict[str, int] = {}
-    for raw in raw_detections:
-        cursor.execute(
-            """
-            INSERT INTO detections (
-                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-                confidence, x_center, y_center, width, height, review_label, is_active,
-                reviewed, review_order, reviewed_at, created_at, updated_at
-            ) VALUES (?, 'raw_model', ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, NULL, ?, ?)
-            """,
-            (
-                image_id,
-                raw["source_model"],
-                raw["class_id"],
-                raw["class_name"],
-                raw["confidence"],
-                raw["x_center"],
-                raw["y_center"],
-                raw["width"],
-                raw["height"],
-                timestamp,
-                timestamp,
-            ),
-        )
-        raw_detection_ids[raw["temp_id"]] = require_lastrowid(cursor)
-
-    for merged in merged_detections:
-        cursor.execute(
-            """
-            INSERT INTO detections (
-                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-                confidence, x_center, y_center, width, height, review_label, is_active,
-                reviewed, review_order, reviewed_at, created_at, updated_at
-            ) VALUES (?, 'merged', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)
-            """,
-            (
-                image_id,
-                merged["class_id"],
-                merged["class_name"],
-                merged["confidence"],
-                merged["x_center"],
-                merged["y_center"],
-                merged["width"],
-                merged["height"],
-                merged["review_order"],
-                timestamp,
-                timestamp,
-            ),
-        )
-        merged_id = require_lastrowid(cursor)
-        for raw_id in merged["source_raw_ids"]:
-            cursor.execute(
-                """
-                INSERT INTO detection_sources (detection_id, raw_detection_id, source_model)
-                VALUES (?, ?, ?)
-                """,
-                (merged_id, raw_detection_ids[raw_id], raw_id.split(":", 1)[0]),
-            )
-
-    conn.commit()
-    return image_id
-
-
-def insert_preprocessed_tile(
-    conn: sqlite3.Connection,
-    date_value: str,
-    tile: TileInfo,
-    cache_path: str | Path,
-    width: int,
-    height: int,
-    raw_detections: list[dict[str, Any]],
-    merged_detections: list[dict[str, Any]],
-) -> int:
-    timestamp = utcnow_iso()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO images (date, tile_row, tile_col, width, height, tile_count, cache_path, review_status, detail_cursor, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, 'pending', NULL, ?, ?)
-        """,
-        (date_value, tile.row, tile.col, width, height, repo_relative(cache_path), timestamp, timestamp),
-    )
-    image_id = require_lastrowid(cursor)
-
-    cursor.execute(
-        """
-        INSERT INTO image_sources (image_id, tile_path, tile_row, tile_col, tile_mtime, tile_size_bytes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (image_id, str(tile.path), tile.row, tile.col, tile.mtime, tile.size_bytes, timestamp),
-    )
-
-    raw_detection_ids: dict[str, int] = {}
-    for raw in raw_detections:
-        cursor.execute(
-            """
-            INSERT INTO detections (
-                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-                confidence, x_center, y_center, width, height, review_label, is_active,
-                reviewed, review_order, reviewed_at, created_at, updated_at
-            ) VALUES (?, 'raw_model', ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, NULL, ?, ?)
-            """,
-            (
-                image_id,
-                raw["source_model"],
-                raw["class_id"],
-                raw["class_name"],
-                raw["confidence"],
-                raw["x_center"],
-                raw["y_center"],
-                raw["width"],
-                raw["height"],
-                timestamp,
-                timestamp,
-            ),
-        )
-        raw_detection_ids[raw["temp_id"]] = require_lastrowid(cursor)
-
-    for merged in merged_detections:
-        cursor.execute(
-            """
-            INSERT INTO detections (
-                image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-                confidence, x_center, y_center, width, height, review_label, is_active,
-                reviewed, review_order, reviewed_at, created_at, updated_at
-            ) VALUES (?, 'merged', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)
-            """,
-            (
-                image_id,
-                merged["class_id"],
-                merged["class_name"],
-                merged["confidence"],
-                merged["x_center"],
-                merged["y_center"],
-                merged["width"],
-                merged["height"],
-                merged["review_order"],
-                timestamp,
-                timestamp,
-            ),
-        )
-        merged_id = require_lastrowid(cursor)
-        for raw_id in merged["source_raw_ids"]:
-            cursor.execute(
-                """
-                INSERT INTO detection_sources (detection_id, raw_detection_id, source_model)
-                VALUES (?, ?, ?)
-                """,
-                (merged_id, raw_detection_ids[raw_id], raw_id.split(":", 1)[0]),
-            )
-
-    conn.commit()
-    return image_id
-
-
-def get_image_queue(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path
-        FROM images
-        ORDER BY date ASC, tile_row ASC, tile_col ASC
-        """
-    ).fetchall()
-
-
-def get_image_row(conn: sqlite3.Connection, image_id: int) -> sqlite3.Row | None:
-    return conn.execute(
-        """
-        SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path,
-               created_at, updated_at
-        FROM images
-        WHERE image_id = ?
-        """,
-        (image_id,),
-    ).fetchone()
-
-
-def get_image_row_by_date(conn: sqlite3.Connection, date_value: str) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT image_id, date, tile_row, tile_col, review_status, detail_cursor, width, height, tile_count, cache_path FROM images WHERE date = ?",
-        (date_value,),
-    ).fetchone()
-
-
-def get_reviewable_detections(conn: sqlite3.Connection, image_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT detection_id, image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-               confidence, x_center, y_center, width, height, review_label, is_active, reviewed,
-               review_order, reviewed_at, created_at, updated_at
-        FROM detections
-        WHERE image_id = ? AND source_type IN ('merged', 'manual')
-        ORDER BY COALESCE(review_order, 999999), detection_id
-        """,
-        (image_id,),
-    ).fetchall()
-
-
-def get_active_detection_queue(conn: sqlite3.Connection, image_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT detection_id, image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-               confidence, x_center, y_center, width, height, review_label, is_active, reviewed,
-               review_order, reviewed_at, created_at, updated_at
-        FROM detections
-        WHERE image_id = ? AND source_type IN ('merged', 'manual') AND is_active = 1
-        ORDER BY COALESCE(review_order, 999999), detection_id
-        """,
-        (image_id,),
-    ).fetchall()
-
-
-def set_image_status(conn: sqlite3.Connection, image_id: int, review_status: str, detail_cursor: int | None) -> None:
-    conn.execute(
-        "UPDATE images SET review_status = ?, detail_cursor = ?, updated_at = ? WHERE image_id = ?",
-        (review_status, detail_cursor, utcnow_iso(), image_id),
-    )
-    conn.commit()
-
-
-def get_next_review_order(conn: sqlite3.Connection, image_id: int) -> int:
-    row = conn.execute(
-        "SELECT COALESCE(MAX(review_order), 0) FROM detections WHERE image_id = ? AND source_type IN ('merged', 'manual')",
-        (image_id,),
-    ).fetchone()
-    return int(row[0] or 0) + 1
-
-
-def clamp_norm(value: float) -> float:
-    return max(0.0, min(1.0, float(value)))
-
-
-def detection_payload(row: sqlite3.Row, image_width: int, image_height: int) -> dict[str, Any]:
-    x_center = float(row["x_center"])
-    y_center = float(row["y_center"])
-    width = float(row["width"])
-    height = float(row["height"])
-    return {
-        "detection_id": int(row["detection_id"]),
-        "image_id": int(row["image_id"]),
-        "source_type": row["source_type"],
-        "source_model": row["source_model"],
-        "parent_detection_id": row["parent_detection_id"],
-        "class_id": int(row["class_id"]),
-        "class_name": row["class_name"],
-        "confidence": None if row["confidence"] is None else float(row["confidence"]),
-        "x_center": x_center,
-        "y_center": y_center,
-        "width": width,
-        "height": height,
-        "x1_px": round((x_center - width / 2.0) * image_width, 3),
-        "y1_px": round((1.0 - y_center - height / 2.0) * image_height, 3),
-        "x2_px": round((x_center + width / 2.0) * image_width, 3),
-        "y2_px": round((1.0 - y_center + height / 2.0) * image_height, 3),
-        "review_label": row["review_label"],
-        "is_active": bool(row["is_active"]),
-        "reviewed": bool(row["reviewed"]),
-        "review_order": row["review_order"],
-        "reviewed_at": row["reviewed_at"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def first_unreviewed_active_index(conn: sqlite3.Connection, image_id: int) -> int | None:
-    active = get_active_detection_queue(conn, image_id)
-    for index, row in enumerate(active):
-        if not bool(row["reviewed"]):
-            return index
-    return None
-
-
-def sync_image_review_status(conn: sqlite3.Connection, image_id: int) -> tuple[str, int | None]:
-    image = get_image_row(conn, image_id)
-    if image is None:
-        raise KeyError(f"Image {image_id} not found")
-
-    current_status = image["review_status"]
-    active = get_active_detection_queue(conn, image_id)
-    pending_index = first_unreviewed_active_index(conn, image_id)
-    reviewed_count = sum(1 for row in active if bool(row["reviewed"]))
-
-    if current_status == "completed":
-        return current_status, image["detail_cursor"]
-    if current_status == "pending":
-        set_image_status(conn, image_id, "overview_1", None)
-        return "overview_1", None
-    if current_status == "detail":
-        if pending_index is None:
-            set_image_status(conn, image_id, "overview_2", None)
-            return "overview_2", None
-        cursor = image["detail_cursor"]
-        if cursor is None or cursor < 0 or cursor >= len(active):
-            cursor = pending_index
-            set_image_status(conn, image_id, "detail", cursor)
-            return "detail", cursor
-        return "detail", int(cursor)
-    if current_status == "overview_2" and reviewed_count < len(active):
-        set_image_status(conn, image_id, "detail", pending_index)
-        return "detail", pending_index
-    return current_status, image["detail_cursor"]
-
-
-def create_manual_detection(
-    conn: sqlite3.Connection,
-    image_id: int,
-    class_id: int,
-    x_center: float,
-    y_center: float,
-    width: float,
-    height: float,
-    parent_detection_id: int | None = None,
-) -> int:
-    timestamp = utcnow_iso()
-    review_order = get_next_review_order(conn, image_id)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO detections (
-            image_id, source_type, source_model, parent_detection_id, class_id, class_name,
-            confidence, x_center, y_center, width, height, review_label, is_active,
-            reviewed, review_order, reviewed_at, created_at, updated_at
-        ) VALUES (?, 'manual', NULL, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)
-        """,
-        (
-            image_id,
-            parent_detection_id,
-            class_id,
-            CLASS_ID_TO_NAME[class_id],
-            clamp_norm(x_center),
-            clamp_norm(y_center),
-            clamp_norm(width),
-            clamp_norm(height),
-            review_order,
-            timestamp,
-            timestamp,
-        ),
-    )
-    detection_id = require_lastrowid(cursor)
-    conn.commit()
-    return detection_id
-
-
-def update_detection_geometry(
-    conn: sqlite3.Connection,
-    detection_id: int,
-    x_center: float,
-    y_center: float,
-    width: float,
-    height: float,
-    class_id: int | None = None,
-) -> None:
-    if class_id is None:
-        conn.execute(
-            """
-            UPDATE detections
-            SET x_center = ?, y_center = ?, width = ?, height = ?, updated_at = ?
-            WHERE detection_id = ?
-            """,
-            (clamp_norm(x_center), clamp_norm(y_center), clamp_norm(width), clamp_norm(height), utcnow_iso(), detection_id),
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE detections
-            SET class_id = ?, class_name = ?, x_center = ?, y_center = ?, width = ?, height = ?, updated_at = ?
-            WHERE detection_id = ?
-            """,
-            (
-                class_id,
-                CLASS_ID_TO_NAME[class_id],
-                clamp_norm(x_center),
-                clamp_norm(y_center),
-                clamp_norm(width),
-                clamp_norm(height),
-                utcnow_iso(),
-                detection_id,
-            ),
-        )
-    conn.commit()
-
-
-def label_detection(
-    conn: sqlite3.Connection,
-    image_id: int,
-    detection_id: int,
-    review_label: str,
-    class_id: int,
-    x_center: float,
-    y_center: float,
-    width: float,
-    height: float,
-) -> tuple[str, int | None]:
-    reviewed_at = utcnow_iso()
-    conn.execute(
-        """
-        UPDATE detections
-        SET class_id = ?, class_name = ?, review_label = ?, reviewed = 1, is_active = 1,
-            x_center = ?, y_center = ?, width = ?, height = ?, reviewed_at = ?, updated_at = ?
-        WHERE detection_id = ? AND image_id = ?
-        """,
-        (
-            class_id,
-            CLASS_ID_TO_NAME[class_id],
-            review_label,
-            clamp_norm(x_center),
-            clamp_norm(y_center),
-            clamp_norm(width),
-            clamp_norm(height),
-            reviewed_at,
-            reviewed_at,
-            detection_id,
-            image_id,
-        ),
-    )
-    conn.commit()
-    return advance_detail_cursor(conn, image_id)
-
-
-def mark_detection_neither(conn: sqlite3.Connection, image_id: int, detection_id: int) -> tuple[str, int | None]:
-    timestamp = utcnow_iso()
-    image = get_image_row(conn, image_id)
-    conn.execute(
-        """
-        UPDATE detections
-        SET review_label = 'neither', reviewed = 1, is_active = 0, reviewed_at = ?, updated_at = ?
-        WHERE detection_id = ? AND image_id = ?
-        """,
-        (timestamp, timestamp, detection_id, image_id),
-    )
-    conn.commit()
-    if image is None:
-        raise KeyError(f"Image {image_id} not found")
-    if image["review_status"] != "detail":
-        return image["review_status"], image["detail_cursor"]
-    return advance_detail_cursor(conn, image_id)
-
-
-def delete_detection(conn: sqlite3.Connection, image_id: int, detection_id: int) -> tuple[str, int | None]:
-    """Permanently remove a detection row from the database."""
-    image = get_image_row(conn, image_id)
-    conn.execute("DELETE FROM detections WHERE detection_id = ? AND image_id = ?", (detection_id, image_id))
-    conn.commit()
-    if image is None:
-        raise KeyError(f"Image {image_id} not found")
-    if image["review_status"] != "detail":
-        return image["review_status"], image["detail_cursor"]
-    return advance_detail_cursor(conn, image_id)
-
-
-def start_detail_mode(conn: sqlite3.Connection, image_id: int) -> tuple[str, int | None]:
-    pending_index = first_unreviewed_active_index(conn, image_id)
-    if pending_index is None:
-        set_image_status(conn, image_id, "overview_2", None)
-        return "overview_2", None
-    set_image_status(conn, image_id, "detail", pending_index)
-    return "detail", pending_index
-
-
-def advance_detail_cursor(conn: sqlite3.Connection, image_id: int) -> tuple[str, int | None]:
-    pending_index = first_unreviewed_active_index(conn, image_id)
-    if pending_index is None:
-        set_image_status(conn, image_id, "overview_2", None)
-        return "overview_2", None
-    set_image_status(conn, image_id, "detail", pending_index)
-    return "detail", pending_index
-
-
-def navigate_detail_cursor(conn: sqlite3.Connection, image_id: int, direction: str) -> tuple[str, int | None]:
-    image = get_image_row(conn, image_id)
-    if image is None:
-        raise KeyError(f"Image {image_id} not found")
-    active = get_active_detection_queue(conn, image_id)
-    if not active:
-        set_image_status(conn, image_id, "overview_2", None)
-        return "overview_2", None
-
-    current = image["detail_cursor"] or 0
-    if direction == "prev":
-        if current <= 0:
-            set_image_status(conn, image_id, "overview_1", None)
-            return "overview_1", None
-        next_cursor = current - 1
-    else:
-        if current >= len(active) - 1:
-            set_image_status(conn, image_id, "overview_2", None)
-            return "overview_2", None
-        next_cursor = current + 1
-    set_image_status(conn, image_id, "detail", next_cursor)
-    return "detail", next_cursor
-
-
-def complete_image_review(conn: sqlite3.Connection, image_id: int) -> None:
-    pending_count = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM detections
-        WHERE image_id = ? AND source_type IN ('merged', 'manual') AND is_active = 1 AND reviewed = 0
-        """,
-        (image_id,),
-    ).fetchone()[0]
-    if pending_count:
-        raise ValueError("Cannot complete image while active detections remain unlabeled")
-    set_image_status(conn, image_id, "completed", None)
-
-
-def review_counts(conn: sqlite3.Connection, image_id: int) -> dict[str, int]:
-    row = conn.execute(
-        """
-        SELECT
-            COUNT(*) AS total_detections,
-            SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_detections,
-            SUM(CASE WHEN is_active = 1 AND reviewed = 1 THEN 1 ELSE 0 END) AS reviewed_active_detections,
-            SUM(CASE WHEN is_active = 1 AND reviewed = 0 THEN 1 ELSE 0 END) AS pending_active_detections,
-            SUM(CASE WHEN review_label = 'neither' THEN 1 ELSE 0 END) AS neither_detections
-        FROM detections
-        WHERE image_id = ? AND source_type IN ('merged', 'manual')
-        """,
-        (image_id,),
-    ).fetchone()
-    return {
-        "total_detections": int(row["total_detections"] or 0),
-        "active_detections": int(row["active_detections"] or 0),
-        "reviewed_active_detections": int(row["reviewed_active_detections"] or 0),
-        "pending_active_detections": int(row["pending_active_detections"] or 0),
-        "neither_detections": int(row["neither_detections"] or 0),
-    }
-
-
-def queue_progress(conn: sqlite3.Connection) -> dict[str, int]:
-    row = conn.execute(
-        """
-        SELECT
-            COUNT(*) AS total_images,
-            SUM(CASE WHEN review_status = 'completed' THEN 1 ELSE 0 END) AS completed_images
-        FROM images
-        """
-    ).fetchone()
-    return {
-        "total_images": int(row["total_images"] or 0),
-        "completed_images": int(row["completed_images"] or 0),
-    }
-
-
-def exportable_detections(conn: sqlite3.Connection, image_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT detection_id, class_id, class_name, x_center, y_center, width, height, review_label
-        FROM detections
-        WHERE image_id = ? AND source_type IN ('merged', 'manual') AND is_active = 1 AND review_label IN ('ship_non_sts', 'ships_sts')
-        ORDER BY COALESCE(review_order, 999999), detection_id
-        """,
-        (image_id,),
-    ).fetchall()
-
-
-def write_yolo_label_file(label_path: str | Path, detections: list[sqlite3.Row]) -> None:
-    target = repo_resolve(label_path)
-    ensure_parent(target)
-    lines = []
-    for detection in detections:
-        review_label = detection["review_label"]
-        class_id = REVIEW_LABEL_TO_CLASS[review_label]
-        lines.append(
-            " ".join(
-                [
-                    str(class_id),
-                    f"{float(detection['x_center']):.8f}",
-                    f"{float(detection['y_center']):.8f}",
-                    f"{float(detection['width']):.8f}",
-                    f"{float(detection['height']):.8f}",
-                ]
-            )
-        )
-    target.write_text("\n".join(lines) + ("\n" if lines else ""))
-
-
-def write_data_yaml(dataset_dir: str | Path) -> None:
-    target = repo_resolve(Path(dataset_dir) / "data.yaml")
-    ensure_parent(target)
-    content = (
-        f"path: {repo_resolve(dataset_dir)}\n"
-        "train: images\n"
-        "val: images\n"
-        "names:\n"
-        "  0: ship\n"
-        "  1: ships\n"
-    )
-    target.write_text(content)

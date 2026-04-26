@@ -92,6 +92,10 @@ The full file schema and collaboration rules are defined in `docs/visual_review_
 
 The reviewer processes one image at a time, in this order:
 
+### Future: Overlap Classification Helper
+
+Many duplicate detections are the same ship or ship group detected as both `ship` and `ships`. A later UI pass should automatically check for overlapping bounding boxes with conflicting classes and show a small side pop-up for convenient classification selection. This helper should make it easy to choose the correct classification for the overlapping boxes without interfering with the existing label buttons, hotkeys, or normal review flow.
+
 ### Step 1: Overview Mode (first pass)
 
 Show the full review image with all current bounding boxes overlaid, including `neither` boxes rendered in muted gray so false-positive locations remain visible.
@@ -137,9 +141,13 @@ If new boxes are added during the second overview pass, the image should return 
 
 - Progress indicator: `3 / 175 images reviewed`
 - Per-image detection count: `12 detections (8 reviewed)`
+- A bbox is considered reviewed after a review decision is saved: `Ships (STS)`, `Ship (non-STS)`, `Neither`, permanent delete, accepting the current displayed class with `Space` / Right arrow / `Accept / Next`, or saving a geometry edit.
+- Geometry edits count as a review decision and save the current class for that bbox.
+- A manually drawn bbox is saved as reviewed using the currently selected class because drawing it is an explicit human addition.
+- An image is considered completed automatically when every active bbox has been reviewed; image navigation does not itself complete an image.
 - Bottom-center per-image detection review progress bar with discrete segments, where each segment represents one box in the active review queue for the current image (`neither` boxes are not counted in this bar)
 - The per-image bar should be compact and flat, with the `reviewed/total` count such as `5/10` shown on the right side of the bar
-- During keyboard review flow, pressing `Space` to advance through detections should also advance the per-image progress bar by one segment until all detections for that image have been traversed
+- During keyboard review flow, pressing `Space` should accept the selected/current bbox's displayed class when it is still unreviewed; otherwise it advances through detections and updates the per-image progress bar
 - The per-image progress bar should be reconstructed from saved review state when the page reloads, so progress does not reset on refresh
 - Next/Back to move between images
 - Re-opening the UI should resume each image at its saved review stage and detail cursor
