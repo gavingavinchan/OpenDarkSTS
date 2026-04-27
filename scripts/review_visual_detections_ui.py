@@ -23,6 +23,7 @@ try:
         label_detection,
         list_review_documents,
         load_review_document,
+        mark_all_active_detections_reviewed,
         mark_detection_neither,
         navigate_detail_cursor,
         queue_progress,
@@ -52,6 +53,7 @@ except ImportError:
         label_detection,
         list_review_documents,
         load_review_document,
+        mark_all_active_detections_reviewed,
         mark_detection_neither,
         navigate_detail_cursor,
         queue_progress,
@@ -417,10 +419,19 @@ def render_app_html(default_image_id: str | None) -> str:
       color: white;
       font-size: 12px;
       font-weight: 500;
-      white-space: nowrap;
+      width: max-content;
+      max-width: min(340px, calc(100vw - 32px));
+      white-space: normal;
+      line-height: 1.35;
+      text-align: left;
       z-index: 9999;
       pointer-events: none;
       box-shadow: 0 4px 12px rgba(16, 35, 48, 0.25);
+    }}
+    [data-tooltip].tooltip-right:hover::after {{
+      left: auto;
+      right: 0;
+      transform: none;
     }}
     [data-tooltip]:disabled:hover::after {{ display: none; }}
     .hotkey-overlay {{
@@ -588,6 +599,10 @@ def render_app_html(default_image_id: str | None) -> str:
       background: linear-gradient(180deg, #0f766e, #115e59);
       border-color: rgba(15, 118, 110, 0.3);
     }}
+    .review-progress-segment.current {{
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.45), 0 0 14px rgba(245, 158, 11, 0.45);
+      border-color: #f59e0b;
+    }}
     .review-progress-count {{
       text-align: right;
       font-size: 15px;
@@ -627,10 +642,10 @@ def render_app_html(default_image_id: str | None) -> str:
         <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
         <div class="review-progress" id="reviewProgress"></div>
         <div class="map-nav-buttons">
-          <button onclick="navigateQueue(-1)" data-tooltip="Previous image [[">Previous Image</button>
+          <button onclick="navigateImageButton(-1, event)" data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
           <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
           <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
-          <button onclick="navigateQueue(1)" data-tooltip="Next image []]">Next Image</button>
+          <button class="tooltip-right" onclick="navigateImageButton(1, event)" data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
         </div>
       </main>
     </div>
@@ -645,7 +660,7 @@ def render_app_html(default_image_id: str | None) -> str:
           <div class="hotkey-row"><span>Label Ship (non-STS)</span><kbd>D</kbd></div>
           <div class="hotkey-row"><span>Mark Neither (background)</span><kbd>N</kbd> / <kbd>Backspace</kbd></div>
           <div class="hotkey-row"><span>Delete box permanently</span><kbd>Del</kbd></div>
-          <div class="hotkey-row"><span>Cycle Ship / Ships / Neither</span><kbd>Tab</kbd></div>
+          <div class="hotkey-row"><span>Cycle selected class only</span><kbd>Tab</kbd> ship / ships / neither</div>
           <div class="hotkey-row"><span>Start Detail Review</span><kbd>R</kbd></div>
           <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
         </div>
@@ -655,6 +670,7 @@ def render_app_html(default_image_id: str | None) -> str:
           <div class="hotkey-row"><span>Next detection</span><kbd>&#9654;</kbd></div>
           <div class="hotkey-row"><span>Previous image</span><kbd>[</kbd></div>
           <div class="hotkey-row"><span>Next image</span><kbd>]</kbd></div>
+          <div class="hotkey-row"><span>Mark image reviewed + navigate</span><kbd>Shift</kbd> + image button</div>
           <div class="hotkey-row"><span>Draw Box</span><kbd>B</kbd></div>
           <div class="hotkey-row"><span>Edit selected</span><kbd>E</kbd></div>
           <div class="hotkey-row"><span>Save Geometry</span><kbd>G</kbd></div>
@@ -682,13 +698,13 @@ def render_app_html(default_image_id: str | None) -> str:
     let labelIndex = new Map();
 
     function colorForDetection(detection) {{
-      if (detection.review_label === 'neither' || !detection.is_active) return '#7c6f64';
+      if (detection.pending_review_label === 'neither' || detection.review_label === 'neither' || !detection.is_active) return '#7c6f64';
       if (detection.class_id === 1) return '#c81e1e';
       return '#2563eb';
     }}
 
     function detectionName(detection) {{
-      if (detection.review_label === 'neither') return 'neither';
+      if (detection.pending_review_label === 'neither' || detection.review_label === 'neither') return 'neither';
       return detection.class_id === 1 ? 'ships' : 'ship';
     }}
 
@@ -779,6 +795,7 @@ def render_app_html(default_image_id: str | None) -> str:
       if (!host || !state || !state.image) return;
       const total = state.counts?.active_detections || 0;
       const reviewed = getCycleReviewedCount();
+      const currentIndex = Math.max(-1, Math.min(reviewCursorIndex, total - 1));
       if (total <= 0) {{
         host.className = 'review-progress empty-state';
         host.innerHTML = `
@@ -790,7 +807,7 @@ def render_app_html(default_image_id: str | None) -> str:
       host.className = 'review-progress';
       host.innerHTML = `
         <div class="review-progress-track">
-          ${{Array.from({{ length: total }}, (_, index) => `<span class="review-progress-segment ${{index < reviewed ? 'filled' : ''}}"></span>`).join('')}}
+          ${{Array.from({{ length: total }}, (_, index) => `<span class="review-progress-segment ${{index < reviewed ? 'filled' : ''}} ${{index === currentIndex ? 'current' : ''}}"></span>`).join('')}}
         </div>
         <div class="review-progress-count">${{reviewed}}/${{total}}</div>
       `;
@@ -854,7 +871,7 @@ def render_app_html(default_image_id: str | None) -> str:
           <h3>Overview Controls</h3>
           <div class="class-picker">
             <select id="newClassSelect" class="cls-${{defaultClassValue === 1 ? 'ships' : 'ship'}}" onchange="onClassSelectChange(this)">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
-            <div class="shortcut-hint"><kbd>Tab</kbd> cycle Ship / Ships / Neither</div>
+            <div class="shortcut-hint"><kbd>Tab</kbd> cycle Ship / Ships / Neither locally</div>
           </div>
           <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode.'}}</p>
           <div class="button-row">
@@ -899,7 +916,7 @@ def render_app_html(default_image_id: str | None) -> str:
 
         <div class="card">
           <h3>Queue</h3>
-          <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; <kbd>?</kbd> all shortcuts</p>
+          <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; hold <kbd>Shift</kbd> and click image nav to mark current image reviewed &middot; <kbd>?</kbd> all shortcuts</p>
           <div class="queue-list">
             ${{state.queue.images.map(item => `
               <div class="queue-item ${{item.review_status === 'completed' ? 'completed' : ''}} ${{item.image_id === current.image_id ? 'active' : ''}}" onclick='openImage(${{JSON.stringify(item.image_id)}})'>
@@ -914,8 +931,8 @@ def render_app_html(default_image_id: str | None) -> str:
         </div>
 
         <div class="footer-nav">
-          <button class="secondary" onclick='openImage(${{JSON.stringify(state.queue.prev_image_id)}})' ${{state.queue.prev_image_id ? '' : 'disabled'}} data-tooltip="Go to previous image [[]">Previous Image</button>
-          <button class="secondary" onclick='openImage(${{JSON.stringify(state.queue.next_image_id)}})' ${{state.queue.next_image_id ? '' : 'disabled'}} data-tooltip="Go to next image []]">Next Image</button>
+          <button class="secondary" onclick='navigateImageButton(-1, event)' ${{state.queue.prev_image_id ? '' : 'disabled'}} data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
+          <button class="secondary tooltip-right" onclick='navigateImageButton(1, event)' ${{state.queue.next_image_id ? '' : 'disabled'}} data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
         </div>
       `;
     }}
@@ -929,6 +946,7 @@ def render_app_html(default_image_id: str | None) -> str:
           if (event.originalEvent && event.originalEvent.target && event.originalEvent.target.closest('.leaflet-interactive')) return;
           if (!drawHandler || !drawHandler._enabled) clearSelection();
         }});
+        map.on('mousemove mouseup', updateSelectedLabelPosition);
       }}
       if (!state.image) return;
 
@@ -953,13 +971,14 @@ def render_app_html(default_image_id: str | None) -> str:
         );
         layer.detection = detection;
         layer.on('click', () => selectLayer(layer));
+        layer.on('edit drag dragend move moveend', () => updateLabelPosition(layer));
         detectionGroup.addLayer(layer);
         layerIndex.set(detection.detection_id, layer);
 
-        const labelClass = detection.review_label === 'neither' || !detection.is_active
+        const labelClass = detection.pending_review_label === 'neither' || detection.review_label === 'neither' || !detection.is_active
           ? 'neither'
           : (detection.class_id === 1 ? 'ships' : 'ship');
-        const labelMarker = L.marker([detection.y1_px, detection.x2_px], {{
+        const labelMarker = L.marker(labelPositionForBounds(layer.getBounds()), {{
           interactive: false,
           keyboard: false,
           zIndexOffset: detection.detection_id === selectedDetectionId ? 2000 : 1000,
@@ -1005,7 +1024,7 @@ def render_app_html(default_image_id: str | None) -> str:
         if (selected) item.bringToFront();
         const labelMarker = labelIndex.get(detectionId);
         if (labelMarker) {{
-          const labelClass = item.detection.review_label === 'neither' || !item.detection.is_active
+          const labelClass = item.detection.pending_review_label === 'neither' || item.detection.review_label === 'neither' || !item.detection.is_active
             ? 'neither'
             : (item.detection.class_id === 1 ? 'ships' : 'ship');
           labelMarker.setIcon(L.divIcon({{
@@ -1030,7 +1049,7 @@ def render_app_html(default_image_id: str | None) -> str:
         item.setStyle({{ color: colorForDetection(item.detection), weight: 3, opacity: 1, fillOpacity: 0.03, dashArray: null }});
         const labelMarker = labelIndex.get(detectionId);
         if (labelMarker) {{
-          const labelClass = item.detection.review_label === 'neither' || !item.detection.is_active
+          const labelClass = item.detection.pending_review_label === 'neither' || item.detection.review_label === 'neither' || !item.detection.is_active
             ? 'neither'
             : (item.detection.class_id === 1 ? 'ships' : 'ship');
           labelMarker.setIcon(L.divIcon({{
@@ -1045,6 +1064,23 @@ def render_app_html(default_image_id: str | None) -> str:
 
     function findLayerByDetectionId(detectionId) {{
       return layerIndex.get(detectionId) || null;
+    }}
+
+    function labelPositionForBounds(bounds) {{
+      const top = Math.min(bounds.getNorth(), bounds.getSouth());
+      const right = Math.max(bounds.getEast(), bounds.getWest());
+      return [top, right];
+    }}
+
+    function updateLabelPosition(layer) {{
+      if (!layer || !layer.detection) return;
+      const labelMarker = labelIndex.get(layer.detection.detection_id);
+      if (labelMarker) labelMarker.setLatLng(labelPositionForBounds(layer.getBounds()));
+    }}
+
+    function updateSelectedLabelPosition() {{
+      if (!selectedDetectionId || !isEditing) return;
+      updateLabelPosition(findLayerByDetectionId(selectedDetectionId));
     }}
 
     function disableAllEditing() {{
@@ -1083,17 +1119,26 @@ def render_app_html(default_image_id: str | None) -> str:
       return state.detections.find(item => item.detection_id === targetId) || null;
     }}
 
-    async function acceptCurrentIfUnreviewed() {{
-      // A bbox becomes reviewed only when a review decision is saved. Space/Right accepts the current class.
+    async function acceptCurrentReviewChoice() {{
+      // Space/Right persists a pending Tab choice even for already-reviewed bboxes.
       const target = getCurrentReviewTarget();
-      if (!target || target.reviewed || target.review_label === 'neither' || !target.is_active) return false;
+      if (!target || target.review_label === 'neither' || !target.is_active) return false;
+      if (target.pending_review_label === 'neither') {{
+        await labelCurrent('neither');
+        return true;
+      }}
+      if (target.pending_review_label && target.pending_review_label !== target.review_label) {{
+        await labelCurrent(target.pending_review_label);
+        return true;
+      }}
+      if (target.reviewed) return false;
       await labelCurrent(reviewLabelForClassId(target.class_id));
       return true;
     }}
 
     async function advanceReview() {{
       if (!state || !state.image) return;
-      if (await acceptCurrentIfUnreviewed()) return;
+      if (await acceptCurrentReviewChoice()) return;
       const active = getActiveDetections();
       reviewCursorIndex++;
 
@@ -1233,12 +1278,26 @@ def render_app_html(default_image_id: str | None) -> str:
     }}
 
     async function autoSaveGeometryIfNeeded() {{
-      if (!selectedDetectionId || !isEditing) return;
+      if (!selectedDetectionId) return;
       const layer = findLayerByDetectionId(selectedDetectionId);
       if (!layer) return;
       const geometry = boundsToGeometry(layer.getBounds());
-      const classId = parseInt(document.getElementById('newClassSelect')?.value || String(layer.detection.class_id), 10);
-      if (geometryMatchesDetection(geometry, layer.detection) && classId === layer.detection.class_id) return;
+      const pendingLabel = layer.detection.pending_review_label || null;
+      if (pendingLabel === 'neither') {{
+        try {{
+          await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
+          delete layer.detection.pending_review_label;
+        }} catch (e) {{
+          console.warn('Autosave pending neither failed:', e);
+        }}
+        return;
+      }}
+      const classId = pendingLabel
+        ? (pendingLabel === 'ships_sts' ? 1 : 0)
+        : parseInt(document.getElementById('newClassSelect')?.value || String(layer.detection.class_id), 10);
+      const reviewLabel = reviewLabelForClassId(classId);
+      const pendingClassChange = pendingLabel && pendingLabel !== layer.detection.review_label;
+      if (!pendingClassChange && geometryMatchesDetection(geometry, layer.detection) && classId === layer.detection.class_id) return;
       try {{
         await postJson('/api/save-detection', {{
           image_id: state.image.image_id,
@@ -1249,6 +1308,7 @@ def render_app_html(default_image_id: str | None) -> str:
           width: geometry.width,
           height: geometry.height,
         }});
+        delete layer.detection.pending_review_label;
       }} catch (e) {{
         console.warn('Autosave failed:', e);
       }}
@@ -1283,39 +1343,51 @@ def render_app_html(default_image_id: str | None) -> str:
       await fetchState(state.image.image_id);
     }}
 
-    async function cycleSelectedLabel() {{
+    function refreshLayerVisual(layer) {{
+      if (!layer) return;
+      const detection = layer.detection;
+      const selected = detection.detection_id === selectedDetectionId;
+      layer.setStyle({{
+        color: colorForDetection(detection),
+        weight: selected ? 5 : 3,
+        opacity: 1,
+        fillOpacity: selected ? 0.08 : 0.03,
+        dashArray: selected ? '10 6' : null,
+      }});
+      const labelMarker = labelIndex.get(detection.detection_id);
+      if (labelMarker) {{
+        const labelClass = detection.pending_review_label === 'neither' || detection.review_label === 'neither' || !detection.is_active
+          ? 'neither'
+          : (detection.class_id === 1 ? 'ships' : 'ship');
+        labelMarker.setIcon(L.divIcon({{
+          className: 'bbox-label-anchor',
+          html: `<div class="bbox-label ${{labelClass}} ${{selected ? 'selected' : ''}}">${{detectionName(detection)}}</div>`,
+        }}));
+      }}
+    }}
+
+    function cycleSelectedClassOnly() {{
       const targetId = selectedDetectionId || state.current_detection_id;
       if (!targetId) return;
       const layer = findLayerByDetectionId(targetId);
       const det = layer ? layer.detection : (state.detail_queue || []).find(d => d.detection_id === targetId);
       if (!det) return;
+      const current = det.pending_review_label || det.review_label || reviewLabelForClassId(det.class_id);
       const cycle = ['ship_non_sts', 'ships_sts', 'neither'];
-      const currentLabel = det.review_label || (det.class_id === 1 ? 'ships_sts' : 'ship_non_sts');
-      const idx = cycle.indexOf(currentLabel);
-      const nextLabel = cycle[(idx + 1) % cycle.length];
-
-      // Apply label but keep the box selected and in view
-      if (nextLabel === 'neither') {{
-        await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
-      }} else {{
-        const geometry = layer ? boundsToGeometry(layer.getBounds()) : det;
-        const classId = nextLabel === 'ships_sts' ? 1 : 0;
-        await postJson('/api/label-detection', {{
-          image_id: state.image.image_id,
-          detection_id: targetId,
-          review_label: nextLabel,
-          class_id: classId,
-          x_center: geometry.x_center, y_center: geometry.y_center,
-          width: geometry.width, height: geometry.height,
-        }});
+      const nextLabel = cycle[(Math.max(0, cycle.indexOf(current)) + 1) % cycle.length];
+      det.pending_review_label = nextLabel;
+      if (nextLabel !== 'neither') {{
+        const nextClassId = nextLabel === 'ships_sts' ? 1 : 0;
+        det.class_id = nextClassId;
+        det.class_name = nextClassId === 1 ? 'ships' : 'ship';
       }}
-      const keepId = selectedDetectionId;
-      await fetchState(state.image.image_id);
-      // Re-select the same box after state refresh
-      if (keepId) {{
-        const reselect = findLayerByDetectionId(keepId);
-        if (reselect) selectLayer(reselect, true);
+      const selectEl = document.getElementById('newClassSelect');
+      if (selectEl) {{
+        selectEl.value = String(det.class_id);
+        onClassSelectChange(selectEl);
       }}
+      if (layer) refreshLayerVisual(layer);
+      renderSidebar();
     }}
 
     async function labelCurrent(reviewLabel) {{
@@ -1362,6 +1434,20 @@ def render_app_html(default_image_id: str | None) -> str:
       isEditing = false;
       reviewCursorIndex = -1;
       await fetchState(imageId);
+    }}
+
+    async function markCurrentImageReviewed() {{
+      if (!state || !state.image) return false;
+      await postJson('/api/mark-image-reviewed', {{ image_id: state.image.image_id }});
+      return true;
+    }}
+
+    async function navigateImageButton(direction, event) {{
+      if (event && event.shiftKey) {{
+        const marked = await markCurrentImageReviewed();
+        if (!marked) return;
+      }}
+      await navigateQueue(direction);
     }}
 
     async function postJson(url, payload) {{
@@ -1485,7 +1571,7 @@ def render_app_html(default_image_id: str | None) -> str:
       if (key === 'Tab') {{
         event.preventDefault();
         if (selectedDetectionId || state.current_detection_id) {{
-          await cycleSelectedLabel();
+          cycleSelectedClassOnly();
         }} else {{
           toggleClassSelect();
         }}
@@ -1673,6 +1759,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 delete_detection(review, detection_id)
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id))
+            elif parsed.path == "/api/mark-image-reviewed":
+                changed = mark_all_active_detections_reviewed(review)
+                save_review(review, review_path)
+                response = build_state(image_id)
+                response["marked_reviewed_count"] = changed
+                self._respond_json(response)
             elif parsed.path == "/api/complete-image":
                 complete_image_review(review)
                 save_review(review, review_path)

@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iou", type=float, default=0.5, help="IoU threshold for class-aware NMS")
     parser.add_argument("--date", action="append", dest="dates", help="Only preprocess specific date(s), repeatable")
     parser.add_argument("--limit", type=int, default=0, help="Only preprocess the first N dates after filtering")
+    parser.add_argument("--image-limit", type=int, default=0, help="Only preprocess the first N new images after skipping existing review files")
     parser.add_argument("--force", action="store_true", help="Overwrite existing per-image review JSON stubs for this reviewer")
     return parser.parse_args()
 
@@ -85,6 +86,11 @@ def main() -> None:
     for date_value in dates:
         tiles = grouped_tiles[date_value]
         for tile in tiles:
+            if args.image_limit and args.image_limit > 0 and processed >= args.image_limit:
+                print(f"Reached image limit: {args.image_limit}")
+                print(f"Done. processed={processed} skipped={skipped} total_dates={len(dates)}")
+                return
+
             image_key = f"{date_value}_tile_{tile.row}_{tile.col}"
             existing_review_path = review_file_path(image_key, args.reviewer, args.reviews_dir)
             if existing_review_path.exists() and not args.force:

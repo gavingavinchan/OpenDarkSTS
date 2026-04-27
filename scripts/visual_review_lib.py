@@ -750,6 +750,22 @@ def delete_detection(review: dict[str, Any], detection_id: str) -> tuple[str, in
     return remove_detection(review, detection_id)
 
 
+def mark_all_active_detections_reviewed(review: dict[str, Any]) -> int:
+    timestamp = utcnow_iso()
+    changed = 0
+    for detection in review.get("detections", []):
+        if not active_detection(detection):
+            continue
+        if not detection.get("reviewed"):
+            changed += 1
+        detection["reviewed"] = True
+        detection["reviewed_at"] = timestamp
+        if detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
+            detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(detection["class_id"])]
+    sync_review_status(review)
+    return changed
+
+
 def complete_image_review(review: dict[str, Any]) -> None:
     pending_count = sum(1 for detection in review.get("detections", []) if active_detection(detection) and not bool(detection.get("reviewed")))
     if pending_count:
