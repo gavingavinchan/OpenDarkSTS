@@ -20,6 +20,7 @@ try:
         create_manual_detection,
         delete_detection,
         detection_payload,
+        generate_review_crop,
         label_detection,
         list_review_documents,
         load_review_document,
@@ -50,6 +51,7 @@ except ImportError:
         create_manual_detection,
         delete_detection,
         detection_payload,
+        generate_review_crop,
         label_detection,
         list_review_documents,
         load_review_document,
@@ -123,6 +125,13 @@ def load_review_by_image_id(image_id: str) -> tuple[dict, Path]:
 def save_review(review: dict, review_path: Path) -> None:
     sync_review_status(review)
     save_review_document(review, review_path)
+
+
+def refresh_detection_crop(review: dict, review_path: Path, detection_id: str) -> None:
+    try:
+        generate_review_crop(review, detection_id, review_path=review_path)
+    except Exception as exc:
+        print(f"Warning: could not generate review crop for {review.get('image_key')} {detection_id}: {exc}")
 
 
 def synced_review_queue() -> list[dict]:
@@ -1725,7 +1734,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 detection_id = payload.get("detection_id")
                 class_id = int(payload.get("class_id", 0))
                 if detection_id is None:
-                    create_manual_detection(
+                    detection_id = create_manual_detection(
                         review,
                         class_id=class_id,
                         x_center=x_center,
@@ -1735,7 +1744,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                         parent_detection_id=payload.get("parent_detection_id"),
                     )
                 else:
+                    detection_id = str(detection_id)
                     update_detection_geometry(review, str(detection_id), x_center, y_center, width, height, class_id=class_id)
+                refresh_detection_crop(review, review_path, str(detection_id))
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id))
             elif parsed.path == "/api/label-detection":
@@ -1745,12 +1756,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 class_id = int(payload.get("class_id", REVIEW_LABEL_TO_CLASS[review_label]))
                 x_center, y_center, width, height = parse_detection_geometry(payload)
                 label_detection(review, detection_id, review_label, class_id, x_center, y_center, width, height)
+                refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id))
             elif parsed.path == "/api/mark-neither":
                 reopen_if_completed(review)
                 detection_id = str(payload["detection_id"])
                 mark_detection_neither(review, detection_id)
+                refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id))
             elif parsed.path == "/api/delete-detection":
@@ -1761,6 +1774,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._respond_json(build_state(image_id))
             elif parsed.path == "/api/mark-image-reviewed":
                 changed = mark_all_active_detections_reviewed(review)
+                for detection in review.get("detections", []):
+                    if detection.get("reviewed") and detection.get("review_label") != "neither":
+                        refresh_detection_crop(review, review_path, str(detection.get("detection_id")))
                 save_review(review, review_path)
                 response = build_state(image_id)
                 response["marked_reviewed_count"] = changed

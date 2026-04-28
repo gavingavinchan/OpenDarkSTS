@@ -11,7 +11,9 @@ try:
         DEFAULT_REVIEWER,
         DEFAULT_REVIEWS_DIR,
         DEFAULT_SOURCE_DIR,
+        TRUE_COLOR_RENDER_PROFILE,
         discover_tiles,
+        image_key_for_source,
         load_yolo_models,
         render_tile_png,
         update_tile_manifest_entry,
@@ -28,7 +30,9 @@ except ImportError:
         DEFAULT_REVIEWER,
         DEFAULT_REVIEWS_DIR,
         DEFAULT_SOURCE_DIR,
+        TRUE_COLOR_RENDER_PROFILE,
         discover_tiles,
+        image_key_for_source,
         load_yolo_models,
         render_tile_png,
         update_tile_manifest_entry,
@@ -91,7 +95,7 @@ def main() -> None:
                 print(f"Done. processed={processed} skipped={skipped} total_dates={len(dates)}")
                 return
 
-            image_key = f"{date_value}_tile_{tile.row}_{tile.col}"
+            image_key = image_key_for_source(tile.path, TRUE_COLOR_RENDER_PROFILE)
             existing_review_path = review_file_path(image_key, args.reviewer, args.reviews_dir)
             if existing_review_path.exists() and not args.force:
                 print(f"Skipping {date_value} tile ({tile.row},{tile.col}): review stub already present for reviewer={args.reviewer}")

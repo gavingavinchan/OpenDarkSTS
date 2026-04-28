@@ -17,6 +17,8 @@ The operational/deployment pipeline is separate. It consumes promoted trained we
 
 Build a reproducible GUI-driven pipeline for creating, curating, training, and evaluating YOLO datasets for ship and STS detection.
 
+The GUI is the primary human workflow, but it must not be the only interface. Pipeline behavior should be implemented in reusable backend helpers with command-line/API entry points so automated jobs, tests, diagnostics, and LLM-assisted development can exercise the same pipeline without relying on browser interaction.
+
 The intended flow is:
 
 ```text
@@ -30,6 +32,430 @@ Import / Download Data
 ```
 
 The GUI should show a clickable top-center progress bar for these stages. Clicking a stage returns the user to that stage while preserving the previous UI state when possible.
+
+## Automation And Backend Interfaces
+
+The training pipeline should be backend-first. The browser GUI is one client of the pipeline, not the owner of the pipeline logic.
+
+Purpose:
+
+- allow repeatable automated runs without manual clicking
+- allow tests to validate pipeline behavior directly
+- allow an LLM or developer to run diagnostics against backend stages when the GUI cannot be inspected reliably
+- support batch processing, scheduled training, remote execution, and future integration with other tools
+- keep the GUI thin enough that backend behavior and UI behavior can be debugged separately
+
+Rules:
+
+- Core stage behavior must live in importable Python helpers, primarily `scripts/visual_review_lib.py` for review/crop helpers and `scripts/training_pipeline_lib.py` for dataset selection, export, training setup, training metadata, results parsing, and evaluation helpers.
+- The GUI should call these helpers rather than duplicating pipeline logic in request handlers or frontend JavaScript.
+- CLI/API commands should call the same helpers as the GUI.
+- Every CLI/API command should read and write the same workspace artifacts described in this plan.
+- Commands must write machine-readable JSON results by default. A human-readable mode may be added with `--human`, but tests and automation should use the default JSON mode.
+- Commands should return non-zero exit codes for hard failures and include actionable error messages.
+- Commands must never write to read-only source data folders.
+- Long-running commands, especially training, should support detached/background execution and write logs under `workspace/runs/` or `workspace/reports/`.
+
+Command-line entry points should eventually cover the pipeline backend without requiring the GUI:
+
+```text
+scripts/training_pipeline_cli.py import-data ...
+scripts/training_pipeline_cli.py run-auto-detect ...
+scripts/training_pipeline_cli.py generate-crops ...
+scripts/training_pipeline_cli.py export-dataset --selection workspace/dataset_selections/<dataset_name>.json
+scripts/training_pipeline_cli.py check-training-ready --selection ... --config ...
+scripts/training_pipeline_cli.py build-train-command --selection ... --config ...
+scripts/training_pipeline_cli.py start-training --selection ... --config ...
+scripts/training_pipeline_cli.py training-status --run-dir workspace/runs/<run_group>/<run_name>
+scripts/training_pipeline_cli.py stop-training --run-dir workspace/runs/<run_group>/<run_name>
+scripts/training_pipeline_cli.py write-evaluation-report --run-group <run_group> ...
+scripts/training_pipeline_cli.py image-key --source <path> --render-profile <profile.json>
+```
+
+The exact flags may evolve, but these capabilities should exist outside the GUI. `import-data` and `run-auto-detect` are deferred until their backend orchestration helpers are stable; first CLI implementation should focus on the commands that already map cleanly to shared helpers.
+
+Recommended CLI behavior:
+
+- `import-data` creates or updates the import manifest and cache artifacts.
+- `run-auto-detect` creates review stubs from configured model weights.
+- `generate-crops` creates or refreshes review crop PNGs and sidecar JSON files for completed or selected reviews.
+- `export-dataset` consumes a dataset selection manifest and writes a standard YOLO dataset plus `dataset_manifest.json`.
+- `check-training-ready` returns a readiness checklist equivalent to the GUI's disabled/enabled `Run Training` state.
+- `build-train-command` prints the exact command that would be used for YOLO training.
+- `start-training` starts training in the background, records process/log metadata, and writes initial `training_metadata.json`.
+- `training-status` reads run metadata, process state, log tail, and `results.csv` series for live diagnostics.
+- `write-evaluation-report` writes the JSON and Markdown evaluation report and records any promotion decision.
+
+### CLI Contract
+
+The first CLI should be implemented as one argparse-based entry point:
+
+```text
+python scripts/training_pipeline_cli.py <command> [options]
+```
+
+It may later be wrapped by a shell command, but tests and docs should use the Python invocation first.
+
+Global CLI options:
+
+- JSON output is the default and should be printed to stdout.
+- `--pretty` pretty-prints JSON with indentation for human debugging.
+- `--human` prints concise human-readable output instead of the JSON envelope for commands where that is useful.
+- Workspace-root override is not part of the first CLI. If isolated workspace roots become necessary, prefer an environment variable such as `OPENDARKSTS_WORKSPACE` over threading a workspace argument through every helper.
+- `--dry-run` validates inputs and prints the actions that would be taken without writing artifacts or launching processes. Commands that cannot support dry-run should reject it explicitly.
+- `--verbose` includes additional diagnostics such as resolved paths and helper function names.
+
+Exit codes:
+
+- `0` success.
+- `1` hard pipeline failure, such as missing input files, invalid manifests, reconciliation conflicts, failed export, or failed process start.
+- `2` command-line usage error, such as missing required flags or invalid enum values.
+- `3` readiness/check command completed but found blockers. This is not an exception; it means the command produced a valid checklist with `ready: false`.
+- `4` long-running run/process state mismatch, such as asking to stop an already-completed run or a run with no active process.
+
+All JSON command responses should share this envelope:
+
+```json
+{
+  "ok": true,
+  "command": "export-dataset",
+  "schema_version": 1,
+  "result": {},
+  "warnings": [],
+  "errors": []
+}
+```
+
+For failed commands, `ok` is `false`, `errors` contains actionable strings, and the process exits non-zero. Commands should avoid printing non-JSON text to stdout in default JSON mode; logs and progress text should go to stderr or log files.
+
+Envelope `ok` means the command executed and produced a valid response without an internal CLI/pipeline error. It does not mean a domain predicate is positive. For example, `check-training-ready` should return `ok: true`, exit `3`, and `result.ready: false` when it successfully finds readiness blockers.
+
+First-version command details:
+
+`export-dataset`
+
+```text
+python scripts/training_pipeline_cli.py export-dataset \
+  --selection workspace/dataset_selections/<dataset_name>.json \
+  [--output-dir workspace/datasets/<dataset_name>] \
+  [--include-incomplete] \
+  [--dry-run] \
+  [--human]
+```
+
+Behavior:
+
+- Loads the dataset selection manifest.
+- Optionally overrides `export.output_dir` for this run.
+- Blocks on reconciliation conflicts. This is a hard export failure and exits `1`, not readiness exit `3`.
+- Writes YOLO dataset folders, `data.yaml`, and `dataset_manifest.json` unless `--dry-run` is set.
+- Uses `scripts.training_pipeline_lib.export_dataset_selection`.
+
+JSON `result` should include:
+
+```json
+{
+  "dataset_dir": "workspace/datasets/example",
+  "dataset_manifest": "workspace/datasets/example/dataset_manifest.json",
+  "data_yaml": "workspace/datasets/example/data.yaml",
+  "exported_image_count": 10,
+  "exported_label_count": 24
+}
+```
+
+Warnings, including background-negative truncation warnings, belong in the top-level envelope `warnings` array rather than inside `result`.
+
+`check-training-ready`
+
+```text
+python scripts/training_pipeline_cli.py check-training-ready \
+  --selection workspace/dataset_selections/<dataset_name>.json \
+  --config workspace/training_configs/<run_group>.json \
+  [--human]
+```
+
+Behavior:
+
+- Runs the same readiness gate as the GUI's `Run Training` button.
+- Does not modify files.
+- Exits `0` when ready.
+- Exits `3` when the checklist is valid but contains blockers.
+- Uses `scripts.training_pipeline_lib.check_training_readiness`.
+
+JSON `result` should include:
+
+```json
+{
+  "ready": false,
+  "missing": ["Exported dataset is missing data.yaml"]
+}
+```
+
+Readiness warnings, such as a missing test split, belong in the top-level envelope `warnings` array.
+
+`build-train-command`
+
+```text
+python scripts/training_pipeline_cli.py build-train-command \
+  --selection workspace/dataset_selections/<dataset_name>.json \
+  --config workspace/training_configs/<run_group>.json \
+  [--human]
+```
+
+Behavior:
+
+- Resolves the exported dataset directory from the selection manifest.
+- Validates `data.yaml` exists.
+- Prints the exact non-shell command list for YOLO training.
+- Does not start training.
+- Uses `scripts.training_pipeline_lib.build_yolo_train_command`.
+
+JSON `result` should include:
+
+```json
+{
+  "command_line": ["yolo", "detect", "train", "model=yolov8n.pt", "data=workspace/datasets/example/data.yaml"],
+  "run_dir": "workspace/runs/<run_group>/<run_name>",
+  "data_yaml": "workspace/datasets/example/data.yaml"
+}
+```
+
+`start-training`
+
+```text
+python scripts/training_pipeline_cli.py start-training \
+  --selection workspace/dataset_selections/<dataset_name>.json \
+  --config workspace/training_configs/<run_group>.json \
+  [--foreground] \
+  [--dry-run] \
+  [--human]
+```
+
+Behavior:
+
+- Runs `check-training-ready` first and blocks unless ready.
+- Builds the YOLO command from the config.
+- Starts detached/background training by default so the terminal, GUI, and LLM session remain usable. `--foreground` is only for deliberate local debugging and should not be used by the GUI or LLM automation.
+- Writes logs to `workspace/runs/<run_group>/<run_name>/train.log`.
+- Writes a process metadata file immediately after the process launch returns a PID:
+
+```text
+workspace/runs/<run_group>/<run_name>/process.json
+```
+
+Process metadata shape:
+
+```json
+{
+  "schema_version": 1,
+  "run_group": "example_group",
+  "run_name": "yolov8n_example",
+  "pid": 12345,
+  "state": "running",
+  "command_line": ["yolo", "detect", "train"],
+  "log_path": "workspace/runs/example_group/yolov8n_example/train.log",
+  "started_at": "2026-04-28T00:00:00Z",
+  "ended_at": null,
+  "return_code": null
+}
+```
+
+- Writes initial `training_metadata.json` with status `running`; updates it to `completed`, `failed`, or `cancelled` when a watcher or later status command observes terminal state.
+- If `--dry-run` is set, returns the command line, run dir, log path, and metadata paths without launching a process or writing files.
+
+JSON `result` should include:
+
+```json
+{
+  "state": "running",
+  "pid": 12345,
+  "run_dir": "workspace/runs/example_group/yolov8n_example",
+  "log_path": "workspace/runs/example_group/yolov8n_example/train.log",
+  "process_metadata": "workspace/runs/example_group/yolov8n_example/process.json",
+  "training_metadata": "workspace/runs/example_group/yolov8n_example/training_metadata.json"
+}
+```
+
+`training-status`
+
+```text
+python scripts/training_pipeline_cli.py training-status \
+  --run-dir workspace/runs/<run_group>/<run_name> \
+  [--log-lines 80] \
+  [--human]
+```
+
+Behavior:
+
+- Reads `process.json` and `training_metadata.json` when present.
+- Checks whether the PID is still running when a PID is recorded. PID liveness checks should guard against PID reuse by comparing the recorded process start time or another stable process attribute when available, not PID existence alone.
+- Reads the last N log lines from `train.log`. If the log file does not exist, return `log_tail: []` and add a top-level warning rather than failing the whole status check.
+- Reads live metric series from `results.csv` using the recognized-column parser.
+- Does not require the GUI or an active browser session.
+- Uses `scripts.training_pipeline_lib.load_training_results_series` plus process/log helpers.
+
+JSON `result` should include:
+
+```json
+{
+  "state": "running",
+  "pid": 12345,
+  "run_dir": "workspace/runs/example_group/yolov8n_example",
+  "latest_metrics": {},
+  "series": {},
+  "log_tail": ["..."]
+}
+```
+
+`stop-training`
+
+```text
+python scripts/training_pipeline_cli.py stop-training \
+  --run-dir workspace/runs/<run_group>/<run_name> \
+  [--human]
+```
+
+Behavior:
+
+- Reads `process.json`.
+- Attempts best-effort graceful termination first.
+- Updates `process.json` state to `cancelled` when termination is requested.
+- Leaves partial run files in place for debugging.
+- Exits `4` if the run is already completed, failed, cancelled, or has no active process.
+
+`generate-crops`
+
+```text
+python scripts/training_pipeline_cli.py generate-crops \
+  --reviews-dir workspace/reviews \
+  [--image-key img_abc123] \
+  [--reviewer gavin] \
+  [--crop-root workspace/cache/review_crops] \
+  [--padding-px 48] \
+  [--only-completed] \
+  [--dry-run] \
+  [--human]
+```
+
+Behavior:
+
+- Finds matching review files.
+- Generates crop PNGs and JSON sidecars for matching detections unless `--dry-run` is set.
+- Skips deleted manual detections because they are not present in review JSON.
+- Keeps `neither` crop metadata with `class_id: null` and `class_name: null`.
+- Uses `scripts.visual_review_lib.generate_review_crop`.
+
+JSON `result` should include:
+
+```json
+{
+  "review_count": 5,
+  "crop_count": 120,
+  "crop_root": "workspace/cache/review_crops",
+  "generated": [
+    {
+      "image_key": "img_abc123",
+      "detection_id": "auto-0001",
+      "crop_path": "workspace/cache/review_crops/img_abc123/auto-0001.png",
+      "sidecar_path": "workspace/cache/review_crops/img_abc123/auto-0001.json"
+    }
+  ]
+}
+```
+
+`image-key`
+
+```text
+python scripts/training_pipeline_cli.py image-key \
+  --source path/to/source-image \
+  --render-profile path/to/render-profile.json \
+  [--human]
+```
+
+Behavior:
+
+- Computes the stable content-hash-based `image_key` for a source image and render profile.
+- Does not write files.
+- Helps collaborators diagnose why two machines produced different image identities.
+- Uses `scripts.visual_review_lib.image_key_for_source`.
+
+JSON `result` should include:
+
+```json
+{
+  "source": "path/to/source-image",
+  "source_content_hash": "sha256:...",
+  "render_profile": {"kind": "rgb_original"},
+  "image_key": "img_abc123"
+}
+```
+
+`write-evaluation-report`
+
+```text
+python scripts/training_pipeline_cli.py write-evaluation-report \
+  --run-group <run_group> \
+  --runs-dir workspace/runs/<run_group> \
+  --reports-dir workspace/reports \
+  [--baseline workspace/model_weights/current.pt] \
+  [--promote-run <run_name>] \
+  --decision-reason "..." \
+  [--human]
+```
+
+Behavior:
+
+- Collects available metrics from completed runs when possible.
+- Writes `<run_group>_evaluation.json` and `<run_group>_evaluation.md`.
+- Records whether a model was promoted and why, or why no model was promoted. `--decision-reason` is always required.
+- Does not copy promoted weights unless an explicit later `promote-weights` command is added or a `--copy-promoted-weights` option is specified.
+- Uses `scripts.training_pipeline_lib.write_evaluation_report`.
+
+JSON `result` should include:
+
+```json
+{
+  "evaluation_json": "workspace/reports/example_group_evaluation.json",
+  "evaluation_markdown": "workspace/reports/example_group_evaluation.md",
+  "promoted": true,
+  "promoted_run_name": "yolo26n_example"
+}
+```
+
+Later CLI commands can add import/download and auto-detect orchestration once those backend helpers are stable. First implementation should prioritize `export-dataset`, `check-training-ready`, `build-train-command`, `start-training`, `training-status`, `stop-training`, `generate-crops`, `image-key`, and `write-evaluation-report`, because those commands validate the pipeline backend and make LLM/developer diagnostics useful immediately.
+
+Initial CLI-to-helper map:
+
+| CLI command | Backend helper |
+|---|---|
+| `export-dataset` | `scripts.training_pipeline_lib.export_dataset_selection` |
+| `check-training-ready` | `scripts.training_pipeline_lib.check_training_readiness` |
+| `build-train-command` | `scripts.training_pipeline_lib.build_yolo_train_command` |
+| `start-training` | new process-launch helper in `scripts.training_pipeline_lib` |
+| `training-status` | `scripts.training_pipeline_lib.load_training_results_series` plus new process/log helpers |
+| `stop-training` | new process-stop helper in `scripts.training_pipeline_lib` |
+| `generate-crops` | `scripts.visual_review_lib.generate_review_crop` |
+| `image-key` | `scripts.visual_review_lib.image_key_for_source` |
+| `write-evaluation-report` | `scripts.training_pipeline_lib.write_evaluation_report` |
+
+Deferred HTTP/API behavior:
+
+The local HTTP/API surface is deferred until the CLI is stable. The CLI should be the first automation contract because it is easier to test, easier for LLM/developer diagnostics, and avoids prematurely designing authentication or network exposure rules.
+
+When added later:
+
+- The local GUI server may expose JSON endpoints mirroring the same backend helpers for interactive use.
+- API endpoints should remain local-only by default unless explicit authentication and network-safety rules are added later.
+- Endpoints should be stage-oriented and artifact-oriented, for example `/api/datasets/export`, `/api/training/readiness`, `/api/training/status`, and `/api/evaluation/report`.
+- API responses should include enough file paths, warnings, and validation messages for automated diagnostics.
+
+Diagnostic contract:
+
+- Each stage should have a cheap validation/check function that can run without launching a full GUI.
+- Validation functions should distinguish hard blockers from warnings.
+- Validation output should be serializable to JSON and suitable for CLI, API, tests, and GUI checklists.
+- Backend functions should be deterministic where possible so repeated LLM/developer diagnostics produce stable results.
+- Tests should prefer backend helpers and CLI/API interfaces, with separate browser-level tests added only where UI behavior itself must be verified.
 
 ## Artifact Layout
 
@@ -187,6 +613,16 @@ image_key = "img_" + hashlib.sha256(identity_bytes).hexdigest()[:16]
 ```
 
 For normal RGB PNG/JPEG inputs, the render profile can be `rgb_original`. For GeoTIFF/Sentinel inputs, the render profile distinguishes true color, false color, band choices, and normalization choices.
+
+First-version `render_profile.kind` values and required fields are:
+
+| `kind` | Required fields | Use |
+|---|---|---|
+| `rgb_original` | `kind` | RGB PNG/JPEG-style inputs used as-is |
+| `true_color` | `kind`, `bands`, `normalization`, `output_colorspace` | Sentinel/GeoTIFF visible-band render |
+| `false_color` | `kind`, `bands`, `normalization`, `output_colorspace` | Sentinel/GeoTIFF non-visible or analysis-band render |
+
+Shared import/review helpers and CLI commands should reject unknown `render_profile.kind` values instead of silently generating a different `image_key` for a typo. The validation source of truth should live in the backend helper library so the GUI, CLI, tests, and future API all enforce the same identity rules. First-version validation should require the fields listed above. Extra metadata fields may be allowed, but they intentionally become part of the canonical identity payload and therefore affect the generated `image_key`.
 
 RGB PNG/JPEG payload example:
 
@@ -709,15 +1145,18 @@ Current code already covers much of step 2 and part of dataset export:
 Planned first implementation structure:
 
 - `scripts/training_pipeline_ui.py` owns the top progress bar and routes between training stages.
+- `scripts/training_pipeline_cli.py` owns non-GUI automation and diagnostic commands for the same stages.
 - `scripts/review_visual_detections_ui.py` remains useful for focused step 2 manual-review testing, and the mostly-working step 2 reviewer should be left alone except for integration hooks needed by the training pipeline.
 - `scripts/visual_review_lib.py` keeps shared review, bbox, crop, and review-file helpers.
 - `scripts/training_pipeline_lib.py` should hold new dataset-selection, export, training-config, training-metadata, and evaluation helpers.
+- GUI routes, CLI commands, and tests should all use the shared helper libraries rather than each implementing independent pipeline logic.
 
 The implementation can attempt the full training flow in one pass, but it should still be built as modular helper functions and stage-specific UI paths so failures are debuggable.
 
 Missing higher-level pieces:
 
 - a unified training GUI shell with the top progress bar
+- a command-line/API automation surface for backend stages and diagnostics
 - background reviewed-bbox crop generation
 - step 3 bbox overview grid
 - step 4 dataset selection manifests and multi-dataset assignment UI

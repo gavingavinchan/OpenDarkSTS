@@ -29,6 +29,18 @@ CLASS_NAME_TO_ID = {value: key for key, value in CLASS_ID_TO_NAME.items()}
 REVIEW_LABEL_TO_CLASS = {"ship_non_sts": 0, "ships_sts": 1}
 CLASS_ID_TO_REVIEW_LABEL = {value: key for key, value in REVIEW_LABEL_TO_CLASS.items()}
 EXPORTABLE_REVIEW_LABELS = set(REVIEW_LABEL_TO_CLASS)
+RENDER_PROFILE_REQUIRED_FIELDS = {
+    "rgb_original": {"kind"},
+    "true_color": {"kind", "bands", "normalization", "output_colorspace"},
+    "false_color": {"kind", "bands", "normalization", "output_colorspace"},
+}
+ALLOWED_RENDER_PROFILE_KINDS = set(RENDER_PROFILE_REQUIRED_FIELDS)
+TRUE_COLOR_RENDER_PROFILE = {
+    "kind": "true_color",
+    "bands": [1, 2, 3],
+    "normalization": "current_loader_default",
+    "output_colorspace": "RGB",
+}
 
 
 @dataclass(frozen=True)
@@ -78,6 +90,45 @@ def json_default(value: Any) -> Any:
 
 def canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=json_default)
+
+
+def source_content_hash(source_path: str | Path) -> str:
+    target = repo_resolve(source_path)
+    digest = hashlib.sha256()
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def validate_render_profile(render_profile: dict[str, Any]) -> None:
+    if not isinstance(render_profile, dict):
+        raise ValueError("render_profile must be a JSON object")
+    kind = render_profile.get("kind")
+    if kind not in ALLOWED_RENDER_PROFILE_KINDS:
+        raise ValueError(f"Unknown render profile kind: {kind!r}")
+    required = RENDER_PROFILE_REQUIRED_FIELDS[str(kind)]
+    missing = sorted(field for field in required if field not in render_profile)
+    if missing:
+        raise ValueError(f"render_profile kind={kind!r} is missing required field(s): {', '.join(missing)}")
+
+
+def canonical_identity_payload(source_path: str | Path, render_profile: dict[str, Any]) -> dict[str, Any]:
+    validate_render_profile(render_profile)
+    return {
+        "source_content_hash": source_content_hash(source_path),
+        "render_profile": render_profile,
+    }
+
+
+def image_key_for_identity_payload(payload: dict[str, Any]) -> str:
+    validate_render_profile(payload.get("render_profile"))
+    identity_bytes = canonical_json(payload).encode("utf-8")
+    return "img_" + hashlib.sha256(identity_bytes).hexdigest()[:16]
+
+
+def image_key_for_source(source_path: str | Path, render_profile: dict[str, Any]) -> str:
+    return image_key_for_identity_payload(canonical_identity_payload(source_path, render_profile))
 
 
 def load_json(path: str | Path, default: Any | None = None) -> Any:
@@ -260,10 +311,19 @@ def build_manifest_entry(
     merge_info: dict[str, Any],
 ) -> dict[str, Any]:
     image_filename = f"{date_value}_tile_{tile.row}_{tile.col}.png"
-    image_key = image_key_for_filename(image_filename)
+    source_hash = source_content_hash(tile.path)
+    render_profile = dict(TRUE_COLOR_RENDER_PROFILE)
+    image_key = image_key_for_identity_payload(
+        {
+            "source_content_hash": source_hash,
+            "render_profile": render_profile,
+        }
+    )
     return {
         "image_key": image_key,
         "image_filename": image_filename,
+        "source_content_hash": source_hash,
+        "render_profile": render_profile,
         "source_kind": "tile",
         "date": date_value,
         "tile_row": tile.row,
@@ -278,6 +338,7 @@ def build_manifest_entry(
                 "col": tile.col,
                 "mtime": tile.mtime,
                 "size_bytes": tile.size_bytes,
+                "source_content_hash": source_hash,
             }
         ],
         "render": {
@@ -785,6 +846,103 @@ def review_counts(review: dict[str, Any]) -> dict[str, int]:
         "pending_active_detections": len(active) - len(reviewed_active),
         "neither_detections": len(neither),
     }
+
+
+def file_fingerprint(path: str | Path) -> str:
+    target = repo_resolve(path)
+    digest = hashlib.sha256()
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def crop_pixel_bounds(detection: dict[str, Any], image_width: int, image_height: int, padding_px: int) -> dict[str, int]:
+    bbox_x1 = int(round((float(detection["x_center"]) - float(detection["width"]) / 2.0) * image_width))
+    bbox_y1 = int(round((float(detection["y_center"]) - float(detection["height"]) / 2.0) * image_height))
+    bbox_x2 = int(round((float(detection["x_center"]) + float(detection["width"]) / 2.0) * image_width))
+    bbox_y2 = int(round((float(detection["y_center"]) + float(detection["height"]) / 2.0) * image_height))
+    x1 = max(0, min(image_width, bbox_x1 - int(padding_px)))
+    y1 = max(0, min(image_height, bbox_y1 - int(padding_px)))
+    x2 = max(0, min(image_width, bbox_x2 + int(padding_px)))
+    y2 = max(0, min(image_height, bbox_y2 + int(padding_px)))
+    if x2 <= x1:
+        x2 = min(image_width, x1 + 1)
+    if y2 <= y1:
+        y2 = min(image_height, y1 + 1)
+    return {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "padding_px": int(padding_px)}
+
+
+def crop_review_metadata(detection: dict[str, Any]) -> dict[str, Any]:
+    review_label = detection.get("review_label")
+    if review_label in REVIEW_LABEL_TO_CLASS:
+        class_id = REVIEW_LABEL_TO_CLASS[str(review_label)]
+        class_name = CLASS_ID_TO_NAME[class_id]
+    else:
+        class_id = None
+        class_name = None
+    return {
+        "review_label": review_label,
+        "class_id": class_id,
+        "class_name": class_name,
+        "source_type": detection.get("source_type"),
+        "reviewed": bool(detection.get("reviewed")),
+    }
+
+
+def generate_review_crop(
+    review: dict[str, Any],
+    detection_id: str,
+    *,
+    review_path: str | Path,
+    crop_root: str | Path = WORKSPACE_DIR / "cache" / "review_crops",
+    padding_px: int = 48,
+    generated_at: str | None = None,
+) -> dict[str, Path]:
+    detection = find_detection(review, detection_id)
+    image_key = str(review["image_key"])
+    source_path = repo_resolve(str(review["cache_path"]))
+    crop_dir = repo_resolve(crop_root) / image_key
+    crop_path = crop_dir / f"{detection_id}.png"
+    sidecar_path = crop_dir / f"{detection_id}.json"
+    crop_dir.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(source_path) as source:
+        image_width, image_height = source.size
+        crop_pixels = crop_pixel_bounds(detection, image_width, image_height, padding_px)
+        crop = source.crop((crop_pixels["x1"], crop_pixels["y1"], crop_pixels["x2"], crop_pixels["y2"]))
+        crop.save(crop_path, format="PNG")
+
+    bbox = {
+        "x_center": float(detection["x_center"]),
+        "y_center": float(detection["y_center"]),
+        "width": float(detection["width"]),
+        "height": float(detection["height"]),
+    }
+    bbox_fingerprint = f"sha256:{hashlib.sha256(canonical_json(bbox).encode('utf-8')).hexdigest()}"
+    crop_recipe = {"bbox": bbox, "crop_pixels": crop_pixels, "padding_px": int(padding_px)}
+    crop_recipe_fingerprint = f"sha256:{hashlib.sha256(canonical_json(crop_recipe).encode('utf-8')).hexdigest()}"
+    sidecar = {
+        "schema_version": 1,
+        "image_key": image_key,
+        "detection_id": str(detection_id),
+        "review_file": str(repo_resolve(review_path)),
+        "crop_path": str(crop_path),
+        "source_cache_path": str(source_path),
+        "source_image_width": int(image_width),
+        "source_image_height": int(image_height),
+        "bbox": bbox,
+        "crop_pixels": crop_pixels,
+        "review": crop_review_metadata(detection),
+        "fingerprints": {
+            "source_image": file_fingerprint(source_path),
+            "bbox_geometry": bbox_fingerprint,
+            "crop_recipe": crop_recipe_fingerprint,
+        },
+        "generated_at": generated_at or utcnow_iso(),
+    }
+    write_json(sidecar_path, sidecar)
+    return {"crop_path": crop_path, "sidecar_path": sidecar_path}
 
 
 def queue_progress(reviews: list[dict[str, Any]]) -> dict[str, int]:
