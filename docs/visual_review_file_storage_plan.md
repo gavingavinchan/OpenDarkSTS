@@ -82,17 +82,15 @@ Every image must have a stable `image_key` that is consistent across machines.
 
 Recommended rule:
 
-- use the review image filename itself as the primary identity, typically the filename stem
-- examples:
-  - `2020-01-04_tile_1_0.png` -> `image_key = 2020-01-04_tile_1_0`
-  - `houston_pass_014.png` -> `image_key = houston_pass_014`
-  - `sentinel_scene_A17.png` -> `image_key = sentinel_scene_A17`
+- use a content-hash-based key as the canonical identity, not the filename alone
+- include enough render-profile information in the key input to distinguish different review images derived from the same source file, such as true color versus false color renders
+- keep source collection, original filename, and original path as metadata for human traceability
 
-This avoids baking tile assumptions into the collaboration model. Some datasets may be tiled, while others may be standalone images with arbitrary but unique filenames.
+This avoids baking tile assumptions or local folder naming into the collaboration model. Some datasets may be tiled, while others may be standalone images with arbitrary filenames that can collide across machines.
 
 The key rule is that collaborators must generate the same `image_key` for the same review image.
 
-Do not use local auto-increment database IDs as the collaboration identity.
+Do not use local auto-increment database IDs, local absolute paths, or filename-only stems as the collaboration identity.
 
 ## Preprocessing Fingerprint
 
@@ -126,8 +124,10 @@ Each file should contain at minimum:
 ```json
 {
   "schema_version": 1,
-  "image_key": "2020-01-04_tile_1_0",
+  "image_key": "img_3f2a9c8eb814d9f1_truecolor",
   "image_filename": "2020-01-04_tile_1_0.png",
+  "source_collection": "sentinel2_houston_2020",
+  "source_content_hash": "sha256:3f2a9c8eb814d9f1...",
   "reviewer": "gavin",
   "preprocess_fingerprint": "sha256:3f2a9c8e...",
   "date": "2020-01-04",
@@ -172,7 +172,8 @@ Notes:
 - array order is the canonical per-image traversal order, and `detail_cursor` indexes into that array directly
 - `review_status` still supports `overview_1`, `detail`, `overview_2`, `completed`
 - `detail_cursor` is persisted so reloading resumes the exact review step
-- `image_filename` should preserve the actual unique review image filename even when the dataset is not tile-based
+- `image_filename` should preserve the actual review image filename for display/export, but it is not the canonical collaboration key
+- `source_collection` and `source_content_hash` preserve human traceability and cross-machine identity checks
 - `preprocess_fingerprint` is the per-image manifest fingerprint this review was produced against (see Preprocessing Fingerprint)
 
 State rules without `is_active`:
@@ -292,6 +293,8 @@ To merge collaborator output:
 - fail if duplicate completed files exist for the same `image_key`
 - combine them into one unified review directory
 - export YOLO labels from the merged review files
+
+Step 3 of the training pipeline may show duplicate completed reviews under a `Needs Reconciliation` filter, but duplicate completed reviews for the same `image_key` must not be silently merged into an exportable dataset. The first version should resolve those conflicts manually or by choosing one completed review file.
 
 ## Final YOLO Export
 

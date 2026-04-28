@@ -87,7 +87,7 @@ Persist one review JSON file per image under `workspace/reviews/<reviewer>/<imag
 
 These files store:
 
-- image identity and filename-based `image_key`
+- stable content-hash-based image identity and `image_key`
 - review progress state (`review_status`, `detail_cursor`)
 - detections and human review labels
 - preprocessing fingerprint for merge validation
