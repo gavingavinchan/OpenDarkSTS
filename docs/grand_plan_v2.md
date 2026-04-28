@@ -70,6 +70,12 @@ There are two pipelines:
 Purpose: generate labelled training data for both YOLO models by using AIS to find
 candidate STS events, then downloading and reviewing satellite imagery.
 
+The detailed training-side GUI and artifact plan lives in `docs/training_pipeline_plan.md`.
+That document is authoritative for import normalization, manual visual review, reviewed
+bbox overview, dataset selection, augmentation/training setup, training metadata, and
+evaluation. This section only explains how the training pipeline fits into the full
+OpenDarkSTS system.
+
 ```
 [AIS Dataset]
       |
@@ -236,18 +242,17 @@ AIS manipulation.
 ### Phase 1: Train the dot-detector YOLO (this branch: `ais-first-pipeline`)
 1. Build the AIS STS candidate scanner (scan AIS CSVs for vessel pairs)
 2. Download zoomed-out false-color GeoTIFFs for candidate locations (depends on `images` branch)
-3. Annotate ship dots (AIS-guided + manual verification)
-4. Train dot-detector YOLO (v8 and v26), evaluate performance
+3. Run the training pipeline in `docs/training_pipeline_plan.md` to review, curate, train, and evaluate the dot-detector YOLO candidates
 
 ### Phase 2: AIS-first training data pipeline
-5. Build the full Pipeline A: AIS scan → zoomed-out → dot detection → zoomed-in → STS YOLO → manual review
-6. Generate additional STS YOLO training data
-7. Retrain STS YOLO with expanded dataset
+4. Build the full Pipeline A: AIS scan → zoomed-out → dot detection → zoomed-in → STS YOLO → manual review
+5. Use the training pipeline to generate additional STS YOLO datasets
+6. Retrain and evaluate STS YOLO with expanded reviewed datasets
 
 ### Phase 3: Operational dark STS detection
-8. Build Pipeline B: region of interest → zoomed-out → dot detection → zoomed-in → STS YOLO → AIS cross-reference
-9. Run on historic hotspot areas
-10. Tune parameters based on results
+7. Build Pipeline B: region of interest → zoomed-out → dot detection → zoomed-in → STS YOLO → AIS cross-reference
+8. Run on historic hotspot areas
+9. Tune parameters based on results
 
 ---
 

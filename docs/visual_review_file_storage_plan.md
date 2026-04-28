@@ -1,5 +1,9 @@
 # Visual Review File Storage Plan
 
+This document is the storage sub-plan for the manual visual review stage of `docs/training_pipeline_plan.md`.
+
+The training pipeline plan is authoritative for the overall training flow and later dataset selection, training, and evaluation artifacts. This document is authoritative for per-image review JSON storage, collaboration rules, and how reviewed detections are exported or consumed by those later stages.
+
 ## Goal
 
 Replace the visual review SQLite database with a file-based review format that works cleanly across multiple collaborators and produces a complete reviewed dataset for YOLO training.

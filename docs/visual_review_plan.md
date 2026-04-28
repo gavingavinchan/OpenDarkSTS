@@ -4,6 +4,12 @@ This is the visual reviewer - a manual review tool for YOLO detections on satell
 
 The AIS candidate reviewer reviews AIS-derived events. This tool reviews satellite image detections directly.
 
+## Plan Hierarchy
+
+This document is the detailed sub-plan for step 2, `Auto Detect + Manual Review`, in `docs/training_pipeline_plan.md`.
+
+The training pipeline plan is authoritative for the full training-side flow: import/download, manual review, reviewed bbox overview, dataset selection, training setup, YOLO training, and evaluation. This document remains authoritative for the manual visual review UI and per-image review file behavior.
+
 ## Input Data
 
 - **Primary source**: `/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/`
@@ -159,6 +165,10 @@ If new boxes are added during the second overview pass, the image should return 
 - `neither` - the model produced a false positive at this location. `neither` is not a YOLO class and is excluded from exported labels, but the detection and its location are kept in the review file so the image's false-positive profile can inform dataset curation decisions — which images to include in, or exclude from, the training set. Dataset curation consumes per-image review JSONs directly; no separate sidecar report is emitted by the export step.
 
 ## Output Format
+
+The full training pipeline has later stages for reviewed bbox overview, dataset selection, training setup, model training, and evaluation. Those stages are defined in `docs/training_pipeline_plan.md`.
+
+This reviewer exports corrected labels as a standard YOLO dataset when needed, but the review JSON files remain the richer source of truth for downstream dataset curation because they preserve `neither` false-positive signal and manual edit provenance.
 
 ### YOLO Training Data
 
