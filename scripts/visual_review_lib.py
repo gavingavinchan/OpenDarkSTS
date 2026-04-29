@@ -796,8 +796,6 @@ def remove_detection(review: dict[str, Any], detection_id: str) -> tuple[str, in
 
 def mark_detection_neither(review: dict[str, Any], detection_id: str) -> tuple[str, int | None]:
     detection = find_detection(review, detection_id)
-    if detection.get("source_type") == "manual":
-        return remove_detection(review, detection_id)
     timestamp = utcnow_iso()
     detection["review_label"] = "neither"
     detection["reviewed"] = True

@@ -669,7 +669,7 @@ def render_app_html(default_image_id: str | None) -> str:
           <div class="hotkey-row"><span>Label Ship (non-STS)</span><kbd>D</kbd></div>
           <div class="hotkey-row"><span>Mark Neither (background)</span><kbd>N</kbd> / <kbd>Backspace</kbd></div>
           <div class="hotkey-row"><span>Delete box permanently</span><kbd>Del</kbd></div>
-          <div class="hotkey-row"><span>Cycle selected class only</span><kbd>Tab</kbd> ship / ships / neither</div>
+          <div class="hotkey-row"><span>Cycle selected class</span><kbd>Tab</kbd> ship / ships / neither</div>
           <div class="hotkey-row"><span>Start Detail Review</span><kbd>R</kbd></div>
           <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
         </div>
@@ -1212,8 +1212,13 @@ def render_app_html(default_image_id: str | None) -> str:
       }}
     }}
 
-    function startDraw() {{
+    async function startDraw() {{
       if (!map || !state.image) return;
+      await clearSelection();
+      if (drawHandler) {{
+        drawHandler.disable();
+        drawHandler = null;
+      }}
       drawHandler = new L.Draw.Rectangle(map, {{ shapeOptions: {{ color: '#0f766e', weight: 2 }} }});
       drawHandler.enable();
     }}
@@ -1287,14 +1292,18 @@ def render_app_html(default_image_id: str | None) -> str:
     }}
 
     async function autoSaveGeometryIfNeeded() {{
-      if (!selectedDetectionId) return;
-      const layer = findLayerByDetectionId(selectedDetectionId);
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return;
+      const layer = findLayerByDetectionId(targetId);
       if (!layer) return;
       const geometry = boundsToGeometry(layer.getBounds());
       const pendingLabel = layer.detection.pending_review_label || null;
       if (pendingLabel === 'neither') {{
         try {{
-          await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: selectedDetectionId }});
+          await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
+          layer.detection.review_label = 'neither';
+          layer.detection.reviewed = true;
+          layer.detection.is_active = false;
           delete layer.detection.pending_review_label;
         }} catch (e) {{
           console.warn('Autosave pending neither failed:', e);
@@ -1310,7 +1319,7 @@ def render_app_html(default_image_id: str | None) -> str:
       try {{
         await postJson('/api/save-detection', {{
           image_id: state.image.image_id,
-          detection_id: selectedDetectionId,
+          detection_id: targetId,
           class_id: classId,
           x_center: geometry.x_center,
           y_center: geometry.y_center,
@@ -1654,7 +1663,7 @@ def render_app_html(default_image_id: str | None) -> str:
       }}
       if (key === 'b' || key === 'B') {{
         event.preventDefault();
-        startDraw();
+        await startDraw();
         return;
       }}
       if (key === 'e' || key === 'E') {{
