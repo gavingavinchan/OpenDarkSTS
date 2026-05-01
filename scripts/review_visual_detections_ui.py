@@ -13,6 +13,8 @@ try:
         DEFAULT_MANIFEST_PATH,
         DEFAULT_REVIEWER,
         DEFAULT_REVIEWS_DIR,
+        WORKSPACE_DIR,
+        build_review_bbox_overview,
         CLASS_ID_TO_NAME,
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
@@ -39,11 +41,14 @@ try:
         utcnow_iso,
         update_detection_geometry,
     )
+    from .training_pipeline_ui import render_app_html as render_bbox_overview_html
 except ImportError:
     from visual_review_lib import (
         DEFAULT_MANIFEST_PATH,
         DEFAULT_REVIEWER,
         DEFAULT_REVIEWS_DIR,
+        WORKSPACE_DIR,
+        build_review_bbox_overview,
         CLASS_ID_TO_NAME,
         REVIEW_LABEL_TO_CLASS,
         complete_image_review,
@@ -70,6 +75,7 @@ except ImportError:
         utcnow_iso,
         update_detection_geometry,
     )
+    from training_pipeline_ui import render_app_html as render_bbox_overview_html
 
 
 MANIFEST_PATH = DEFAULT_MANIFEST_PATH
@@ -98,6 +104,13 @@ def append_debug_interaction_event(payload: dict) -> None:
     }
     with DEBUG_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def query_bool(parsed, name: str, default: bool) -> bool:
+    values = parse_qs(parsed.query).get(name)
+    if not values:
+        return default
+    return values[0].strip().lower() not in {"0", "false", "no", "off"}
 
 
 def pick_image_id(queue_rows, requested_image_id: str | None) -> str | None:
@@ -261,8 +274,9 @@ def reopen_if_completed(review: dict) -> None:
         set_review_status(review, "overview_2", None)
 
 
-def render_app_html(default_image_id: str | None) -> str:
+def render_app_html(default_image_id: str | None, default_detection_id: str | None = None) -> str:
     initial_image = json.dumps(default_image_id)
+    initial_detection = json.dumps(default_detection_id)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -312,6 +326,24 @@ def render_app_html(default_image_id: str | None) -> str:
       background: rgba(255, 250, 242, 0.82);
       backdrop-filter: blur(10px);
     }}
+    .pipeline-rail {{ display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; }}
+    .pipeline-stage {{
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: rgba(255, 250, 242, 0.62);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      text-decoration: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .pipeline-stage.active {{ background: var(--ink); border-color: var(--ink); color: white; }}
+    .pipeline-stage.enabled:hover {{ border-color: rgba(15, 118, 110, 0.4); color: var(--accent-strong); transform: translateY(-1px); }}
     .brand h1 {{
       margin: 0;
       font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
@@ -627,6 +659,7 @@ def render_app_html(default_image_id: str | None) -> str:
       .sidebar {{ border-right: 0; border-bottom: 1px solid var(--line); }}
       #map {{ height: 60vh; }}
       .topbar {{ flex-direction: column; align-items: flex-start; }}
+      .pipeline-rail {{ justify-content: flex-start; }}
       .queue-meta {{ justify-content: flex-start; }}
       .review-progress {{
         width: min(420px, calc(100vw - 24px));
@@ -642,6 +675,15 @@ def render_app_html(default_image_id: str | None) -> str:
         <h1>Visual Detection Reviewer</h1>
         <p>Review Sentinel tile imagery, correct detections, and export clean YOLO labels.</p>
       </div>
+      <nav class="pipeline-rail" aria-label="Training pipeline stages">
+        <span class="pipeline-stage">Import Data</span>
+        <a class="pipeline-stage active enabled" href="/">Manual Review</a>
+        <a class="pipeline-stage enabled" href="/bbox-overview">BBox Overview</a>
+        <span class="pipeline-stage">Dataset Selection</span>
+        <span class="pipeline-stage">Training Setup</span>
+        <span class="pipeline-stage">Train YOLO</span>
+        <span class="pipeline-stage">Evaluate</span>
+      </nav>
       <div class="queue-meta" id="queueMeta"></div>
     </div>
     <div class="layout">
@@ -691,6 +733,7 @@ def render_app_html(default_image_id: str | None) -> str:
 
   <script>
     const initialImageId = {initial_image};
+    const initialDetectionId = {initial_detection};
     const statusLabels = {{ pending: 'Pending', overview_1: 'Overview 1', detail: 'Detail', overview_2: 'Overview 2', completed: 'Completed' }};
     const defaultClassOptions = [{{value: 0, label: 'Ship'}}, {{value: 1, label: 'Ships'}}];
 
@@ -705,6 +748,7 @@ def render_app_html(default_image_id: str | None) -> str:
     let isEditing = false;
     let layerIndex = new Map();
     let labelIndex = new Map();
+    let requestedDetectionId = null;
 
     function colorForDetection(detection) {{
       if (detection.pending_review_label === 'neither' || detection.review_label === 'neither' || !detection.is_active) return '#7c6f64';
@@ -724,10 +768,18 @@ def render_app_html(default_image_id: str | None) -> str:
       return raw;
     }}
 
+    function getDetectionIdFromUrl() {{
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get('detection_id');
+      if (!raw) return initialDetectionId;
+      return raw;
+    }}
+
     function setImageIdInUrl(imageId) {{
       const params = new URLSearchParams(window.location.search);
       if (imageId === null || imageId === undefined) params.delete('image_id');
       else params.set('image_id', imageId);
+      params.delete('detection_id');
       const next = `${{window.location.pathname}}?${{params.toString()}}`;
       window.history.replaceState({{}}, '', next);
     }}
@@ -739,6 +791,19 @@ def render_app_html(default_image_id: str | None) -> str:
       syncReviewCursorFromState();
       if (state.image) setImageIdInUrl(state.image.image_id);
       renderAll();
+      if (requestedDetectionId) {{
+        const target = requestedDetectionId;
+        requestedDetectionId = null;
+        await focusDetectionFromUrl(target);
+      }}
+    }}
+
+    async function focusDetectionFromUrl(detectionId) {{
+      const layer = findLayerByDetectionId(detectionId);
+      if (!layer) return;
+      await selectLayer(layer, true);
+      focusLayer(layer);
+      lastFocusedDetectionId = detectionId;
     }}
 
     function renderAll() {{
@@ -832,7 +897,8 @@ def render_app_html(default_image_id: str | None) -> str:
       host.innerHTML = `
         <span class="pill">${{state.queue.completed_images}} / ${{state.queue.total_images}} completed</span>
         <span class="pill">Queue position ${{currentIndex}}</span>
-        <span class="pill">${{state.image ? state.image.date + ' (' + state.image.tile_row + ',' + state.image.tile_col + ')' : 'No images loaded'}}</span>
+        <span class="pill">Ship reviewed ${{state.queue.reviewed_ship_bboxes || 0}}</span>
+        <span class="pill">Ships reviewed ${{state.queue.reviewed_ships_bboxes || 0}}</span>
       `;
     }}
 
@@ -955,7 +1021,8 @@ def render_app_html(default_image_id: str | None) -> str:
           if (event.originalEvent && event.originalEvent.target && event.originalEvent.target.closest('.leaflet-interactive')) return;
           if (!drawHandler || !drawHandler._enabled) clearSelection();
         }});
-        map.on('mousemove mouseup', updateSelectedLabelPosition);
+        map.on('mousemove', updateSelectedLabelPosition);
+        map.on('mouseup', () => clampSelectedLayerToImageBounds());
       }}
       if (!state.image) return;
 
@@ -973,14 +1040,15 @@ def render_app_html(default_image_id: str | None) -> str:
       layerIndex = new Map();
       labelIndex = new Map();
 
-      state.detections.forEach(detection => {{
+      sortedDetectionsForDisplay(state.detections).forEach(detection => {{
         const layer = L.rectangle(
           [[detection.y1_px, detection.x1_px], [detection.y2_px, detection.x2_px]],
           {{ color: colorForDetection(detection), weight: detection.detection_id === selectedDetectionId ? 5 : 3, opacity: 1, fillOpacity: detection.detection_id === selectedDetectionId ? 0.08 : 0.03, dashArray: detection.detection_id === selectedDetectionId ? '10 6' : null }}
         );
         layer.detection = detection;
         layer.on('click', () => selectLayer(layer));
-        layer.on('edit drag dragend move moveend', () => updateLabelPosition(layer));
+        layer.on('edit drag', () => updateLabelPosition(layer));
+        layer.on('dragend moveend', () => clampLayerToImageBounds(layer));
         detectionGroup.addLayer(layer);
         layerIndex.set(detection.detection_id, layer);
 
@@ -990,7 +1058,7 @@ def render_app_html(default_image_id: str | None) -> str:
         const labelMarker = L.marker(labelPositionForBounds(layer.getBounds()), {{
           interactive: false,
           keyboard: false,
-          zIndexOffset: detection.detection_id === selectedDetectionId ? 2000 : 1000,
+            zIndexOffset: labelZIndexForDetection(detection),
           icon: L.divIcon({{
             className: 'bbox-label-anchor',
             html: `<div class="bbox-label ${{labelClass}} ${{detection.detection_id === selectedDetectionId ? 'selected' : ''}}">${{detectionName(detection)}}</div>`,
@@ -1030,7 +1098,6 @@ def render_app_html(default_image_id: str | None) -> str:
           fillOpacity: selected ? 0.08 : 0.03,
           dashArray: selected ? '10 6' : null,
         }});
-        if (selected) item.bringToFront();
         const labelMarker = labelIndex.get(detectionId);
         if (labelMarker) {{
           const labelClass = item.detection.pending_review_label === 'neither' || item.detection.review_label === 'neither' || !item.detection.is_active
@@ -1040,7 +1107,7 @@ def render_app_html(default_image_id: str | None) -> str:
             className: 'bbox-label-anchor',
             html: `<div class="bbox-label ${{labelClass}} ${{selected ? 'selected' : ''}}">${{detectionName(item.detection)}}</div>`,
           }}));
-          if (selected && labelMarker.getElement()) labelMarker.getElement().style.zIndex = '2000';
+          if (labelMarker.getElement()) labelMarker.getElement().style.zIndex = String(labelZIndexForDetection(item.detection));
         }}
       }});
       if (layer.editing) layer.editing.enable();
@@ -1073,6 +1140,22 @@ def render_app_html(default_image_id: str | None) -> str:
 
     function findLayerByDetectionId(detectionId) {{
       return layerIndex.get(detectionId) || null;
+    }}
+
+    function detectionArea(detection) {{
+      return Math.max(0, Number(detection.width) || 0) * Math.max(0, Number(detection.height) || 0);
+    }}
+
+    function sortedDetectionsForDisplay(detections) {{
+      return [...detections].sort((left, right) => {{
+        const areaDelta = detectionArea(right) - detectionArea(left);
+        if (Math.abs(areaDelta) > 1e-12) return areaDelta;
+        return String(left.detection_id).localeCompare(String(right.detection_id));
+      }});
+    }}
+
+    function labelZIndexForDetection(detection) {{
+      return Math.max(1, Math.round(1000000 - detectionArea(detection) * 1000000));
     }}
 
     function labelPositionForBounds(bounds) {{
@@ -1237,16 +1320,58 @@ def render_app_html(default_image_id: str | None) -> str:
     }}
 
     function boundsToGeometry(bounds) {{
-      const west = bounds.getWest();
-      const east = bounds.getEast();
-      const north = bounds.getNorth();
-      const south = bounds.getSouth();
+      const pixelBounds = clampedPixelBounds(bounds);
+      const west = pixelBounds.west;
+      const east = pixelBounds.east;
+      const north = pixelBounds.north;
+      const south = pixelBounds.south;
       return {{
         x_center: ((west + east) / 2) / state.image.width,
         y_center: 1.0 - ((north + south) / 2) / state.image.height,
         width: (east - west) / state.image.width,
         height: (north - south) / state.image.height,
       }};
+    }}
+
+    function clampedPixelBounds(bounds) {{
+      const minBoxSizePx = 1;
+      let west = Math.min(bounds.getWest(), bounds.getEast());
+      let east = Math.max(bounds.getWest(), bounds.getEast());
+      let south = Math.min(bounds.getNorth(), bounds.getSouth());
+      let north = Math.max(bounds.getNorth(), bounds.getSouth());
+      west = Math.max(0, Math.min(state.image.width, west));
+      east = Math.max(0, Math.min(state.image.width, east));
+      south = Math.max(0, Math.min(state.image.height, south));
+      north = Math.max(0, Math.min(state.image.height, north));
+      if (east <= west) east = Math.min(state.image.width, west + minBoxSizePx);
+      if (east <= west) west = Math.max(0, east - minBoxSizePx);
+      if (north <= south) north = Math.min(state.image.height, south + minBoxSizePx);
+      if (north <= south) south = Math.max(0, north - minBoxSizePx);
+      return {{ west, east, south, north }};
+    }}
+
+    function boundsNeedClamping(bounds, pixelBounds) {{
+      const tolerance = 0.001;
+      return Math.abs(Math.min(bounds.getWest(), bounds.getEast()) - pixelBounds.west) > tolerance
+        || Math.abs(Math.max(bounds.getWest(), bounds.getEast()) - pixelBounds.east) > tolerance
+        || Math.abs(Math.min(bounds.getNorth(), bounds.getSouth()) - pixelBounds.south) > tolerance
+        || Math.abs(Math.max(bounds.getNorth(), bounds.getSouth()) - pixelBounds.north) > tolerance;
+    }}
+
+    function clampLayerToImageBounds(layer) {{
+      if (!layer || !state.image || typeof layer.getBounds !== 'function' || typeof layer.setBounds !== 'function') return;
+      const bounds = layer.getBounds();
+      const pixelBounds = clampedPixelBounds(bounds);
+      if (boundsNeedClamping(bounds, pixelBounds)) {{
+        layer.setBounds([[pixelBounds.south, pixelBounds.west], [pixelBounds.north, pixelBounds.east]]);
+      }}
+      updateLabelPosition(layer);
+    }}
+
+    function clampSelectedLayerToImageBounds() {{
+      const targetId = selectedDetectionId || state.current_detection_id;
+      if (!targetId) return;
+      clampLayerToImageBounds(findLayerByDetectionId(targetId));
     }}
 
     function geometryMatchesDetection(geometry, detection) {{
@@ -1384,7 +1509,7 @@ def render_app_html(default_image_id: str | None) -> str:
       }}
     }}
 
-    function cycleSelectedClassOnly() {{
+    async function cycleSelectedClassOnly() {{
       const targetId = selectedDetectionId || state.current_detection_id;
       if (!targetId) return;
       const layer = findLayerByDetectionId(targetId);
@@ -1393,6 +1518,7 @@ def render_app_html(default_image_id: str | None) -> str:
       const current = det.pending_review_label || det.review_label || reviewLabelForClassId(det.class_id);
       const cycle = ['ship_non_sts', 'ships_sts', 'neither'];
       const nextLabel = cycle[(Math.max(0, cycle.indexOf(current)) + 1) % cycle.length];
+      const geometry = layer ? boundsToGeometry(layer.getBounds()) : det;
       det.pending_review_label = nextLabel;
       if (nextLabel !== 'neither') {{
         const nextClassId = nextLabel === 'ships_sts' ? 1 : 0;
@@ -1406,6 +1532,26 @@ def render_app_html(default_image_id: str | None) -> str:
       }}
       if (layer) refreshLayerVisual(layer);
       renderSidebar();
+      try {{
+        if (nextLabel === 'neither') {{
+          await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
+        }} else {{
+          await postJson('/api/label-detection', {{
+            image_id: state.image.image_id,
+            detection_id: targetId,
+            review_label: nextLabel,
+            class_id: nextLabel === 'ships_sts' ? 1 : 0,
+            x_center: geometry.x_center,
+            y_center: geometry.y_center,
+            width: geometry.width,
+            height: geometry.height,
+          }});
+        }}
+        selectedDetectionId = targetId;
+        await fetchState(state.image.image_id);
+      }} catch (error) {{
+        alert(`Could not save Tab label change: ${{error.message}}`);
+      }}
     }}
 
     async function labelCurrent(reviewLabel) {{
@@ -1589,7 +1735,7 @@ def render_app_html(default_image_id: str | None) -> str:
       if (key === 'Tab') {{
         event.preventDefault();
         if (selectedDetectionId || state.current_detection_id) {{
-          cycleSelectedClassOnly();
+          await cycleSelectedClassOnly();
         }} else {{
           toggleClassSelect();
         }}
@@ -1687,6 +1833,7 @@ def render_app_html(default_image_id: str | None) -> str:
       }}
     }});
 
+    requestedDetectionId = getDetectionIdFromUrl();
     fetchState(getImageIdFromUrl());
   </script>
 </body>
@@ -1701,7 +1848,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if path == "/" or path == "":
             queue_rows = synced_review_queue()
             default_image_id = pick_image_id(queue_rows, self._query_image_id(parsed))
-            self._respond_html(render_app_html(default_image_id))
+            self._respond_html(render_app_html(default_image_id, self._query_detection_id(parsed)))
+            return
+
+        if path == "/bbox-overview":
+            self._respond_html(render_bbox_overview_html())
+            return
+
+        if path == "/api/overview":
+            payload = build_review_bbox_overview(
+                REVIEWS_DIR,
+                crop_root=WORKSPACE_DIR / "cache" / "review_crops",
+                include_incomplete=False,
+                generate_crops=query_bool(parsed, "generate", True),
+            )
+            self._respond_json(payload)
             return
 
         if path == "/api/state":
@@ -1805,6 +1966,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _query_image_id(self, parsed) -> str | None:
         values = parse_qs(parsed.query).get("image_id")
+        if not values:
+            return None
+        value = values[0].strip()
+        return value or None
+
+    def _query_detection_id(self, parsed) -> str | None:
+        values = parse_qs(parsed.query).get("detection_id")
         if not values:
             return None
         value = values[0].strip()

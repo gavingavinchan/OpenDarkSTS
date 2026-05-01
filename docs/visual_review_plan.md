@@ -150,6 +150,7 @@ If new boxes are added during the second overview pass, the image should return 
 - A bbox is considered reviewed after a review decision is saved: `Ships (STS)`, `Ship (non-STS)`, `Neither`, permanent delete, accepting the current displayed class with `Space` / Right arrow / `Accept / Next`, or saving a geometry edit.
 - Geometry edits count as a review decision and save the current class for that bbox.
 - A manually drawn bbox is saved as reviewed using the currently selected class because drawing it is an explicit human addition.
+- Once a bbox is reviewed, its saved label is ground truth for training and dataset statistics regardless of whether the bbox started as an auto detection or was manually drawn. `source_type` is provenance only, not a label-quality distinction.
 - An image is considered completed automatically when every active bbox has been reviewed; image navigation does not itself complete an image.
 - Bottom-center per-image detection review progress bar with discrete segments, where each segment represents one box in the active review queue for the current image (`neither` boxes are not counted in this bar)
 - The per-image bar should be compact and flat, with the `reviewed/total` count such as `5/10` shown on the right side of the bar
@@ -164,11 +165,15 @@ If new boxes are added during the second overview pass, the image should return 
 - `ship_non_sts` - single vessel, not STS (YOLO class 0: `ship`)
 - `neither` - the model produced a false positive at this location. `neither` is not a YOLO class and is excluded from exported labels, but the detection and its location are kept in the review file so the image's false-positive profile can inform dataset curation decisions — which images to include in, or exclude from, the training set. Dataset curation consumes per-image review JSONs directly; no separate sidecar report is emitted by the export step.
 
+## Known UX Follow-Ups
+
+- After pressing `B` and drawing a new bbox, the newly created bbox should become the selected bbox immediately after save/re-render. Current behavior requires the reviewer to click the new bbox again before resizing, relabeling, or deleting it. Implementation hint: after `/api/save-detection` returns from `onDrawCreated`, preserve/select the returned `detection_id` (or identify the new manual detection from refreshed state) and call the same selection path used when clicking an existing bbox.
+
 ## Output Format
 
 The full training pipeline has later stages for reviewed bbox overview, dataset selection, training setup, model training, and evaluation. Those stages are defined in `docs/training_pipeline_plan.md`.
 
-This reviewer exports corrected labels as a standard YOLO dataset when needed, but the review JSON files remain the richer source of truth for downstream dataset curation because they preserve `neither` false-positive signal and manual edit provenance.
+This reviewer exports corrected labels as a standard YOLO dataset when needed, but the review JSON files remain the richer source of truth for downstream dataset curation because they preserve `neither` false-positive signal and edit provenance. Export and dataset statistics treat all reviewed positive bboxes as ground truth regardless of auto/manual origin.
 
 ### YOLO Training Data
 

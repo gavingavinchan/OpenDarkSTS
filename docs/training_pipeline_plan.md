@@ -767,6 +767,7 @@ Grid behavior:
 
 - the grid shows bbox crop images, not full source images
 - each tile represents one reviewed bbox crop
+- every reviewed positive bbox is ground truth regardless of whether it began as an auto detection or a manually drawn bbox; auto/manual origin may be shown as provenance but must not split label counts or export eligibility
 - tiles show minimal visual status: class, dataset membership if any, review status, and warning badges
 - tile size is adjustable, similar to Windows Explorer icon size controls
 - large grids must use lazy loading or virtualization so many thousands of bbox crops remain usable
@@ -783,7 +784,7 @@ Right sidebar information:
 - reviewer, derived from the review file's `reviewer` field or parent `workspace/reviews/<reviewer>/` directory
 - confidence and source model provenance when available
 - bbox dimensions and normalized coordinates
-- manual vs auto source type
+- manual vs auto source type as provenance only, not a ground-truth quality distinction
 - current dataset memberships
 - warnings such as stale crop, incomplete review, missing source cache, or unusual bbox size
 
@@ -858,6 +859,8 @@ Each dataset selection manifest should record:
 
 - `all_exportable` means every reviewed positive box on this image is exported
 - `selected_only` means only detection ids listed in `selected_detection_ids` are exported
+
+Reviewed positive boxes are source-agnostic ground truth. Dataset counts, selected bbox totals, and YOLO exports must include reviewed `ship_non_sts` and `ships_sts` labels the same way for both auto-origin and manually drawn bboxes.
 
 Reconciliation conflicts are a hard export blocker. Images marked `Needs Reconciliation` must not be exported into any training dataset until resolved; this is not a per-dataset option.
 

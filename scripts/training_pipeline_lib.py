@@ -282,6 +282,7 @@ def find_review_for_image(image_key: str, reviews_dir: str | Path, *, include_in
 
 
 def exportable_detections(review: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    # Reviewed positive labels are ground truth regardless of auto/manual origin.
     selected_ids = item.get("selected_detection_ids")
     if item.get("include_labels") == "selected_only":
         if not isinstance(selected_ids, list):

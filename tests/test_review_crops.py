@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from _helpers import load_review_lib
+from _helpers import detection, load_review_lib, write_review
 
 
 def read_json(path: Path) -> dict:
@@ -137,3 +137,46 @@ def test_generate_review_crop_preserves_neither_metadata_without_yolo_class(tmp_
     assert sidecar["review"]["review_label"] == "neither"
     assert sidecar["review"]["class_id"] is None
     assert sidecar["review"]["class_name"] is None
+
+
+def test_build_review_bbox_overview_collects_reviewed_crops_source_agnostic(tmp_path: Path) -> None:
+    review_lib = load_review_lib()
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    crop_root = tmp_path / "cache" / "review_crops"
+    manual_ship = detection("manual-0001", "ship_non_sts")
+    manual_ship["source_type"] = "manual"
+    write_review(
+        reviews_dir,
+        cache_dir,
+        reviewer="gavin",
+        image_key="img_reviewed",
+        detections=[manual_ship, detection("auto-0001", "ships_sts"), detection("auto-0002", "neither")],
+    )
+
+    overview = review_lib.build_review_bbox_overview(reviews_dir, crop_root=crop_root, padding_px=4, generate_crops=True)
+
+    assert overview["counts"]["reviewed_bbox_count"] == 3
+    assert overview["counts"]["reviewed_ship_bboxes"] == 1
+    assert overview["counts"]["reviewed_ships_bboxes"] == 1
+    assert overview["counts"]["neither_bboxes"] == 1
+    assert overview["counts"]["generated_crop_count"] == 3
+    manual_tile = next(tile for tile in overview["tiles"] if tile["detection_id"] == "manual-0001")
+    assert manual_tile["source_type"] == "manual"
+    assert manual_tile["class_name"] == "ship"
+    assert Path(manual_tile["crop_path"]).is_file()
+
+
+def test_build_review_bbox_overview_flags_completed_duplicate_conflicts(tmp_path: Path) -> None:
+    review_lib = load_review_lib()
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    write_review(reviews_dir, cache_dir, reviewer="gavin", image_key="img_duplicate", detections=[detection("auto-0001", "ship_non_sts")])
+    write_review(reviews_dir, cache_dir, reviewer="alex", image_key="img_duplicate", detections=[detection("auto-0001", "ships_sts")])
+
+    overview = review_lib.build_review_bbox_overview(reviews_dir, crop_root=tmp_path / "crops", generate_crops=False)
+
+    assert overview["tiles"] == []
+    assert overview["counts"]["conflict_image_count"] == 1
+    assert overview["conflicts"][0]["image_key"] == "img_duplicate"
+    assert sorted(overview["conflicts"][0]["reviewers"]) == ["alex", "gavin"]

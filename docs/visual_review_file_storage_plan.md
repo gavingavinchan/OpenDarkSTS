@@ -164,7 +164,7 @@ Notes:
 
 - `detection_id` is a simple per-image counter such as `auto-0001` or `manual-0001`, unique only within the image file
 - `detection_id` is not stable across re-preprocessing — re-running detection regenerates auto ids
-- `source_type` is `auto` (produced by model inference) or `manual` (human added)
+- `source_type` is `auto` (produced by model inference) or `manual` (human added); it is retained only as provenance. Once a bbox has `reviewed = true` and an exportable `review_label`, it is ground truth for training whether it was auto-detected or manually drawn.
 - auto detections the human rejects are kept in the file with `review_label = "neither"` as per-location false-positive signal for dataset curation; not exported as a YOLO class
 - manual detections the user adds and then removes are deleted from the array outright — no audit record is kept for those
 - `reviewed` distinguishes "human has looked at this box" from "human has assigned a label"; a box can be unreviewed with `review_label = null`
@@ -179,7 +179,7 @@ Notes:
 State rules without `is_active`:
 
 - detection present with `review_label = null` means it is still active in the review queue and has not been labeled yet
-- detection present with `review_label = ship_non_sts` or `ships_sts` means it is active and exportable
+- detection present with `review_label = ship_non_sts` or `ships_sts` means it is active and exportable as reviewed ground truth, independent of `source_type`
 - auto detection present with `review_label = neither` means the model produced a false positive at that location; the detection is retained as per-location false-positive signal, excluded from the active review queue and from YOLO export
 - manual detection removed from the array means it no longer exists and is excluded from both queue and export
 
@@ -211,6 +211,8 @@ Persist in each image file:
 
 Do not persist only final labels. We need the in-progress state too so interrupted work can resume and be handed off if needed.
 
+Do not split training counts or export eligibility by auto/manual source. For positive labels, the reviewed `review_label` is the ground-truth decision; `source_type` only explains how the bbox entered the review file.
+
 Do not persist an `is_active` flag. Auto detections the human rejects stay in the file with `review_label = "neither"`. Manual detections the user adds then removes are deleted from the array entirely.
 
 Do not persist a `review_order` field. Array order is the single source of truth for per-image traversal order, and `detail_cursor` resumes against that stored order directly.
@@ -223,8 +225,9 @@ The review UI exposes a per-image "Re-run detections" button that regenerates au
 
 Behavior when pressed:
 
-- wipe all detections where `source_type = auto`, including any human labels attached to them
-- preserve all detections where `source_type = manual` exactly as they are
+- do not silently discard reviewed positive labels. A reviewed `ship_non_sts` or `ships_sts` bbox is ground truth regardless of `source_type`, so re-running detections must either be blocked until the user explicitly discards that review work, or preserve those reviewed positive bboxes as ground-truth annotations before adding fresh auto detections.
+- wipe only unreviewed auto detections and auto detections labeled `neither` when regenerating model candidates
+- preserve all reviewed positive detections exactly as training labels, whether their `source_type` is `auto` or `manual`
 - reset `review_status` to `overview_1`
 - reset `detail_cursor` to `0`
 - run fresh model inference and populate new auto detections with new `detection_id` values

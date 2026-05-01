@@ -57,6 +57,18 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def clamp_bbox_to_unit(x_center: float, y_center: float, width: float, height: float) -> tuple[float, float, float, float]:
+    x1 = max(0.0, min(1.0, float(x_center) - float(width) / 2.0))
+    x2 = max(0.0, min(1.0, float(x_center) + float(width) / 2.0))
+    y1 = max(0.0, min(1.0, float(y_center) - float(height) / 2.0))
+    y2 = max(0.0, min(1.0, float(y_center) + float(height) / 2.0))
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0, x2 - x1, y2 - y1)
+
+
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -604,6 +616,7 @@ def prev_active_index(review: dict[str, Any], start: int) -> int | None:
 def sync_review_status(review: dict[str, Any]) -> tuple[str, int | None]:
     current_status = review.get("review_status", "overview_1")
     pending_index = first_unreviewed_active_index(review)
+    detection_count = len(review.get("detections", []))
 
     if current_status == "completed":
         if pending_index is None:
@@ -613,6 +626,10 @@ def sync_review_status(review: dict[str, Any]) -> tuple[str, int | None]:
         review["detail_cursor"] = pending_index
         return "detail", pending_index
     if pending_index is None:
+        if detection_count == 0:
+            review["review_status"] = "overview_1"
+            review["detail_cursor"] = None
+            return "overview_1", None
         review["review_status"] = "completed"
         review["detail_cursor"] = None
         return "completed", None
@@ -707,6 +724,7 @@ def create_manual_detection(
 ) -> str:
     detection_id = next_detection_id(review, "manual")
     reviewed_at = utcnow_iso()
+    x_center, y_center, width, height = clamp_bbox_to_unit(x_center, y_center, width, height)
     review.setdefault("detections", []).append(
         {
             "detection_id": detection_id,
@@ -739,6 +757,7 @@ def update_detection_geometry(
 ) -> None:
     detection = find_detection(review, detection_id)
     reviewed_at = utcnow_iso()
+    x_center, y_center, width, height = clamp_bbox_to_unit(x_center, y_center, width, height)
     detection["x_center"] = clamp_norm(x_center)
     detection["y_center"] = clamp_norm(y_center)
     detection["width"] = clamp_norm(width)
@@ -765,6 +784,7 @@ def label_detection(
 ) -> tuple[str, int | None]:
     detection = find_detection(review, detection_id)
     reviewed_at = utcnow_iso()
+    x_center, y_center, width, height = clamp_bbox_to_unit(x_center, y_center, width, height)
     detection["class_id"] = int(class_id)
     detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
     detection["review_label"] = review_label
@@ -812,6 +832,9 @@ def delete_detection(review: dict[str, Any], detection_id: str) -> tuple[str, in
 def mark_all_active_detections_reviewed(review: dict[str, Any]) -> int:
     timestamp = utcnow_iso()
     changed = 0
+    if not review.get("detections"):
+        set_review_status(review, "completed", None)
+        return changed
     for detection in review.get("detections", []):
         if not active_detection(detection):
             continue
@@ -943,14 +966,230 @@ def generate_review_crop(
     return {"crop_path": crop_path, "sidecar_path": sidecar_path}
 
 
+def reviewer_for_review_path(review_path: str | Path, reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> str | None:
+    target = repo_resolve(review_path)
+    root = repo_resolve(reviews_dir)
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        return None
+    return relative.parts[0] if len(relative.parts) > 1 else None
+
+
+def review_crop_paths(image_key: str, detection_id: str, crop_root: str | Path = WORKSPACE_DIR / "cache" / "review_crops") -> tuple[Path, Path]:
+    crop_dir = repo_resolve(crop_root) / str(image_key)
+    return crop_dir / f"{detection_id}.png", crop_dir / f"{detection_id}.json"
+
+
+def bbox_matches_sidecar(sidecar_bbox: Any, detection: dict[str, Any]) -> bool:
+    if not isinstance(sidecar_bbox, dict):
+        return False
+    for key in ("x_center", "y_center", "width", "height"):
+        try:
+            if abs(float(sidecar_bbox.get(key)) - float(detection[key])) > 1e-9:
+                return False
+        except (TypeError, ValueError, KeyError):
+            return False
+    return True
+
+
+def crop_sidecar_warnings(crop_path: Path, sidecar_path: Path, detection: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if not crop_path.exists():
+        warnings.append("missing_crop")
+    if not sidecar_path.exists():
+        warnings.append("missing_crop_metadata")
+        return warnings
+
+    try:
+        sidecar = load_json(sidecar_path, default={})
+    except json.JSONDecodeError:
+        warnings.append("invalid_crop_metadata")
+        return warnings
+
+    if not bbox_matches_sidecar(sidecar.get("bbox"), detection):
+        warnings.append("stale_crop_geometry")
+    if sidecar.get("review") != crop_review_metadata(detection):
+        warnings.append("stale_crop_review")
+    source_cache_path = sidecar.get("source_cache_path")
+    if source_cache_path and not repo_resolve(str(source_cache_path)).exists():
+        warnings.append("missing_source_cache")
+    return warnings
+
+
+def review_file_groups(reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> dict[str, list[tuple[dict[str, Any], Path]]]:
+    root = repo_resolve(reviews_dir)
+    groups: dict[str, list[tuple[dict[str, Any], Path]]] = {}
+    if not root.exists():
+        return groups
+    for path in sorted(root.glob("**/*.json")):
+        review = load_review_document(path)
+        image_key = str(review.get("image_key") or path.stem)
+        review.setdefault("image_key", image_key)
+        groups.setdefault(image_key, []).append((review, path))
+    return groups
+
+
+def overview_class_name(review_label: Any) -> str | None:
+    if review_label in REVIEW_LABEL_TO_CLASS:
+        return CLASS_ID_TO_NAME[REVIEW_LABEL_TO_CLASS[str(review_label)]]
+    if review_label == "neither":
+        return "neither"
+    return None
+
+
+def review_overview_tile(
+    review: dict[str, Any],
+    review_path: Path,
+    detection: dict[str, Any],
+    *,
+    reviews_dir: str | Path,
+    crop_root: str | Path,
+    padding_px: int,
+    generate_crops: bool,
+) -> tuple[dict[str, Any], bool]:
+    image_key = str(review["image_key"])
+    detection_id = str(detection["detection_id"])
+    crop_path, sidecar_path = review_crop_paths(image_key, detection_id, crop_root)
+    warnings = crop_sidecar_warnings(crop_path, sidecar_path, detection)
+    generated = False
+
+    if generate_crops and warnings:
+        try:
+            generate_review_crop(review, detection_id, review_path=review_path, crop_root=crop_root, padding_px=padding_px)
+            generated = True
+            warnings = crop_sidecar_warnings(crop_path, sidecar_path, detection)
+        except Exception as exc:
+            warnings = [warning for warning in warnings if warning != "missing_crop"]
+            warnings.append(f"crop_error:{exc}")
+
+    review_label = detection.get("review_label")
+    class_id = REVIEW_LABEL_TO_CLASS.get(str(review_label)) if review_label in REVIEW_LABEL_TO_CLASS else None
+    area = max(0.0, float(detection.get("width") or 0.0)) * max(0.0, float(detection.get("height") or 0.0))
+    tile = {
+        "tile_id": f"{image_key}:{detection_id}",
+        "image_key": image_key,
+        "image_filename": review.get("image_filename") or f"{image_key}.png",
+        "date": review.get("date"),
+        "tile_row": review.get("tile_row"),
+        "tile_col": review.get("tile_col"),
+        "detection_id": detection_id,
+        "reviewer": review.get("reviewer") or reviewer_for_review_path(review_path, reviews_dir),
+        "review_status": review.get("review_status"),
+        "review_file": str(review_path),
+        "crop_path": str(crop_path) if crop_path.exists() else None,
+        "crop_url": "/cache/" + repo_relative(crop_path) if crop_path.exists() else None,
+        "review_label": review_label,
+        "class_id": class_id,
+        "class_name": overview_class_name(review_label),
+        "source_type": detection.get("source_type"),
+        "confidence": detection.get("confidence"),
+        "source_models": list(detection.get("source_models") or []),
+        "reviewed": bool(detection.get("reviewed")),
+        "reviewed_at": detection.get("reviewed_at"),
+        "bbox": {
+            "x_center": float(detection.get("x_center") or 0.0),
+            "y_center": float(detection.get("y_center") or 0.0),
+            "width": float(detection.get("width") or 0.0),
+            "height": float(detection.get("height") or 0.0),
+        },
+        "bbox_area": area,
+        "warnings": warnings,
+    }
+    return tile, generated
+
+
+def build_review_bbox_overview(
+    reviews_dir: str | Path = DEFAULT_REVIEWS_DIR,
+    *,
+    crop_root: str | Path = WORKSPACE_DIR / "cache" / "review_crops",
+    padding_px: int = 48,
+    include_incomplete: bool = False,
+    generate_crops: bool = True,
+) -> dict[str, Any]:
+    groups = review_file_groups(reviews_dir)
+    tiles: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    generated_crop_count = 0
+
+    for image_key, group in sorted(groups.items()):
+        completed = [(review, path) for review, path in group if review.get("review_status") == "completed"]
+        if len(completed) > 1:
+            conflicts.append(
+                {
+                    "image_key": image_key,
+                    "review_files": [str(path) for _, path in completed],
+                    "reviewers": [review.get("reviewer") or reviewer_for_review_path(path, reviews_dir) for review, path in completed],
+                    "status": "needs_reconciliation",
+                }
+            )
+            continue
+        if completed:
+            review, review_path = completed[0]
+        elif include_incomplete and len(group) == 1:
+            review, review_path = group[0]
+        else:
+            continue
+
+        for detection in review.get("detections", []):
+            if not bool(detection.get("reviewed")):
+                continue
+            tile, generated = review_overview_tile(
+                review,
+                review_path,
+                detection,
+                reviews_dir=reviews_dir,
+                crop_root=crop_root,
+                padding_px=padding_px,
+                generate_crops=generate_crops,
+            )
+            generated_crop_count += 1 if generated else 0
+            tiles.append(tile)
+
+    tiles.sort(
+        key=lambda item: (
+            str(item.get("date") or ""),
+            int(item.get("tile_row") or 0),
+            int(item.get("tile_col") or 0),
+            str(item.get("image_key") or ""),
+            str(item.get("detection_id") or ""),
+        )
+    )
+    counts = {
+        "review_file_count": sum(len(group) for group in groups.values()),
+        "reviewed_image_count": len({tile["image_key"] for tile in tiles}),
+        "reviewed_bbox_count": len(tiles),
+        "reviewed_ship_bboxes": sum(1 for tile in tiles if tile.get("review_label") == "ship_non_sts"),
+        "reviewed_ships_bboxes": sum(1 for tile in tiles if tile.get("review_label") == "ships_sts"),
+        "neither_bboxes": sum(1 for tile in tiles if tile.get("review_label") == "neither"),
+        "warning_tile_count": sum(1 for tile in tiles if tile.get("warnings")),
+        "generated_crop_count": generated_crop_count,
+        "conflict_image_count": len(conflicts),
+    }
+    return {"schema_version": 1, "counts": counts, "tiles": tiles, "conflicts": conflicts}
+
+
 def queue_progress(reviews: list[dict[str, Any]]) -> dict[str, int]:
+    reviewed_ship_count = 0
+    reviewed_ships_count = 0
+    for review in reviews:
+        for detection in review.get("detections", []):
+            if not detection.get("reviewed"):
+                continue
+            if detection.get("review_label") == "ship_non_sts":
+                reviewed_ship_count += 1
+            elif detection.get("review_label") == "ships_sts":
+                reviewed_ships_count += 1
     return {
         "total_images": len(reviews),
         "completed_images": sum(1 for review in reviews if review.get("review_status") == "completed"),
+        "reviewed_ship_bboxes": reviewed_ship_count,
+        "reviewed_ships_bboxes": reviewed_ships_count,
     }
 
 
 def exportable_detections(review: dict[str, Any]) -> list[dict[str, Any]]:
+    # Reviewed positive labels are ground truth regardless of auto/manual origin.
     return [
         detection
         for detection in review.get("detections", [])
