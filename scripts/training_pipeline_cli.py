@@ -46,7 +46,22 @@ def print_human(payload: dict[str, Any]) -> None:
         print(f"ready: {result['ready']}")
     for item in result.get("missing") or []:
         print(f"missing: {item}")
-    for key in ("dataset_dir", "dataset_manifest", "data_yaml", "exported_image_count", "exported_label_count", "run_dir", "image_key", "source_content_hash"):
+    for key in (
+        "manifest_path",
+        "cache_dir",
+        "processed_count",
+        "imported_count",
+        "skipped_count",
+        "failed_count",
+        "dataset_dir",
+        "dataset_manifest",
+        "data_yaml",
+        "exported_image_count",
+        "exported_label_count",
+        "run_dir",
+        "image_key",
+        "source_content_hash",
+    ):
         if key in result:
             print(f"{key}: {result[key]}")
     if "command_line" in result:
@@ -120,6 +135,23 @@ def command_export_dataset(args: argparse.Namespace) -> tuple[int, dict[str, Any
     return 0, envelope("export-dataset", ok=True, result=result, warnings=list(manifest.get("warnings") or []))
 
 
+def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.import_training_data(
+        list(args.source),
+        manifest_path=args.manifest,
+        cache_dir=args.cache_dir,
+        render_profile_value=args.render_profile,
+        recursive=bool(args.recursive),
+        force=bool(args.force),
+        dry_run=bool(args.dry_run),
+    )
+    warnings = [f"Failed to import {item.get('source')}: {item.get('reason')}" for item in result.get("failed") or []]
+    add_diagnostics(result, args, "import_training_data", manifest_path=args.manifest, cache_dir=args.cache_dir)
+    if int(result.get("imported_count") or 0) + int(result.get("skipped_count") or 0) == 0:
+        return 1, envelope("import-data", ok=False, result=result, warnings=warnings, errors=["No input source could be processed successfully"])
+    return 0, envelope("import-data", ok=True, result=result, warnings=warnings)
+
+
 def command_check_training_ready(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     readiness = pipeline.check_training_readiness(args.selection, args.config)
     result = {"ready": readiness["ready"], "missing": readiness["missing"]}
@@ -169,6 +201,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--human", action="store_true", help="Print concise human-readable output")
     parser.add_argument("--verbose", action="store_true", help="Include additional diagnostics when available")
     subparsers = parser.add_subparsers(dest="command")
+
+    import_parser = subparsers.add_parser("import-data")
+    import_parser.add_argument("--source", action="append", required=True)
+    import_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    import_parser.add_argument("--cache-dir", default=str(pipeline.DEFAULT_IMPORT_CACHE_DIR))
+    import_parser.add_argument("--render-profile", default="auto")
+    import_parser.add_argument("--recursive", action="store_true")
+    import_parser.add_argument("--force", action="store_true")
+    import_parser.add_argument("--dry-run", action="store_true")
+    import_parser.set_defaults(handler=command_import_data)
 
     export_parser = subparsers.add_parser("export-dataset")
     export_parser.add_argument("--selection", required=True)

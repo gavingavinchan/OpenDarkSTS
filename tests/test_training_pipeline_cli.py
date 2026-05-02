@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 from _helpers import detection, write_json, write_review, write_selection, write_training_config
 
 
@@ -33,6 +35,139 @@ def assert_envelope(envelope: dict, *, command: str, ok: bool) -> None:
     assert isinstance(envelope["result"], dict)
     assert isinstance(envelope["warnings"], list)
     assert isinstance(envelope["errors"], list)
+
+
+def write_png(path: Path, *, size: tuple[int, int] = (8, 6)) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, color=(10, 20, 30)).save(path)
+    return path
+
+
+def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+
+    process = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="import-data", ok=True)
+    result = envelope["result"]
+    assert result["processed_count"] == 1
+    assert result["imported_count"] == 1
+    assert result["skipped_count"] == 0
+    imported = result["imported"][0]
+    assert imported["image_key"].startswith("img_")
+    assert imported["render_profile_kind"] == "rgb_original"
+    assert Path(imported["cache_path"]).is_file()
+
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["schema_version"] == 1
+    assert manifest["manifest_type"] == "training_import"
+    assert manifest["created_at"]
+    assert manifest["updated_at"]
+    assert manifest["cache_dir"] == str(cache_dir)
+    entry = manifest["images"][imported["image_key"]]
+    assert entry["schema_version"] == 1
+    assert entry["original_filename"] == "source.png"
+    assert entry["source_path"] == str(source)
+    assert entry["browser_relative_path"] is None
+    assert entry["source_collection"] == str(source)
+    assert entry["cache_path"] == imported["cache_path"]
+    assert entry["width"] == 8
+    assert entry["height"] == 6
+    assert entry["cache_width"] == 8
+    assert entry["cache_height"] == 6
+    assert entry["cache_content_hash"].startswith("sha256:")
+    assert entry["loader"] == "pillow"
+    assert entry["import_status"] == "imported"
+    assert entry["imported_at"]
+    assert entry["updated_at"]
+    assert entry["warnings"] == []
+
+
+def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    assert first.returncode == 0
+
+    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+
+    assert second.returncode == 0
+    envelope = parse_envelope(second)
+    assert_envelope(envelope, command="import-data", ok=True)
+    assert envelope["result"]["imported_count"] == 0
+    assert envelope["result"]["skipped_count"] == 1
+    assert envelope["result"]["skipped"][0]["status"] == "already_imported"
+
+
+def test_cli_import_data_dry_run_does_not_write_manifest_or_cache(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+
+    process = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--dry-run")
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="import-data", ok=True)
+    assert envelope["result"]["imported"][0]["status"] == "imported"
+    assert not manifest_path.exists()
+    assert not cache_dir.exists()
+
+
+def test_cli_import_data_regenerates_missing_cache_with_documented_status(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    assert first.returncode == 0
+    first_item = parse_envelope(first)["result"]["imported"][0]
+    Path(first_item["cache_path"]).unlink()
+
+    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+
+    assert second.returncode == 0
+    envelope = parse_envelope(second)
+    assert_envelope(envelope, command="import-data", ok=True)
+    assert envelope["result"]["imported_count"] == 1
+    assert envelope["result"]["imported"][0]["status"] == "regenerated_cache"
+    entry = json.loads(manifest_path.read_text())["images"][first_item["image_key"]]
+    assert entry["import_status"] == "regenerated_cache"
+    assert Path(entry["cache_path"]).is_file()
+
+
+def test_cli_import_data_folder_scan_skips_hidden_and_unsupported_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "inputs"
+    write_png(input_dir / "visible.png")
+    write_png(input_dir / ".hidden.png")
+    (input_dir / "notes.txt").write_text("not an image\n")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+
+    process = run_cli("import-data", "--source", str(input_dir), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="import-data", ok=True)
+    assert envelope["result"]["processed_count"] == 1
+    assert envelope["result"]["imported_count"] == 1
+    item = envelope["result"]["imported"][0]
+    entry = json.loads(manifest_path.read_text())["images"][item["image_key"]]
+    assert entry["source_collection"] == str(input_dir)
+
+
+def test_cli_import_data_missing_sources_exit_1(tmp_path: Path) -> None:
+    process = run_cli("import-data", "--source", str(tmp_path / "missing.png"), "--manifest", str(tmp_path / "manifest.json"), "--cache-dir", str(tmp_path / "cache"))
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="import-data", ok=False)
+    assert envelope["result"]["failed_count"] == 1
+    assert "No input source" in envelope["errors"][0]
 
 
 def test_cli_check_training_ready_exits_3_with_blockers(tmp_path: Path) -> None:

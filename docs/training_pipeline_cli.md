@@ -42,6 +42,27 @@ Exit codes:
 
 ## Commands
 
+### `import-data`
+
+Imports local imagery into the step 1 training import manifest and browser-ready PNG cache.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py import-data \
+  --source /path/to/image-or-folder
+```
+
+Options:
+
+- `--source <image-or-folder>`: required, repeatable. Supports `.png`, `.jpg`, `.jpeg`, `.tif`, and `.tiff`.
+- `--manifest <path>`: import manifest path. Defaults to `workspace/manifests/training_import_manifest.json`.
+- `--cache-dir <path>`: rendered PNG cache directory. Defaults to `workspace/cache/imported_images`.
+- `--render-profile auto|rgb_original|true_color|false_color|<profile.json>`: rendering profile. Defaults to `auto`.
+- `--recursive`: scan folders recursively. Hidden files and directories are skipped.
+- `--force`: refresh an existing manifest/cache entry.
+- `--dry-run`: validate inputs and report actions without writing the manifest or cache.
+
+The command never modifies source files. It writes or updates the import manifest and cache unless `--dry-run` is used. Already-imported identical image/profile pairs are skipped and reported in `skipped_count`.
+
 ### `export-dataset`
 
 Exports a dataset selection manifest into YOLO layout.

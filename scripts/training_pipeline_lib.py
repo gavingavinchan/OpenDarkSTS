@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import csv
+import copy
 import json
 import math
 import platform
@@ -11,11 +12,58 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
+try:
+    from . import visual_review_lib as review_lib
+except ImportError:
+    import visual_review_lib as review_lib
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = ROOT_DIR / "workspace"
 SCHEMA_VERSION = 1
 SPLITS = ("train", "val", "test")
+SUPPORTED_IMPORT_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+DEFAULT_IMPORT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "training_import_manifest.json"
+DEFAULT_IMPORT_CACHE_DIR = WORKSPACE_DIR / "cache" / "imported_images"
+RGB_ORIGINAL_RENDER_PROFILE = {"kind": "rgb_original"}
+TRUE_COLOR_RENDER_PROFILE = {
+    "kind": "true_color",
+    "bands": [1, 2, 3],
+    "normalization": "current_loader_default",
+    "output_colorspace": "RGB",
+}
+FALSE_COLOR_RENDER_PROFILE = {
+    "kind": "false_color",
+    "bands": [4, 3, 2],
+    "normalization": "current_loader_default",
+    "output_colorspace": "RGB",
+}
+DOCUMENTED_IMPORT_STATUSES = {"imported", "already_imported", "regenerated_cache", "failed"}
+REQUIRED_IMPORT_ENTRY_FIELDS = {
+    "schema_version",
+    "image_key",
+    "original_filename",
+    "source_path",
+    "browser_relative_path",
+    "source_collection",
+    "source_size_bytes",
+    "source_mtime",
+    "source_content_hash",
+    "width",
+    "height",
+    "cache_path",
+    "cache_width",
+    "cache_height",
+    "cache_content_hash",
+    "render_profile",
+    "loader",
+    "import_status",
+    "imported_at",
+    "updated_at",
+    "warnings",
+}
 REVIEW_LABEL_TO_CLASS = {"ship_non_sts": 0, "ships_sts": 1}
 CLASS_ID_TO_NAME = {0: "ship", 1: "ships"}
 RECOGNIZED_RESULTS_COLUMNS = {
@@ -51,6 +99,14 @@ def repo_resolve(path_value: str | Path) -> Path:
     return (ROOT_DIR / path).resolve()
 
 
+def repo_relative(path: str | Path) -> str:
+    candidate = Path(path).resolve()
+    try:
+        return str(candidate.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(candidate)
+
+
 def load_json(path: str | Path) -> dict[str, Any]:
     target = repo_resolve(path)
     payload = json.loads(target.read_text())
@@ -69,6 +125,372 @@ def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     target = repo_resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def load_import_manifest(manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH) -> dict[str, Any]:
+    target = repo_resolve(manifest_path)
+    now = utcnow_iso_for_training()
+    if not target.exists():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "manifest_type": "training_import",
+            "created_at": now,
+            "updated_at": now,
+            "cache_dir": repo_relative(DEFAULT_IMPORT_CACHE_DIR),
+            "images": {},
+        }
+    if not target.is_file():
+        raise ValueError(f"Import manifest path is not a file: {target}")
+    manifest = json.loads(target.read_text())
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Import manifest must be a JSON object: {target}")
+    if int(manifest.get("schema_version", SCHEMA_VERSION)) != SCHEMA_VERSION:
+        raise ValueError("Import manifest must use schema_version 1")
+    images = manifest.setdefault("images", {})
+    if not isinstance(images, dict):
+        raise ValueError("Import manifest images field must be a JSON object")
+    manifest.setdefault("schema_version", SCHEMA_VERSION)
+    manifest.setdefault("manifest_type", "training_import")
+    manifest.setdefault("created_at", now)
+    manifest.setdefault("updated_at", now)
+    manifest.setdefault("cache_dir", repo_relative(DEFAULT_IMPORT_CACHE_DIR))
+    return manifest
+
+
+def save_import_manifest(manifest_path: str | Path, manifest: dict[str, Any]) -> None:
+    manifest["updated_at"] = utcnow_iso_for_training()
+    write_json(manifest_path, manifest)
+
+
+def default_render_profile(kind: str) -> dict[str, Any]:
+    profiles = {
+        "rgb_original": RGB_ORIGINAL_RENDER_PROFILE,
+        "true_color": TRUE_COLOR_RENDER_PROFILE,
+        "false_color": FALSE_COLOR_RENDER_PROFILE,
+    }
+    if kind not in profiles:
+        raise ValueError(f"Unknown render profile kind: {kind!r}")
+    return copy.deepcopy(profiles[kind])
+
+
+def resolve_import_render_profile(render_profile_value: str, source_path: str | Path) -> dict[str, Any]:
+    value = str(render_profile_value or "auto")
+    source_suffix = Path(source_path).suffix.lower()
+    if value == "auto":
+        if source_suffix in {".png", ".jpg", ".jpeg"}:
+            profile = default_render_profile("rgb_original")
+        elif source_suffix in {".tif", ".tiff"}:
+            profile = default_render_profile("true_color")
+        else:
+            raise ValueError(f"Unsupported image suffix for auto render profile: {source_suffix}")
+    else:
+        profile_path = repo_resolve(value)
+        if profile_path.is_file():
+            profile = load_json(profile_path)
+        else:
+            profile = default_render_profile(value)
+    review_lib.validate_render_profile(profile)
+    return profile
+
+
+def is_hidden_path(path: Path) -> bool:
+    return any(part.startswith(".") for part in path.parts if part not in {".", ".."})
+
+
+def scan_import_source(source: str | Path, *, recursive: bool) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    source_path = repo_resolve(source)
+    if not source_path.exists():
+        return [], {
+            "image_key": None,
+            "source": str(source_path),
+            "cache_path": None,
+            "render_profile_kind": None,
+            "status": "failed",
+            "reason": "Source path not found",
+        }
+    if source_path.is_file():
+        if source_path.name.startswith(".") or source_path.suffix.lower() not in SUPPORTED_IMPORT_SUFFIXES:
+            return [], None
+        return [{"source_path": source_path, "source_collection": str(source_path)}], None
+    if not source_path.is_dir():
+        return [], {
+            "image_key": None,
+            "source": str(source_path),
+            "cache_path": None,
+            "render_profile_kind": None,
+            "status": "failed",
+            "reason": "Source path is neither a file nor a directory",
+        }
+
+    pattern = "**/*" if recursive else "*"
+    files: list[dict[str, Any]] = []
+    for candidate in sorted(source_path.glob(pattern)):
+        try:
+            relative = candidate.relative_to(source_path)
+        except ValueError:
+            relative = Path(candidate.name)
+        if is_hidden_path(relative):
+            continue
+        if candidate.is_dir():
+            continue
+        if not candidate.is_file() or candidate.suffix.lower() not in SUPPORTED_IMPORT_SUFFIXES:
+            continue
+        files.append({"source_path": candidate, "source_collection": str(source_path)})
+    return files, None
+
+
+def discover_import_files(sources: list[str | Path], *, recursive: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    files: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for source in sources:
+        discovered, failure = scan_import_source(source, recursive=recursive)
+        if failure is not None:
+            failed.append(failure)
+        for candidate in discovered:
+            path = repo_resolve(candidate["source_path"])
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append({"source_path": resolved, "source_collection": candidate["source_collection"]})
+    return files, failed
+
+
+def render_profile_bands(render_profile: dict[str, Any]) -> list[int]:
+    bands = render_profile.get("bands")
+    if not isinstance(bands, list) or not bands:
+        raise ValueError("render_profile bands must be a non-empty list")
+    parsed = [int(value) for value in bands[:3]]
+    while len(parsed) < 3:
+        parsed.append(parsed[-1])
+    return parsed
+
+
+def load_import_image(source_path: str | Path, render_profile: dict[str, Any]) -> tuple[Image.Image, dict[str, Any]]:
+    path = repo_resolve(source_path)
+    kind = str(render_profile.get("kind"))
+    if kind == "rgb_original":
+        with Image.open(path) as image:
+            rgb = image.convert("RGB")
+            return rgb.copy(), {"loader": "pillow", "mode": image.mode, "width": rgb.width, "height": rgb.height}
+
+    rasterio = review_lib.optional_rasterio()
+    if rasterio is not None:
+        with rasterio.open(path) as dataset:
+            band_count = max(int(dataset.count), 1)
+            indexes = [max(1, min(index, band_count)) for index in render_profile_bands(render_profile)]
+            data = dataset.read(indexes)
+            import numpy as np
+
+            if data.ndim == 2:
+                data = np.stack([data, data, data], axis=0)
+            normalized = np.stack([review_lib.normalize_band_to_uint8(data[index]) for index in range(3)], axis=-1)
+            image = Image.fromarray(normalized, mode="RGB")
+            metadata = {
+                "loader": "rasterio",
+                "dtype": str(data.dtype),
+                "band_count": band_count,
+                "bands": indexes,
+                "width": int(dataset.width),
+                "height": int(dataset.height),
+                "bounds": {
+                    "left": float(dataset.bounds.left),
+                    "bottom": float(dataset.bounds.bottom),
+                    "right": float(dataset.bounds.right),
+                    "top": float(dataset.bounds.top),
+                },
+            }
+            return image, metadata
+
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        return rgb.copy(), {
+            "loader": "pillow",
+            "mode": image.mode,
+            "width": rgb.width,
+            "height": rgb.height,
+            "render_profile_approximated": kind,
+        }
+
+
+def render_import_cache(source_path: str | Path, cache_path: str | Path, render_profile: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    output = repo_resolve(cache_path)
+    image, metadata = load_import_image(source_path, render_profile)
+    if not dry_run:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        image.save(output, format="PNG")
+    return {
+        "path": repo_relative(output),
+        "width": int(image.width),
+        "height": int(image.height),
+        "cache_content_hash": None if dry_run else file_hash(output),
+        "loader": metadata.get("loader"),
+        "metadata": metadata,
+        "rendered_at": utcnow_iso_for_training(),
+    }
+
+
+def import_manifest_entry(
+    source_path: Path,
+    cache_path: Path,
+    render_profile: dict[str, Any],
+    render_info: dict[str, Any],
+    *,
+    source_collection: str,
+    import_status: str,
+    previous_entry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if import_status not in DOCUMENTED_IMPORT_STATUSES:
+        raise ValueError(f"Unknown import status: {import_status}")
+    now = utcnow_iso_for_training()
+    source_hash = review_lib.source_content_hash(source_path)
+    image_key = review_lib.image_key_for_identity_payload(
+        {
+            "source_content_hash": source_hash,
+            "render_profile": render_profile,
+        }
+    )
+    stat = source_path.stat()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "image_key": image_key,
+        "original_filename": source_path.name,
+        "source_path": str(source_path),
+        "browser_relative_path": None,
+        "source_collection": source_collection,
+        "source_kind": "imported_image",
+        "source_content_hash": source_hash,
+        "source_size_bytes": stat.st_size,
+        "source_mtime": stat.st_mtime,
+        "width": int(render_info["width"]),
+        "height": int(render_info["height"]),
+        "cache_path": repo_relative(cache_path),
+        "cache_width": int(render_info["width"]),
+        "cache_height": int(render_info["height"]),
+        "cache_content_hash": render_info.get("cache_content_hash"),
+        "render_profile": render_profile,
+        "loader": render_info.get("loader"),
+        "import_status": import_status,
+        "imported_at": (previous_entry or {}).get("imported_at") or now,
+        "updated_at": now,
+        "warnings": [],
+        "render": {
+            "loader": render_info.get("loader"),
+            "rendered_at": render_info.get("rendered_at"),
+            "output_format": "png",
+            "metadata": render_info.get("metadata") or {},
+        },
+    }
+
+
+def import_result_item(entry: dict[str, Any], status: str) -> dict[str, Any]:
+    if status not in DOCUMENTED_IMPORT_STATUSES:
+        raise ValueError(f"Unknown import status: {status}")
+    return {
+        "image_key": entry["image_key"],
+        "source": entry.get("source_path") or entry.get("source"),
+        "cache_path": entry["cache_path"],
+        "render_profile_kind": entry.get("render_profile", {}).get("kind"),
+        "status": status,
+    }
+
+
+def import_entry_contract_complete(entry: dict[str, Any]) -> bool:
+    if not REQUIRED_IMPORT_ENTRY_FIELDS.issubset(entry):
+        return False
+    if entry.get("import_status") not in DOCUMENTED_IMPORT_STATUSES - {"failed"}:
+        return False
+    if not entry.get("cache_content_hash"):
+        return False
+    return True
+
+
+def import_training_data(
+    sources: list[str | Path],
+    *,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    cache_dir: str | Path = DEFAULT_IMPORT_CACHE_DIR,
+    render_profile_value: str = "auto",
+    recursive: bool = False,
+    force: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if not sources:
+        raise ValueError("At least one --source is required")
+    manifest_file = repo_resolve(manifest_path)
+    cache_root = repo_resolve(cache_dir)
+    if manifest_file.exists() and not manifest_file.is_file():
+        raise ValueError(f"Import manifest path is not a file: {manifest_file}")
+    if cache_root.exists() and not cache_root.is_dir():
+        raise ValueError(f"Import cache path is not a directory: {cache_root}")
+
+    manifest = load_import_manifest(manifest_file)
+    manifest["manifest_type"] = "training_import"
+    manifest["cache_dir"] = repo_relative(cache_root)
+    files, failed = discover_import_files(sources, recursive=recursive)
+    imported: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for candidate in files:
+        source_path = repo_resolve(candidate["source_path"])
+        source_collection = str(candidate["source_collection"])
+        try:
+            render_profile = resolve_import_render_profile(render_profile_value, source_path)
+            image_key = review_lib.image_key_for_source(source_path, render_profile)
+            cache_path = cache_root / f"{image_key}.png"
+            existing = manifest.get("images", {}).get(image_key)
+            cache_exists = cache_path.exists()
+            existing_complete = bool(existing and import_entry_contract_complete(existing))
+            if existing and cache_exists and existing_complete and not force:
+                skipped.append(import_result_item(existing, "already_imported"))
+                continue
+
+            status = "regenerated_cache" if existing else "imported"
+            render_info = render_import_cache(source_path, cache_path, render_profile, dry_run=dry_run)
+            entry = import_manifest_entry(
+                source_path,
+                cache_path,
+                render_profile,
+                render_info,
+                source_collection=source_collection,
+                import_status=status,
+                previous_entry=existing,
+            )
+            imported.append(import_result_item(entry, status))
+            if not dry_run:
+                manifest.setdefault("images", {})[image_key] = entry
+        except Exception as exc:
+            render_profile_kind = None
+            try:
+                render_profile_kind = resolve_import_render_profile(render_profile_value, source_path).get("kind")
+            except Exception:
+                pass
+            failed.append(
+                {
+                    "image_key": None,
+                    "source": str(source_path),
+                    "cache_path": None,
+                    "render_profile_kind": render_profile_kind,
+                    "status": "failed",
+                    "reason": str(exc),
+                }
+            )
+
+    if not dry_run and imported:
+        save_import_manifest(manifest_file, manifest)
+
+    return {
+        "manifest_path": repo_relative(manifest_file),
+        "cache_dir": repo_relative(cache_root),
+        "processed_count": len(imported) + len(skipped) + len(failed),
+        "imported_count": len(imported),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "imported": imported,
+        "skipped": skipped,
+        "failed": failed,
+    }
 
 
 def yaml_defines_required_classes(data_yaml: Path) -> bool:
