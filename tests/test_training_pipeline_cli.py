@@ -47,8 +47,21 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
 
-    process = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    process = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+    )
 
     assert process.returncode == 0
     envelope = parse_envelope(process)
@@ -57,10 +70,15 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert result["processed_count"] == 1
     assert result["imported_count"] == 1
     assert result["skipped_count"] == 0
+    assert result["review_stubs_created_count"] == 1
+    assert result["review_stubs_existing_count"] == 0
+    assert result["review_stubs_skipped_count"] == 0
     imported = result["imported"][0]
     assert imported["image_key"].startswith("img_")
     assert imported["render_profile_kind"] == "rgb_original"
     assert Path(imported["cache_path"]).is_file()
+    assert imported["review_stub_status"] == "created"
+    assert imported["review_stub_path"] == str(reviews_dir / "tester" / f"{imported['image_key']}.json")
 
     manifest = json.loads(manifest_path.read_text())
     assert manifest["schema_version"] == 1
@@ -70,7 +88,9 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert manifest["cache_dir"] == str(cache_dir)
     entry = manifest["images"][imported["image_key"]]
     assert entry["schema_version"] == 1
+    assert entry["image_filename"] == f"{imported['image_key']}.png"
     assert entry["original_filename"] == "source.png"
+    assert entry["display_filename"] == "source.png"
     assert entry["source_path"] == str(source)
     assert entry["browser_relative_path"] is None
     assert entry["source_collection"] == str(source)
@@ -85,6 +105,18 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert entry["imported_at"]
     assert entry["updated_at"]
     assert entry["warnings"] == []
+
+    review = json.loads((reviews_dir / "tester" / f"{imported['image_key']}.json").read_text())
+    assert review["image_key"] == imported["image_key"]
+    assert review["image_filename"] == f"{imported['image_key']}.png"
+    assert review["original_filename"] == "source.png"
+    assert review["display_filename"] == "source.png"
+    assert review["reviewer"] == "tester"
+    assert review["cache_path"] == imported["cache_path"]
+    assert review["width"] == 8
+    assert review["height"] == 6
+    assert review["review_status"] == "overview_1"
+    assert review["detections"] == []
 
 
 def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
@@ -102,6 +134,85 @@ def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
     assert envelope["result"]["imported_count"] == 0
     assert envelope["result"]["skipped_count"] == 1
     assert envelope["result"]["skipped"][0]["status"] == "already_imported"
+
+
+def test_cli_import_data_creates_missing_stub_for_already_imported_image(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+    first = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--no-review-stubs",
+    )
+    assert first.returncode == 0
+
+    second = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+    )
+
+    assert second.returncode == 0
+    envelope = parse_envelope(second)
+    assert_envelope(envelope, command="import-data", ok=True)
+    result = envelope["result"]
+    assert result["imported_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["review_stubs_created_count"] == 1
+    skipped = result["skipped"][0]
+    assert skipped["status"] == "already_imported"
+    assert skipped["review_stub_status"] == "created"
+    assert Path(skipped["review_stub_path"]).is_file()
+
+
+def test_cli_import_data_treats_review_stub_write_failure_as_failed_item(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+    reviews_dir.write_text("not a directory\n")
+
+    process = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+    )
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="import-data", ok=False)
+    assert envelope["result"]["imported_count"] == 0
+    assert envelope["result"]["failed_count"] == 1
+    failed = envelope["result"]["failed"][0]
+    assert failed["review_stub_status"] == "failed"
+    assert "Review stub failed" in failed["reason"]
 
 
 def test_cli_import_data_dry_run_does_not_write_manifest_or_cache(tmp_path: Path) -> None:

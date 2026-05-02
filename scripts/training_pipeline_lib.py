@@ -355,11 +355,16 @@ def import_manifest_entry(
     return {
         "schema_version": SCHEMA_VERSION,
         "image_key": image_key,
+        "image_filename": f"{image_key}.png",
         "original_filename": source_path.name,
+        "display_filename": source_path.name,
         "source_path": str(source_path),
         "browser_relative_path": None,
         "source_collection": source_collection,
         "source_kind": "imported_image",
+        "date": None,
+        "tile_row": None,
+        "tile_col": None,
         "source_content_hash": source_hash,
         "source_size_bytes": stat.st_size,
         "source_mtime": stat.st_mtime,
@@ -396,6 +401,50 @@ def import_result_item(entry: dict[str, Any], status: str) -> dict[str, Any]:
     }
 
 
+def import_entry_for_review_stub(entry: dict[str, Any]) -> dict[str, Any]:
+    adapted = dict(entry)
+    adapted.setdefault("image_filename", f"{entry['image_key']}.png")
+    adapted.setdefault("display_filename", entry.get("original_filename") or adapted["image_filename"])
+    adapted.setdefault("date", None)
+    adapted.setdefault("tile_row", None)
+    adapted.setdefault("tile_col", None)
+    return adapted
+
+
+def attach_review_stub_result(
+    item: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    reviewer: str,
+    reviews_dir: str | Path,
+    skip: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    review_path = review_lib.review_file_path(entry["image_key"], reviewer, reviews_dir)
+    item["review_stub_path"] = repo_relative(review_path)
+    if skip or dry_run:
+        item["review_stub_status"] = "skipped"
+        return item
+    if review_path.exists():
+        item["review_stub_status"] = "existing"
+        return item
+    try:
+        review_stub = review_lib.build_review_stub(import_entry_for_review_stub(entry), reviewer, merged_detections=[])
+        review_lib.write_review_stub(review_doc=review_stub, reviewer=reviewer, reviews_dir=reviews_dir, overwrite=False)
+        item["review_stub_status"] = "created"
+    except Exception as exc:
+        item["review_stub_status"] = "failed"
+        item["review_stub_error"] = str(exc)
+    return item
+
+
+def review_stub_failure_item(item: dict[str, Any]) -> dict[str, Any]:
+    failed_item = dict(item)
+    failed_item["status"] = "failed"
+    failed_item["reason"] = f"Review stub failed: {item.get('review_stub_error') or 'unknown error'}"
+    return failed_item
+
+
 def import_entry_contract_complete(entry: dict[str, Any]) -> bool:
     if not REQUIRED_IMPORT_ENTRY_FIELDS.issubset(entry):
         return False
@@ -412,6 +461,9 @@ def import_training_data(
     manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
     cache_dir: str | Path = DEFAULT_IMPORT_CACHE_DIR,
     render_profile_value: str = "auto",
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+    create_review_stubs: bool = True,
     recursive: bool = False,
     force: bool = False,
     dry_run: bool = False,
@@ -431,6 +483,7 @@ def import_training_data(
     files, failed = discover_import_files(sources, recursive=recursive)
     imported: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    review_stub_counts = {"created": 0, "existing": 0, "skipped": 0}
 
     for candidate in files:
         source_path = repo_resolve(candidate["source_path"])
@@ -443,7 +496,20 @@ def import_training_data(
             cache_exists = cache_path.exists()
             existing_complete = bool(existing and import_entry_contract_complete(existing))
             if existing and cache_exists and existing_complete and not force:
-                skipped.append(import_result_item(existing, "already_imported"))
+                item = import_result_item(existing, "already_imported")
+                item = attach_review_stub_result(
+                    item,
+                    existing,
+                    reviewer=reviewer,
+                    reviews_dir=reviews_dir,
+                    skip=not create_review_stubs,
+                    dry_run=dry_run,
+                )
+                if item["review_stub_status"] == "failed":
+                    failed.append(review_stub_failure_item(item))
+                    continue
+                review_stub_counts[item["review_stub_status"]] += 1
+                skipped.append(item)
                 continue
 
             status = "regenerated_cache" if existing else "imported"
@@ -457,7 +523,20 @@ def import_training_data(
                 import_status=status,
                 previous_entry=existing,
             )
-            imported.append(import_result_item(entry, status))
+            item = import_result_item(entry, status)
+            item = attach_review_stub_result(
+                item,
+                entry,
+                reviewer=reviewer,
+                reviews_dir=reviews_dir,
+                skip=not create_review_stubs,
+                dry_run=dry_run,
+            )
+            if item["review_stub_status"] == "failed":
+                failed.append(review_stub_failure_item(item))
+                continue
+            review_stub_counts[item["review_stub_status"]] += 1
+            imported.append(item)
             if not dry_run:
                 manifest.setdefault("images", {})[image_key] = entry
         except Exception as exc:
@@ -487,6 +566,9 @@ def import_training_data(
         "imported_count": len(imported),
         "skipped_count": len(skipped),
         "failed_count": len(failed),
+        "review_stubs_created_count": review_stub_counts["created"],
+        "review_stubs_existing_count": review_stub_counts["existing"],
+        "review_stubs_skipped_count": review_stub_counts["skipped"],
         "imported": imported,
         "skipped": skipped,
         "failed": failed,

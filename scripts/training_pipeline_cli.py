@@ -53,6 +53,9 @@ def print_human(payload: dict[str, Any]) -> None:
         "imported_count",
         "skipped_count",
         "failed_count",
+        "review_stubs_created_count",
+        "review_stubs_existing_count",
+        "review_stubs_skipped_count",
         "dataset_dir",
         "dataset_manifest",
         "data_yaml",
@@ -141,6 +144,9 @@ def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         manifest_path=args.manifest,
         cache_dir=args.cache_dir,
         render_profile_value=args.render_profile,
+        reviews_dir=args.reviews_dir,
+        reviewer=args.reviewer,
+        create_review_stubs=not bool(args.no_review_stubs),
         recursive=bool(args.recursive),
         force=bool(args.force),
         dry_run=bool(args.dry_run),
@@ -206,9 +212,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--source", action="append", required=True)
     import_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
     import_parser.add_argument("--cache-dir", default=str(pipeline.DEFAULT_IMPORT_CACHE_DIR))
+    import_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    import_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
     import_parser.add_argument("--render-profile", default="auto")
     import_parser.add_argument("--recursive", action="store_true")
     import_parser.add_argument("--force", action="store_true")
+    import_parser.add_argument("--no-review-stubs", action="store_true")
     import_parser.add_argument("--dry-run", action="store_true")
     import_parser.set_defaults(handler=command_import_data)
 

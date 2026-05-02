@@ -25,6 +25,7 @@ try:
         generate_review_crop,
         label_detection,
         list_review_documents,
+        load_manifest,
         load_review_document,
         mark_all_active_detections_reviewed,
         mark_detection_neither,
@@ -59,6 +60,7 @@ except ImportError:
         generate_review_crop,
         label_detection,
         list_review_documents,
+        load_manifest,
         load_review_document,
         mark_all_active_detections_reviewed,
         mark_detection_neither,
@@ -158,8 +160,14 @@ def synced_review_queue() -> list[dict]:
     return reviews
 
 
+def manifest_display_filename(manifest_images: dict, review: dict) -> str | None:
+    entry = manifest_images.get(review.get("image_key")) or {}
+    return entry.get("original_filename") or entry.get("display_filename") or review.get("display_filename") or review.get("original_filename") or entry.get("image_filename") or review.get("image_filename")
+
+
 def build_state(image_id: str | None) -> dict:
     queue_rows = synced_review_queue()
+    manifest_images = load_manifest(MANIFEST_PATH).get("images", {})
     progress = queue_progress(queue_rows)
     selected_image_id = pick_image_id(queue_rows, image_id)
 
@@ -195,7 +203,8 @@ def build_state(image_id: str | None) -> dict:
             {
                 "image_id": row["image_key"],
                 "image_key": row["image_key"],
-                "date": row["date"],
+                "image_filename": manifest_display_filename(manifest_images, row),
+                "date": row.get("date"),
                 "tile_row": int(row.get("tile_row") or 0),
                 "tile_col": int(row.get("tile_col") or 0),
                 "review_status": row["review_status"],
@@ -233,6 +242,7 @@ def build_state(image_id: str | None) -> dict:
         "image": {
             "image_id": review["image_key"],
             "image_key": review["image_key"],
+            "image_filename": manifest_display_filename(manifest_images, review),
             "date": review.get("date"),
             "tile_row": int(review.get("tile_row") or 0),
             "tile_col": int(review.get("tile_col") or 0),
@@ -902,6 +912,17 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       `;
     }}
 
+    function imageDisplayName(image) {{
+      if (!image) return 'Unknown image';
+      return image.image_filename || image.date || image.image_key || image.image_id || 'Unknown image';
+    }}
+
+    function imageLocationText(image) {{
+      if (!image) return 'Unknown image';
+      if (image.date) return `${{image.date}} (${{image.tile_row}},${{image.tile_col}})`;
+      return imageDisplayName(image);
+    }}
+
     function renderSidebar() {{
       const host = document.getElementById('sidebar');
       if (!state.image) {{
@@ -920,11 +941,11 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         <div class="card">
           <div class="status-line">
             <span class="badge ${{current.review_status}}">${{statusLabels[current.review_status] || current.review_status}}</span>
-            <span>${{current.date}}</span>
+            <span>${{imageDisplayName(current)}}</span>
           </div>
-          <h2 style="margin-top:12px">${{current.date}} (${{current.tile_row}},${{current.tile_col}})</h2>
+          <h2 style="margin-top:12px">${{imageLocationText(current)}}</h2>
           <div class="meta-grid">
-            <div class="meta-block"><label>Grid</label><strong>(${{current.tile_row}},${{current.tile_col}})</strong></div>
+            <div class="meta-block"><label>${{current.date ? 'Grid' : 'Image Key'}}</label><strong>${{current.date ? `(${{current.tile_row}},${{current.tile_col}})` : current.image_key}}</strong></div>
             <div class="meta-block"><label>Size</label><strong>${{current.width}} x ${{current.height}}</strong></div>
             <div class="meta-block"><label>Active</label><strong>${{counts.active_detections}}</strong></div>
             <div class="meta-block"><label>Reviewed</label><strong>${{counts.reviewed_active_detections}}</strong></div>
@@ -996,7 +1017,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
             ${{state.queue.images.map(item => `
               <div class="queue-item ${{item.review_status === 'completed' ? 'completed' : ''}} ${{item.image_id === current.image_id ? 'active' : ''}}" onclick='openImage(${{JSON.stringify(item.image_id)}})'>
                 <div>
-                  <strong>${{item.date}} (${{item.tile_row}},${{item.tile_col}})</strong><br>
+                  <strong>${{imageLocationText(item)}}</strong><br>
                   <small>${{statusLabels[item.review_status] || item.review_status}}</small>
                 </div>
                 <small>#${{item.queue_index + 1}}</small>

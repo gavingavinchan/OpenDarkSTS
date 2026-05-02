@@ -17,6 +17,8 @@ For each weight, record enough information to recreate or re-obtain it:
 
 Ultralytics training can be deterministic for a fixed environment, seed, and device, but byte-identical checkpoints are not guaranteed across package, CUDA, PyTorch, driver, or hardware changes.
 
+Portable collaborator bundles are not an exception to this rule. Any future `export-bundle` command that includes `*.pt` files must also include the matching recreation documentation from this file or an adjacent weight-specific markdown file. Any future `import-bundle` command must reject, skip, or quarantine bundled weights whose recreation metadata is missing. Annotation-only bundles should omit weights by default.
+
 ## Root Base Weights
 
 These are upstream/base weights used as starting points for project training runs. They are not trained on OpenDarkSTS project data.

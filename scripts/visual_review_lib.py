@@ -454,6 +454,8 @@ def build_review_stub(entry: dict[str, Any], reviewer: str, merged_detections: l
         "schema_version": 1,
         "image_key": entry["image_key"],
         "image_filename": entry["image_filename"],
+        "original_filename": entry.get("original_filename"),
+        "display_filename": entry.get("display_filename") or entry.get("original_filename") or entry["image_filename"],
         "reviewer": reviewer,
         "preprocess_fingerprint": fingerprint,
         "date": entry.get("date"),

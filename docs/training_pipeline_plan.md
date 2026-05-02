@@ -70,6 +70,8 @@ scripts/training_pipeline_cli.py training-status --run-dir workspace/runs/<run_g
 scripts/training_pipeline_cli.py stop-training --run-dir workspace/runs/<run_group>/<run_name>
 scripts/training_pipeline_cli.py write-evaluation-report --run-group <run_group> ...
 scripts/training_pipeline_cli.py image-key --source <path> --render-profile <profile.json>
+scripts/training_pipeline_cli.py export-bundle --output workspace/bundles/<bundle_name>.zip ...
+scripts/training_pipeline_cli.py import-bundle --bundle workspace/bundles/<bundle_name>.zip ...
 ```
 
 The exact flags may evolve, but these capabilities should exist outside the GUI. `import-data` is specified as the next backend-first step 1 command. `run-auto-detect` should follow once the imported-image manifest helpers are stable.
@@ -85,6 +87,8 @@ Recommended CLI behavior:
 - `start-training` starts training in the background, records process/log metadata, and writes initial `training_metadata.json`.
 - `training-status` reads run metadata, process state, log tail, and `results.csv` series for live diagnostics.
 - `write-evaluation-report` writes the JSON and Markdown evaluation report and records any promotion decision.
+- `export-bundle` writes a portable collaborator ZIP containing enough workspace artifacts to continue annotation, dataset export, training, and weight evaluation on another machine.
+- `import-bundle` validates and merges a collaborator bundle into the local workspace without overwriting unrelated local work by default.
 
 ### CLI Contract
 
@@ -529,6 +533,112 @@ JSON `result` should include:
 }
 ```
 
+`export-bundle`
+
+```text
+python scripts/training_pipeline_cli.py export-bundle \
+  --output workspace/bundles/<bundle_name>.zip \
+  [--include-imports] \
+  [--include-reviews] \
+  [--include-dataset-selections] \
+  [--include-datasets] \
+  [--include-training-configs] \
+  [--include-runs] \
+  [--include-weights] \
+  [--all] \
+  [--reviewer <reviewer>] \
+  [--selection workspace/dataset_selections/<selection>.json] \
+  [--run-group <run_group>] \
+  [--dry-run]
+```
+
+Purpose:
+
+- Create a single ZIP file that can be handed to a collaborator so they can continue annotation, dataset curation, YOLO training, and evaluation without needing access to the original local source folder.
+- Preserve stable `image_key` identity across machines by packaging the import manifest and browser-ready cache images, not by asking the collaborator to rediscover files by local path.
+- Package enough provenance and model metadata that a collaborator can understand how annotations, datasets, runs, and weights were produced.
+
+First-version bundle contents:
+
+- `bundle_manifest.json` at the ZIP root, with `schema_version`, `bundle_type: "training_collaboration_bundle"`, creation metadata, exporter git commit when available, included sections, file hashes, and compatibility notes.
+- `workspace/manifests/training_import_manifest.json` when imports are included.
+- `workspace/cache/imported_images/<image_key>.png` for every bundled imported image, so manual review and dataset export work even if original source paths are unavailable on the collaborator's machine.
+- `workspace/reviews/<reviewer>/<image_key>.json` for selected reviewers or all reviewers requested by the export command.
+- `workspace/cache/review_crops/` may be included as a rebuildable cache, but importers may safely regenerate it from review files and image caches.
+- `workspace/dataset_selections/*.json` for dataset curation state.
+- `workspace/datasets/<dataset>/` for already-exported YOLO datasets when requested. These are derived artifacts and can be omitted if dataset selections plus reviews are included.
+- `workspace/training_configs/*.json` for reproducible training setup.
+- `workspace/runs/<run_group>/...` and `workspace/reports/*` for training/evaluation history when requested.
+- `workspace/model_weights/*.pt` only when explicitly requested. Bundles containing weights must also include matching recreation documentation from `docs/yolo_weight_recreation.md` or adjacent weight-specific docs.
+
+Export rules:
+
+- Default export should be conservative and explicit; `--all` is allowed, but otherwise the caller should choose sections.
+- The bundle must never include files from read-only external source folders such as `/home/gavin/Downloads/AIS data`; it should include workspace cache/rendered copies and metadata instead.
+- Every file included in the ZIP should be listed in `bundle_manifest.json` with path, size, and `sha256` hash.
+- Bundle paths should be repository-relative workspace paths so the archive can be imported on a different machine.
+- The export command should warn when a review references an image cache or manifest entry that is not included.
+- The export command should fail if `--include-weights` is used and weight recreation metadata is missing for any bundled `*.pt` file.
+
+JSON `result` should include:
+
+```json
+{
+  "bundle_path": "workspace/bundles/example.zip",
+  "bundle_manifest_path": "bundle_manifest.json",
+  "included_file_count": 1234,
+  "included_image_count": 100,
+  "included_review_count": 100,
+  "included_weight_count": 2,
+  "warnings": []
+}
+```
+
+`import-bundle`
+
+```text
+python scripts/training_pipeline_cli.py import-bundle \
+  --bundle workspace/bundles/<bundle_name>.zip \
+  [--target-workspace workspace] \
+  [--reviewer-prefix <prefix>] \
+  [--merge-reviews] \
+  [--skip-derived-caches] \
+  [--allow-weight-import] \
+  [--dry-run]
+```
+
+Purpose:
+
+- Validate and import a collaborator ZIP into the local workspace so annotation, dataset export, training, and evaluation can continue.
+- Merge imported images, review files, dataset selections, configs, runs, and optional weights without clobbering unrelated local work.
+
+Import rules:
+
+- Always read and validate `bundle_manifest.json` before extracting files.
+- Validate ZIP entries against path traversal; entries must resolve inside the target workspace/repository.
+- Verify each included file hash before installing it.
+- Import should be non-destructive by default. If a target file exists with identical hash, skip it. If it differs, report a conflict and leave the local file untouched unless an explicit future conflict-resolution option is provided.
+- Review JSON conflicts should be handled as annotation conflicts, not blind overwrites. First-version behavior should either import conflicting reviews under a reviewer-prefixed namespace or fail with a clear conflict report.
+- Imported `training_import_manifest.json` entries should merge by `image_key`. Identical entries are skipped; differing entries for the same `image_key` are conflicts unless the difference is limited to non-authoritative local path metadata such as `source_path`.
+- Source paths from the exporter are provenance only on the importer machine. The imported cache image is the portable review/dataset source.
+- Derived caches such as review crops may be skipped and regenerated.
+- Weight import must be opt-in with `--allow-weight-import`, and imported weights must satisfy the YOLO weight reproducibility rule.
+
+JSON `result` should include:
+
+```json
+{
+  "bundle_path": "workspace/bundles/example.zip",
+  "imported_file_count": 1200,
+  "skipped_identical_count": 34,
+  "conflict_count": 0,
+  "imported_image_count": 100,
+  "imported_review_count": 100,
+  "imported_weight_count": 0,
+  "conflicts": []
+}
+```
+
 `write-evaluation-report`
 
 ```text
@@ -561,7 +671,7 @@ JSON `result` should include:
 }
 ```
 
-Later CLI commands can add import/download and auto-detect orchestration once those backend helpers are stable. First implementation should prioritize `export-dataset`, `check-training-ready`, `build-train-command`, `start-training`, `training-status`, `stop-training`, `generate-crops`, `image-key`, and `write-evaluation-report`, because those commands validate the pipeline backend and make LLM/developer diagnostics useful immediately.
+Later CLI commands can add import/download, auto-detect orchestration, and portable collaborator bundles once those backend helpers are stable. First implementation should prioritize `export-dataset`, `check-training-ready`, `build-train-command`, `start-training`, `training-status`, `stop-training`, `generate-crops`, `image-key`, and `write-evaluation-report`, because those commands validate the pipeline backend and make LLM/developer diagnostics useful immediately. `export-bundle` and `import-bundle` should be implemented before multi-person annotation or training handoff becomes a routine workflow.
 
 Initial CLI-to-helper map:
 
@@ -576,6 +686,8 @@ Initial CLI-to-helper map:
 | `generate-crops` | `scripts.visual_review_lib.generate_review_crop` |
 | `image-key` | `scripts.visual_review_lib.image_key_for_source` |
 | `write-evaluation-report` | `scripts.training_pipeline_lib.write_evaluation_report` |
+| `export-bundle` | new bundle export helper in `scripts.training_pipeline_lib` |
+| `import-bundle` | new bundle import/merge helper in `scripts.training_pipeline_lib` |
 
 Deferred HTTP/API behavior:
 
@@ -637,13 +749,16 @@ workspace/
     <run_group>_evaluation.json
     <run_group>_evaluation.md
 
+  bundles/
+    <bundle_name>.zip
+
   model_weights/
     <promoted_weights>.pt
 ```
 
 The read-only source data folders remain external inputs and must not be modified.
 
-Every JSON artifact created by the training pipeline should include `schema_version: 1` unless it is a strict third-party format such as YOLO `data.yaml`. This applies to import manifests, crop sidecars, dataset selection manifests, exported dataset manifests, training configs, training metadata, and evaluation reports.
+Every JSON artifact created by the training pipeline should include `schema_version: 1` unless it is a strict third-party format such as YOLO `data.yaml`. This applies to import manifests, crop sidecars, dataset selection manifests, exported dataset manifests, training configs, training metadata, evaluation reports, and bundle manifests.
 
 ## Label Vocabulary
 

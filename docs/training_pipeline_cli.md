@@ -56,12 +56,15 @@ Options:
 - `--source <image-or-folder>`: required, repeatable. Supports `.png`, `.jpg`, `.jpeg`, `.tif`, and `.tiff`.
 - `--manifest <path>`: import manifest path. Defaults to `workspace/manifests/training_import_manifest.json`.
 - `--cache-dir <path>`: rendered PNG cache directory. Defaults to `workspace/cache/imported_images`.
+- `--reviews-dir <path>`: review stub root. Defaults to `workspace/reviews`.
+- `--reviewer <name>`: reviewer folder for review stubs. Defaults to `$USER`, or `default` when unset.
 - `--render-profile auto|rgb_original|true_color|false_color|<profile.json>`: rendering profile. Defaults to `auto`.
 - `--recursive`: scan folders recursively. Hidden files and directories are skipped.
 - `--force`: refresh an existing manifest/cache entry.
+- `--no-review-stubs`: skip creating missing step 2 review JSON stubs.
 - `--dry-run`: validate inputs and report actions without writing the manifest or cache.
 
-The command never modifies source files. It writes or updates the import manifest and cache unless `--dry-run` is used. Already-imported identical image/profile pairs are skipped and reported in `skipped_count`.
+The command never modifies source files. It writes or updates the import manifest, cache, and missing review stubs unless `--dry-run` is used. Already-imported identical image/profile pairs are skipped and reported in `skipped_count`; their missing review stubs are still created unless `--no-review-stubs` is set.
 
 ### `export-dataset`
 
@@ -169,6 +172,53 @@ The command validates the render profile and returns:
 - `image_key`: stable key derived from source content and render profile
 
 Use this when diagnosing identity mismatches between preprocessing, review files, crops, and exported datasets.
+
+### Planned: `export-bundle`
+
+Not implemented yet. This planned command should create a portable collaborator ZIP for handing annotation/training state to another machine.
+
+Expected shape:
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py export-bundle \
+  --output workspace/bundles/my_annotation_handoff.zip \
+  --include-imports \
+  --include-reviews \
+  --include-dataset-selections \
+  --include-training-configs
+```
+
+Expected bundle responsibilities:
+
+- Include `bundle_manifest.json` at the ZIP root with schema version, exporter metadata, included sections, and per-file hashes.
+- Include import manifests and `workspace/cache/imported_images/<image_key>.png` so the receiver does not need the sender's original source paths.
+- Include review JSONs under `workspace/reviews/<reviewer>/` so annotation can continue.
+- Optionally include dataset selections, exported YOLO datasets, training configs, runs, reports, and model weights.
+- Include YOLO weights only when explicitly requested, and only when the required weight recreation documentation is bundled too.
+- Never include files directly from read-only external source folders such as `/home/gavin/Downloads/AIS data`.
+
+### Planned: `import-bundle`
+
+Not implemented yet. This planned command should validate and merge a collaborator ZIP into the local workspace.
+
+Expected shape:
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py import-bundle \
+  --bundle workspace/bundles/my_annotation_handoff.zip \
+  --merge-reviews \
+  --dry-run
+```
+
+Expected import responsibilities:
+
+- Validate `bundle_manifest.json` and verify file hashes before extracting.
+- Reject unsafe ZIP paths that would write outside the workspace.
+- Merge import manifest entries by stable `image_key`.
+- Skip existing identical files.
+- Report conflicts without overwriting local work by default.
+- Treat exported source paths as provenance only; imported cache images are the portable review/dataset source.
+- Require explicit opt-in before importing bundled `*.pt` weights.
 
 ## Selection Manifest Shape
 
