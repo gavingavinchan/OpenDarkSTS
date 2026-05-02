@@ -140,9 +140,12 @@ python scripts/training_pipeline_cli.py import-data \
   [--source <image-or-folder> ...] \
   [--manifest workspace/manifests/training_import_manifest.json] \
   [--cache-dir workspace/cache/imported_images] \
+  [--reviews-dir workspace/reviews] \
+  [--reviewer <reviewer>] \
   [--render-profile auto|rgb_original|true_color|false_color|<profile.json>] \
   [--recursive] \
   [--force] \
+  [--no-review-stubs] \
   [--dry-run] \
   [--human]
 ```
@@ -154,6 +157,10 @@ Behavior:
 - Does not modify, rename, move, or delete source files.
 - Writes browser-ready RGB cache images to `workspace/cache/imported_images/<image_key>.png` unless `--dry-run` is set.
 - Writes or updates `workspace/manifests/training_import_manifest.json` unless `--dry-run` is set.
+- Creates missing per-image review stubs under `workspace/reviews/<reviewer>/<image_key>.json` unless `--dry-run` or `--no-review-stubs` is set.
+- Populates or updates the step 2 manual-review queue automatically. After step 1 succeeds, refreshing/restarting the step 2 GUI should show the imported images even if no auto detections have been run yet.
+- Leaves existing review JSON files untouched by default so manual labels, manual detections, and review progress are not overwritten by re-importing or regenerating cache files.
+- Defaults `--reviewer` to `visual_review_lib.DEFAULT_REVIEWER`, which is `$USER` or `default` when the environment variable is unset.
 - Uses the same image identity and render-profile validation helpers as the GUI.
 - Skips already-imported identical `image_key` entries by default and reports them in `skipped_count`.
 - Re-renders and refreshes an existing manifest entry when `--force` is set, or when the manifest entry exists but the cache PNG is missing.
@@ -187,13 +194,18 @@ JSON `result` should include:
   "imported_count": 4,
   "skipped_count": 1,
   "failed_count": 0,
+  "review_stubs_created_count": 4,
+  "review_stubs_existing_count": 1,
+  "review_stubs_skipped_count": 0,
   "imported": [
     {
       "image_key": "img_abc123def4567890",
       "source": "/abs/path/to/source.tiff",
       "cache_path": "workspace/cache/imported_images/img_abc123def4567890.png",
       "render_profile_kind": "true_color",
-      "status": "imported"
+      "status": "imported",
+      "review_stub_path": "workspace/reviews/gavin/img_abc123def4567890.json",
+      "review_stub_status": "created"
     }
   ],
   "skipped": [
@@ -202,7 +214,9 @@ JSON `result` should include:
       "source": "/abs/path/to/previously_imported.png",
       "cache_path": "workspace/cache/imported_images/img_def456abc1237890.png",
       "render_profile_kind": "rgb_original",
-      "status": "already_imported"
+      "status": "already_imported",
+      "review_stub_path": "workspace/reviews/gavin/img_def456abc1237890.json",
+      "review_stub_status": "existing"
     }
   ],
   "failed": [
@@ -219,6 +233,43 @@ JSON `result` should include:
 ```
 
 Per-file failures should be listed in `result.failed` for structured automation and echoed as concise top-level envelope `warnings` for human diagnostics. Other warnings, including skipped existing entries when useful for diagnostics, belong in the top-level envelope `warnings` array rather than inside `result`.
+
+Review-stub behavior:
+
+- Step 1 owns image availability for step 2. Step 2 is manual review and should not have to discover imported images independently.
+- A review stub is an empty review document for an imported image, with `review_status: "overview_1"`, `detections: []`, the imported image dimensions, and the cache path.
+- `import-data` should create a missing stub for every successfully imported, skipped, or regenerated image unless `--no-review-stubs` is set.
+- Existing review documents must not be overwritten by default. This protects in-progress and completed manual review work.
+- Auto-detect may later enrich these stubs with model detections, but auto-detect is not required for images to appear in the manual-review queue.
+- CLI/API results should include review-stub counts or per-item review-stub status so automation can tell whether step 2 was newly populated or already populated.
+- `review_stub_status` values are `created`, `existing`, `skipped`, and `failed`.
+- `created` means a new review JSON was written; `existing` means an existing review JSON was preserved; `skipped` means `--no-review-stubs` or `--dry-run` prevented writing a stub; `failed` means the review stub could not be written.
+- Review-stub write failures are per-image failures unless stub creation was intentionally skipped. The source file should be listed in `failed[]` and warned about, because step 1's contract includes populating the manual-review queue.
+- The canonical helper is `visual_review_lib.build_review_stub(entry, reviewer, merged_detections=[])`, with a small adapter if needed so new import-manifest entries provide the fields expected by the review schema. Empty stubs do not require review-status state-machine changes; `review_status: "overview_1"` and `detections: []` are valid.
+
+Empty review-stub shape:
+
+```json
+{
+  "schema_version": 1,
+  "image_key": "img_abc123def4567890",
+  "image_filename": "img_abc123def4567890.png",
+  "reviewer": "gavin",
+  "preprocess_fingerprint": "sha256:0123456789abcdef...",
+  "date": null,
+  "tile_row": null,
+  "tile_col": null,
+  "width": 1576,
+  "height": 1474,
+  "cache_path": "workspace/cache/imported_images/img_abc123def4567890.png",
+  "review_status": "overview_1",
+  "detail_cursor": 0,
+  "updated_at": "2026-05-02T00:00:00Z",
+  "detections": []
+}
+```
+
+For arbitrary local imports, `date`, `tile_row`, and `tile_col` are `null`. They are populated only when the import source or upstream preprocessing provides reliable Sentinel tile metadata.
 
 `export-dataset`
 
@@ -791,7 +842,9 @@ Output artifacts:
 
 - `workspace/manifests/training_import_manifest.json`
 - `workspace/cache/imported_images/<image_key>.png`
-- initial per-image review files under `workspace/reviews/<reviewer>/...` after auto detection is run
+- initial per-image review files under `workspace/reviews/<reviewer>/<image_key>.json`
+
+Step 1 must create or preserve these review files so step 2's queue is populated as soon as import finishes. Auto detection may add detections later, but manual review image visibility must not depend on auto detection.
 
 The cache filename convention is fixed as `<image_key>.png`. Original filenames are metadata only and must not be used as cache identity because filenames can collide across folders, machines, and collaborators.
 
@@ -856,6 +909,20 @@ Import idempotency:
 - If the computed `image_key` already exists but the cache PNG is missing, import regenerates the cache and refreshes the entry.
 - If `--force` or the GUI's force option is set, import regenerates the cache and refreshes the manifest entry.
 - Re-importing unchanged files should be safe and should not duplicate manifest entries.
+- Review stubs are idempotent independently from manifest/cache artifacts. Missing stubs are created; existing stubs are preserved.
+
+Expected mixed-state behavior:
+
+| Manifest entry | Cache PNG | Review stub for reviewer | Expected behavior |
+|---|---|---|---|
+| present | present | present | Skip manifest/cache work; preserve stub; report `already_imported` and `review_stub_status: "existing"` |
+| present | present | missing | Skip manifest/cache work; create stub; report `already_imported` and `review_stub_status: "created"` |
+| present | missing | present | Regenerate cache and refresh manifest; preserve stub; report `regenerated_cache` and `review_stub_status: "existing"` |
+| missing | present | present | Re-import from source and refresh/reuse cache path as needed; preserve stub; report `imported` and `review_stub_status: "existing"` |
+| missing | missing | present | Full import from source; preserve stub; report `imported` and `review_stub_status: "existing"` |
+| present | present | present for another reviewer only | Create a stub for the requested/current reviewer; preserve other reviewers' stubs |
+
+If the source file is unavailable, import cannot reconstruct a missing manifest entry from cache alone in the first version because image identity depends on the source content hash and render profile.
 
 Per-file failure behavior:
 
@@ -876,9 +943,12 @@ Recommended first-version CLI shape:
 python scripts/training_pipeline_cli.py import-data \
   --source <image-or-folder> \
   [--source <image-or-folder> ...] \
+  [--reviews-dir workspace/reviews] \
+  [--reviewer <reviewer>] \
   [--render-profile auto|rgb_original|true_color|false_color|<profile.json>] \
   [--recursive] \
   [--force] \
+  [--no-review-stubs] \
   [--dry-run]
 ```
 
@@ -893,7 +963,7 @@ Responsibilities:
 - run configured YOLO model(s) on imported review images
 - let the user choose which YOLO weight file or files should be used for auto detection
 - merge duplicate detections using class-aware rules
-- write one review JSON file per image
+- enrich existing step 1 review stubs with auto detections without clobbering manual review work
 - let the reviewer add, delete, resize, relabel, and reject boxes
 - keep `neither` boxes as false-positive signal in review JSONs
 - preserve review progress so interrupted work can resume
@@ -903,11 +973,12 @@ The reviewer remains the source of truth for corrected bbox labels. Exported YOL
 First-version auto-detect GUI behavior:
 
 - consume the step 1 import manifest rather than discovering source images independently
+- read the image queue from the review stubs created by step 1
 - list available weights from `workspace/model_weights/`
 - allow selecting one or more YOLO weights for inference
 - allow entering an explicit weight path for local experimentation when needed
 - expose confidence and NMS IoU settings with documented defaults
-- write review stubs under `workspace/reviews/<reviewer>/`
+- update review stubs under `workspace/reviews/<reviewer>/` with auto detections when auto detection is run
 - then route the user into manual review
 
 Recommended first-version CLI shape:
