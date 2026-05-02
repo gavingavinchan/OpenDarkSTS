@@ -72,7 +72,7 @@ scripts/training_pipeline_cli.py write-evaluation-report --run-group <run_group>
 scripts/training_pipeline_cli.py image-key --source <path> --render-profile <profile.json>
 ```
 
-The exact flags may evolve, but these capabilities should exist outside the GUI. `import-data` and `run-auto-detect` are deferred until their backend orchestration helpers are stable; first CLI implementation should focus on the commands that already map cleanly to shared helpers.
+The exact flags may evolve, but these capabilities should exist outside the GUI. `import-data` is specified as the next backend-first step 1 command. `run-auto-detect` should follow once the imported-image manifest helpers are stable.
 
 Recommended CLI behavior:
 
@@ -131,6 +131,94 @@ For failed commands, `ok` is `false`, `errors` contains actionable strings, and 
 Envelope `ok` means the command executed and produced a valid response without an internal CLI/pipeline error. It does not mean a domain predicate is positive. For example, `check-training-ready` should return `ok: true`, exit `3`, and `result.ready: false` when it successfully finds readiness blockers.
 
 First-version command details:
+
+`import-data`
+
+```text
+python scripts/training_pipeline_cli.py import-data \
+  --source <image-or-folder> \
+  [--source <image-or-folder> ...] \
+  [--manifest workspace/manifests/training_import_manifest.json] \
+  [--cache-dir workspace/cache/imported_images] \
+  [--render-profile auto|rgb_original|true_color|false_color|<profile.json>] \
+  [--recursive] \
+  [--force] \
+  [--dry-run] \
+  [--human]
+```
+
+Behavior:
+
+- Imports user-provided local image files and/or folders into the step 1 import manifest.
+- Supports `.png`, `.jpg`, `.jpeg`, `.tif`, and `.tiff` in the first version.
+- Does not modify, rename, move, or delete source files.
+- Writes browser-ready RGB cache images to `workspace/cache/imported_images/<image_key>.png` unless `--dry-run` is set.
+- Writes or updates `workspace/manifests/training_import_manifest.json` unless `--dry-run` is set.
+- Uses the same image identity and render-profile validation helpers as the GUI.
+- Skips already-imported identical `image_key` entries by default and reports them in `skipped_count`.
+- Re-renders and refreshes an existing manifest entry when `--force` is set, or when the manifest entry exists but the cache PNG is missing.
+- Continues past per-file import failures by default, records those failures as warnings, and exits `0` if at least one source was imported or skipped successfully.
+- Exits `1` when no input source can be processed successfully, when every requested source path is missing, or when the manifest/cache paths are invalid.
+
+Folder scan rules:
+
+- File inputs are imported directly.
+- Folder inputs are scanned non-recursively by default.
+- `--recursive` scans nested folders.
+- Hidden files and hidden directories are skipped by default.
+- Symlinked files may be imported, but symlinked directories are not traversed in the first version.
+- Files with unsupported suffixes are ignored, not warnings.
+
+Render-profile resolution:
+
+- `--render-profile auto` is the default.
+- `auto` maps `.png`, `.jpg`, and `.jpeg` to `{"kind": "rgb_original"}`.
+- `auto` maps `.tif` and `.tiff` to the current true-color default: `{"kind": "true_color", "bands": [1, 2, 3], "normalization": "current_loader_default", "output_colorspace": "RGB"}`.
+- A bare kind string uses that kind's default profile when one exists.
+- A JSON file path loads the full render profile from disk and validates it before import.
+
+JSON `result` should include:
+
+```json
+{
+  "manifest_path": "workspace/manifests/training_import_manifest.json",
+  "cache_dir": "workspace/cache/imported_images",
+  "processed_count": 5,
+  "imported_count": 4,
+  "skipped_count": 1,
+  "failed_count": 0,
+  "imported": [
+    {
+      "image_key": "img_abc123def4567890",
+      "source": "/abs/path/to/source.tiff",
+      "cache_path": "workspace/cache/imported_images/img_abc123def4567890.png",
+      "render_profile_kind": "true_color",
+      "status": "imported"
+    }
+  ],
+  "skipped": [
+    {
+      "image_key": "img_def456abc1237890",
+      "source": "/abs/path/to/previously_imported.png",
+      "cache_path": "workspace/cache/imported_images/img_def456abc1237890.png",
+      "render_profile_kind": "rgb_original",
+      "status": "already_imported"
+    }
+  ],
+  "failed": [
+    {
+      "image_key": null,
+      "source": "/abs/path/to/corrupt.tiff",
+      "cache_path": null,
+      "render_profile_kind": "true_color",
+      "status": "failed",
+      "reason": "rasterio failed to open file"
+    }
+  ]
+}
+```
+
+Per-file failures should be listed in `result.failed` for structured automation and echoed as concise top-level envelope `warnings` for human diagnostics. Other warnings, including skipped existing entries when useful for diagnostics, belong in the top-level envelope `warnings` array rather than inside `result`.
 
 `export-dataset`
 
@@ -550,12 +638,18 @@ Purpose: prepare just enough source imagery metadata/cache so step 2 manual revi
 
 This is not intended to become a large standalone ingestion platform in the first training-pipeline version. Step 2 is already mostly implemented, so step 1 exists mainly to feed step 2 with stable image identity, browser-viewable cache files, and reproducibility metadata.
 
+The new `workspace/manifests/training_import_manifest.json` is additive. Existing legacy Sentinel preprocessing can continue to use `workspace/manifests/visual_preprocess_manifest.json` until it is explicitly migrated or retargeted. Step 1 implementations must not require rewriting legacy review/preprocess manifests before local-image import works.
+
 Inputs may come from:
 
-- read-only local source folders
-- Sentinel Hub downloads
+- files selected through the GUI's native file picker
+- folders selected through the GUI when browser support is available
+- folder paths entered in the GUI for backend-side scanning
+- one or more file or folder paths passed through the CLI
 - existing GeoTIFF, TIFF, PNG, or JPEG image collections
 - future image collections with arbitrary unique filenames
+
+Sentinel Hub download management is intentionally out of scope for the first version of step 1. The first version imports user-provided local imagery only.
 
 Original images must remain untouched. The import step never edits, renames, moves, or deletes source files.
 
@@ -570,6 +664,47 @@ Required minimal normalization:
 - record band/render choices for GeoTIFFs, such as true color or false color band mapping
 - standardize internal bbox coordinates as normalized YOLO-style values: `x_center`, `y_center`, `width`, `height`, all in `0..1`
 - store reproducibility metadata in a manifest under `workspace/manifests/`
+
+First-version GUI behavior:
+
+- if no images have been imported yet, the step 1 page shows a large centered `Import Images` button
+- clicking `Import Images` opens the operating system's native file picker via a browser file input and allows selecting many images at once
+- a secondary `Import Folder` control may use browser folder-picking support when available
+- a power-user folder path input should also be available for backend-side folder scanning, because browser file pickers do not expose arbitrary absolute paths to the server
+- after images exist, the import controls move to a smaller toolbar near the top of the page
+- imported images can be browsed in a grid view similar to the step 3 bbox overview contact sheet
+- imported images can also be browsed in a list/table view similar to a file explorer
+- the step 1 page should preserve view mode, search, sort, and scroll position when practical
+
+The browser-native picker flow uploads selected image bytes to the local backend. For security reasons, browsers generally provide filenames and relative folder paths, not full local source paths. Backend-side folder scanning through a typed path or the CLI should preserve full source paths when available.
+
+First-version step 1 browse fields:
+
+- thumbnail or preview
+- original filename
+- browser relative path or backend source path when known
+- dimensions
+- file size
+- imported timestamp
+- import status or warning
+- stable `image_key`
+
+First-version imported image suffixes:
+
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.tif`
+- `.tiff`
+
+First-version folder scan behavior:
+
+- GUI browser uploads import exactly the files selected by the user.
+- GUI backend-side folder paths and CLI folder paths scan only the immediate folder by default.
+- Recursive scanning requires an explicit `recursive` option in the GUI or `--recursive` in the CLI.
+- Hidden files and hidden directories are skipped by default.
+- Symlinked files may be imported, but symlinked directories are not traversed.
+- Unsupported suffixes are ignored.
 
 Image identity rule:
 
@@ -614,6 +749,8 @@ image_key = "img_" + hashlib.sha256(identity_bytes).hexdigest()[:16]
 
 For normal RGB PNG/JPEG inputs, the render profile can be `rgb_original`. For GeoTIFF/Sentinel inputs, the render profile distinguishes true color, false color, band choices, and normalization choices.
 
+First-version imports use `auto` render-profile resolution by default. `auto` maps `.png`, `.jpg`, and `.jpeg` to `rgb_original`, and maps `.tif` and `.tiff` to the current true-color default profile. GUI and CLI imports may override this with a bare render-profile kind or a full render-profile JSON file.
+
 First-version `render_profile.kind` values and required fields are:
 
 | `kind` | Required fields | Use |
@@ -653,14 +790,97 @@ Disallowed transformations at import:
 Output artifacts:
 
 - `workspace/manifests/training_import_manifest.json`
-- `workspace/cache/<imported_images>/...`
+- `workspace/cache/imported_images/<image_key>.png`
 - initial per-image review files under `workspace/reviews/<reviewer>/...` after auto detection is run
+
+The cache filename convention is fixed as `<image_key>.png`. Original filenames are metadata only and must not be used as cache identity because filenames can collide across folders, machines, and collaborators.
+
+Import status values are shared by manifest `import_status` fields and CLI/API result item `status` fields:
+
+| Value | Meaning |
+|---|---|
+| `imported` | New manifest entry written and cache PNG written |
+| `already_imported` | Manifest entry and cache PNG already present; no work done |
+| `regenerated_cache` | Manifest entry already present, but cache was missing or force refresh was requested; cache PNG rewritten and entry refreshed |
+| `failed` | Source could not be processed; counted in `failed_count`, listed in `failed`, and reported in top-level warnings |
+
+`training_import_manifest.json` shape:
+
+```json
+{
+  "schema_version": 1,
+  "manifest_type": "training_import",
+  "created_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-02T00:00:00Z",
+  "cache_dir": "workspace/cache/imported_images",
+  "images": {
+    "img_abc123def4567890": {
+      "schema_version": 1,
+      "image_key": "img_abc123def4567890",
+      "original_filename": "source_tile.tiff",
+      "source_path": "/abs/path/to/source_tile.tiff",
+      "browser_relative_path": null,
+      "source_collection": "/abs/path/to",
+      "source_size_bytes": 3145728,
+      "source_mtime": 1760000000.0,
+      "source_content_hash": "sha256:0123456789abcdef...",
+      "width": 1576,
+      "height": 1474,
+      "cache_path": "workspace/cache/imported_images/img_abc123def4567890.png",
+      "cache_width": 1576,
+      "cache_height": 1474,
+      "cache_content_hash": "sha256:fedcba9876543210...",
+      "render_profile": {
+        "kind": "true_color",
+        "bands": [1, 2, 3],
+        "normalization": "current_loader_default",
+        "output_colorspace": "RGB"
+      },
+      "loader": "rasterio",
+      "import_status": "imported",
+      "imported_at": "2026-05-02T00:00:00Z",
+      "updated_at": "2026-05-02T00:00:00Z",
+      "warnings": []
+    }
+  }
+}
+```
+
+For CLI and backend-side folder imports, `source_path` should be the resolved source path and `browser_relative_path` should be `null`. For browser uploads, `source_path` should be `null` unless the backend genuinely knows the original path, and `browser_relative_path` should store the browser-provided filename or relative folder path. Source fields that are not available for browser uploads, such as `source_mtime` or `source_collection`, should be `null` rather than guessed.
+
+For CLI and backend-side folder imports, `source_collection` is the original `--source` argument or GUI source-input value that produced this entry. For files passed individually, this equals `source_path`. For folder scans, this is the scanned folder root, not each file's immediate parent directory.
+
+Import idempotency:
+
+- If the computed `image_key` already exists in the manifest and the cache PNG exists, import skips the image by default.
+- If the computed `image_key` already exists but the cache PNG is missing, import regenerates the cache and refreshes the entry.
+- If `--force` or the GUI's force option is set, import regenerates the cache and refreshes the manifest entry.
+- Re-importing unchanged files should be safe and should not duplicate manifest entries.
+
+Per-file failure behavior:
+
+- A corrupt or unreadable supported image should not abort a larger batch by default.
+- The failed file should be counted in `failed_count`, listed in `failed`, and reported in the top-level CLI/API warnings.
+- A batch exits successfully when at least one image was imported or skipped successfully.
+- A batch fails when no requested source can be processed successfully.
 
 First-version scope:
 
 - support the image formats and source layouts needed by the existing visual reviewer
 - avoid adding download-management complexity unless the current review workflow needs it
 - extend the existing preprocess/review helpers rather than replacing them with a separate import subsystem
+
+Recommended first-version CLI shape:
+
+```text
+python scripts/training_pipeline_cli.py import-data \
+  --source <image-or-folder> \
+  [--source <image-or-folder> ...] \
+  [--render-profile auto|rgb_original|true_color|false_color|<profile.json>] \
+  [--recursive] \
+  [--force] \
+  [--dry-run]
+```
 
 ## Step 2. Auto Detect + Manual Review
 
@@ -671,6 +891,7 @@ This is the workflow currently implemented by the visual detection reviewer and 
 Responsibilities:
 
 - run configured YOLO model(s) on imported review images
+- let the user choose which YOLO weight file or files should be used for auto detection
 - merge duplicate detections using class-aware rules
 - write one review JSON file per image
 - let the reviewer add, delete, resize, relabel, and reject boxes
@@ -678,6 +899,29 @@ Responsibilities:
 - preserve review progress so interrupted work can resume
 
 The reviewer remains the source of truth for corrected bbox labels. Exported YOLO labels are generated later from review JSONs.
+
+First-version auto-detect GUI behavior:
+
+- consume the step 1 import manifest rather than discovering source images independently
+- list available weights from `workspace/model_weights/`
+- allow selecting one or more YOLO weights for inference
+- allow entering an explicit weight path for local experimentation when needed
+- expose confidence and NMS IoU settings with documented defaults
+- write review stubs under `workspace/reviews/<reviewer>/`
+- then route the user into manual review
+
+Recommended first-version CLI shape:
+
+```text
+python scripts/training_pipeline_cli.py run-auto-detect \
+  --manifest workspace/manifests/training_import_manifest.json \
+  --weights <name>=<path-to-weights.pt> \
+  [--weights <name>=<path-to-weights.pt> ...] \
+  --reviewer <reviewer> \
+  [--conf 0.25] \
+  [--iou 0.5] \
+  [--force]
+```
 
 `detection_id` must be unique within one `image_key` across all auto and manual detections. Auto detections from multiple configured models should be merged first, then assigned monotonically increasing ids such as `auto-0001` through `auto-NNNN`; manual detections use their own monotonic sequence such as `manual-0001`.
 
