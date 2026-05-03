@@ -4,6 +4,8 @@
 
 These are the exact steps used to start the visual review UI in the background for manual testing.
 
+For normal training-pipeline GUI work, start one server with `scripts/training_pipeline_ui.py` instead. That server owns `/import`, `/manual-review`, and `/bbox-overview`, and defaults to port `8766`. Use this runbook only when testing the focused step 2 reviewer by itself.
+
 ## 1. Stop Any Existing Server
 
 ```bash

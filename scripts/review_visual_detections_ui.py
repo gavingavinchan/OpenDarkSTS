@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -42,7 +43,6 @@ try:
         utcnow_iso,
         update_detection_geometry,
     )
-    from .training_pipeline_ui import render_app_html as render_bbox_overview_html
 except ImportError:
     from visual_review_lib import (
         DEFAULT_MANIFEST_PATH,
@@ -77,15 +77,25 @@ except ImportError:
         utcnow_iso,
         update_detection_geometry,
     )
-    from training_pipeline_ui import render_app_html as render_bbox_overview_html
 
 
 MANIFEST_PATH = DEFAULT_MANIFEST_PATH
 REVIEWS_DIR = DEFAULT_REVIEWS_DIR
 REVIEWER = DEFAULT_REVIEWER
+QUEUE_WINDOW_RADIUS = 80
+QUEUE_CACHE_LOCK = threading.Lock()
+QUEUE_CACHE: list[dict] | None = None
 
 # DELETE BEFORE SHIP: temporary interaction logger for diagnosing missed UI saves.
 DEBUG_INTERACTION_LOG_PATH = repo_resolve("workspace/reports/visual_review_interactions_DELETE_BEFORE_SHIP.jsonl")
+
+
+def render_bbox_overview_html() -> str:
+    try:
+        from .training_pipeline_ui import render_app_html
+    except ImportError:
+        from training_pipeline_ui import render_app_html
+    return render_app_html()
 
 
 def json_body(handler: BaseHTTPRequestHandler) -> dict:
@@ -106,6 +116,12 @@ def append_debug_interaction_event(payload: dict) -> None:
     }
     with DEBUG_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def invalidate_review_queue_cache() -> None:
+    global QUEUE_CACHE
+    with QUEUE_CACHE_LOCK:
+        QUEUE_CACHE = None
 
 
 def query_bool(parsed, name: str, default: bool) -> bool:
@@ -140,6 +156,7 @@ def load_review_by_image_id(image_id: str) -> tuple[dict, Path]:
 def save_review(review: dict, review_path: Path) -> None:
     sync_review_status(review)
     save_review_document(review, review_path)
+    invalidate_review_queue_cache()
 
 
 def refresh_detection_crop(review: dict, review_path: Path, detection_id: str) -> None:
@@ -150,6 +167,11 @@ def refresh_detection_crop(review: dict, review_path: Path, detection_id: str) -
 
 
 def synced_review_queue() -> list[dict]:
+    global QUEUE_CACHE
+    with QUEUE_CACHE_LOCK:
+        if QUEUE_CACHE is not None:
+            return QUEUE_CACHE
+
     reviews = list_review_documents(REVIEWER, REVIEWS_DIR)
     for review in reviews:
         before = (review.get("review_status"), review.get("detail_cursor"))
@@ -157,12 +179,41 @@ def synced_review_queue() -> list[dict]:
         after = (review.get("review_status"), review.get("detail_cursor"))
         if before != after and review.get("_path") is not None:
             save_review_document(review, review["_path"])
+    with QUEUE_CACHE_LOCK:
+        QUEUE_CACHE = reviews
     return reviews
+
+
+def queue_payload_window(queue_rows: list[dict], manifest_images: dict, current_index: int) -> tuple[list[dict], int, int]:
+    start = max(0, current_index - QUEUE_WINDOW_RADIUS)
+    end = min(len(queue_rows), current_index + QUEUE_WINDOW_RADIUS + 1)
+    payload = []
+    for index, row in enumerate(queue_rows[start:end], start=start):
+        payload.append(
+            {
+                "image_id": row["image_key"],
+                "image_key": row["image_key"],
+                "image_filename": manifest_display_filename(manifest_images, row),
+                "date": row.get("date"),
+                "tile_row": int(row.get("tile_row") or 0),
+                "tile_col": int(row.get("tile_col") or 0),
+                "review_status": row["review_status"],
+                "queue_index": index,
+            }
+        )
+    return payload, start, end
 
 
 def manifest_display_filename(manifest_images: dict, review: dict) -> str | None:
     entry = manifest_images.get(review.get("image_key")) or {}
     return entry.get("original_filename") or entry.get("display_filename") or review.get("display_filename") or review.get("original_filename") or entry.get("image_filename") or review.get("image_filename")
+
+
+def cache_path_for_review(review: dict) -> Path:
+    cache_path = review.get("cache_path")
+    if cache_path:
+        return repo_resolve(cache_path)
+    return ensure_cache_for_image_key(review["image_key"], MANIFEST_PATH)
 
 
 def build_state(image_id: str | None) -> dict:
@@ -175,6 +226,8 @@ def build_state(image_id: str | None) -> dict:
         return {
             "queue": {
                 "images": [],
+                "window_start": 0,
+                "window_end": 0,
                 "current_index": None,
                 "prev_image_id": None,
                 "next_image_id": None,
@@ -194,28 +247,17 @@ def build_state(image_id: str | None) -> dict:
         }
 
     review, review_path = load_review_by_image_id(selected_image_id)
+    before = (review.get("review_status"), review.get("detail_cursor"))
     sync_review_status(review)
-    save_review(review, review_path)
-    queue_rows = synced_review_queue()
-    queue_payload = []
-    for index, row in enumerate(queue_rows):
-        queue_payload.append(
-            {
-                "image_id": row["image_key"],
-                "image_key": row["image_key"],
-                "image_filename": manifest_display_filename(manifest_images, row),
-                "date": row.get("date"),
-                "tile_row": int(row.get("tile_row") or 0),
-                "tile_col": int(row.get("tile_col") or 0),
-                "review_status": row["review_status"],
-                "queue_index": index,
-            }
-        )
+    after = (review.get("review_status"), review.get("detail_cursor"))
+    if before != after:
+        save_review(review, review_path)
+        queue_rows = synced_review_queue()
     image = next((row for row in queue_rows if row["image_key"] == selected_image_id), None)
     if image is None:
         raise KeyError(f"Image {selected_image_id} not found")
 
-    cache_path = ensure_cache_for_image_key(selected_image_id, MANIFEST_PATH)
+    cache_path = cache_path_for_review(review)
 
     detections = [detection_payload(row, int(review["width"]), int(review["height"]), selected_image_id) for row in review["detections"]]
     detail_payload = [item for item in detections if item["is_active"]]
@@ -223,6 +265,7 @@ def build_state(image_id: str | None) -> dict:
     current_index = next(index for index, row in enumerate(queue_rows) if row["image_key"] == selected_image_id)
     prev_image_id = queue_rows[current_index - 1]["image_key"] if current_index > 0 else None
     next_image_id = queue_rows[current_index + 1]["image_key"] if current_index < len(queue_rows) - 1 else None
+    queue_payload, queue_window_start, queue_window_end = queue_payload_window(queue_rows, manifest_images, current_index)
 
     current_detection_id = None
     detail_cursor = review.get("detail_cursor")
@@ -234,6 +277,8 @@ def build_state(image_id: str | None) -> dict:
     return {
         "queue": {
             "images": queue_payload,
+            "window_start": queue_window_start,
+            "window_end": queue_window_end,
             "current_index": current_index,
             "prev_image_id": prev_image_id,
             "next_image_id": next_image_id,
@@ -686,8 +731,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         <p>Review Sentinel tile imagery, correct detections, and export clean YOLO labels.</p>
       </div>
       <nav class="pipeline-rail" aria-label="Training pipeline stages">
-        <span class="pipeline-stage">Import Data</span>
-        <a class="pipeline-stage active enabled" href="/">Manual Review</a>
+        <a class="pipeline-stage enabled" href="/import">Import Data</a>
+        <a class="pipeline-stage active enabled" href="/manual-review">Manual Review</a>
         <a class="pipeline-stage enabled" href="/bbox-overview">BBox Overview</a>
         <span class="pipeline-stage">Dataset Selection</span>
         <span class="pipeline-stage">Training Setup</span>
@@ -1012,7 +1057,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 
         <div class="card">
           <h3>Queue</h3>
-          <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; hold <kbd>Shift</kbd> and click image nav to mark current image reviewed &middot; <kbd>?</kbd> all shortcuts</p>
+          <p class="note" style="margin-top:0;margin-bottom:8px"><kbd>[</kbd> / <kbd>]</kbd> navigate images &middot; showing #${{(state.queue.window_start || 0) + 1}}-${{state.queue.window_end || 0}} of ${{state.queue.total_images}} &middot; <kbd>?</kbd> all shortcuts</p>
           <div class="queue-list">
             ${{state.queue.images.map(item => `
               <div class="queue-item ${{item.review_status === 'completed' ? 'completed' : ''}} ${{item.image_id === current.image_id ? 'active' : ''}}" onclick='openImage(${{JSON.stringify(item.image_id)}})'>
@@ -1729,13 +1774,9 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     async function navigateQueue(direction) {{
-      if (!state.queue || !state.queue.images || !state.image) return;
-      const currentIdx = state.queue.images.findIndex(q => q.image_id === state.image.image_id);
-      if (currentIdx < 0) return;
-      const nextIdx = currentIdx + direction;
-      if (nextIdx >= 0 && nextIdx < state.queue.images.length) {{
-        await openImage(state.queue.images[nextIdx].image_id);
-      }}
+      if (!state.queue || !state.image) return;
+      const nextImageId = direction < 0 ? state.queue.prev_image_id : state.queue.next_image_id;
+      if (nextImageId) await openImage(nextImageId);
     }}
 
     // DELETE BEFORE SHIP: temporary capture-phase diagnostics for every click and keydown.
@@ -1866,7 +1907,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/" or path == "":
+        if path in {"/", "", "/manual-review", "/manual-review/"}:
             queue_rows = synced_review_queue()
             default_image_id = pick_image_id(queue_rows, self._query_image_id(parsed))
             self._respond_html(render_app_html(default_image_id, self._query_detection_id(parsed)))

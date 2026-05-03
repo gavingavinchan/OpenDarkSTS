@@ -467,6 +467,7 @@ def import_training_data(
     recursive: bool = False,
     force: bool = False,
     dry_run: bool = False,
+    progress_callback=None,
 ) -> dict[str, Any]:
     if not sources:
         raise ValueError("At least one --source is required")
@@ -485,9 +486,32 @@ def import_training_data(
     skipped: list[dict[str, Any]] = []
     review_stub_counts = {"created": 0, "existing": 0, "skipped": 0}
 
-    for candidate in files:
+    def emit(event: dict[str, Any]) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(event)
+        except Exception:
+            pass
+
+    emit({
+        "phase": "discovered",
+        "total": len(files),
+        "discovered_failed": len(failed),
+    })
+
+    for index, candidate in enumerate(files):
         source_path = repo_resolve(candidate["source_path"])
         source_collection = str(candidate["source_collection"])
+        emit({
+            "phase": "processing",
+            "index": index,
+            "total": len(files),
+            "current": source_path.name,
+            "imported_count": len(imported),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+        })
         try:
             render_profile = resolve_import_render_profile(render_profile_value, source_path)
             image_key = review_lib.image_key_for_source(source_path, render_profile)
@@ -557,7 +581,16 @@ def import_training_data(
             )
 
     if not dry_run and imported:
+        emit({"phase": "saving", "total": len(files)})
         save_import_manifest(manifest_file, manifest)
+
+    emit({
+        "phase": "done",
+        "total": len(files),
+        "imported_count": len(imported),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+    })
 
     return {
         "manifest_path": repo_relative(manifest_file),
