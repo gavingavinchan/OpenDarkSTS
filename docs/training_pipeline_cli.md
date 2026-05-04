@@ -66,6 +66,27 @@ Options:
 
 The command never modifies source files. It writes or updates the import manifest, cache, and missing review stubs unless `--dry-run` is used. Already-imported identical image/profile pairs are skipped and reported in `skipped_count`; their missing review stubs are still created unless `--no-review-stubs` is set.
 
+Planned album/provenance options:
+
+- `--album-name <name>`: human-readable OpenDarkSTS album name, such as `Singapore 2025`; defaults to the source basename for first-version imports.
+- `--album-description <text>`: optional mutable human description for notes about the album.
+- `--source-display-name <name>`: provenance label shown in the GUI, such as `singapore/2025`.
+- `--append-to-album-id <id>`: add imported or already-known images to an existing album by immutable id.
+- `--resume-job <id>`: continue a failed or interrupted import job by reusing the original album id and appending to the original job JSONL instead of creating a duplicate album.
+
+Planned album/import artifacts:
+
+- `workspace/albums/<album_id>.json`: durable album ledger with image membership and aggregate counts.
+- `workspace/albums/index.json`: compact album summaries for listing albums without loading every membership ledger.
+- `workspace/reports/import_jobs/<job_id>.jsonl`: structured event log for every import job.
+- `workspace/reports/import_jobs/<job_id>.summary.json`: final import result plus album metadata.
+
+The GUI upload path should use the same backend fields. Browser uploads must preserve raw browser relative paths and user-provided album/source labels because the browser cannot reliably provide the user's original absolute folder path.
+
+Future step 2 review should support opening directly into an album-scoped queue, for example `/manual-review?album_id=<album_id>`, so new imports are not mixed with older intentionally unreviewed images unless the user chooses the all-images queue.
+
+First-version CLI album support should create one album per import or append to `--append-to-album-id`. Future CLI helpers should include `list-albums`, `show-album`, `rename-album`, `update-album-description`, `create-album`, `add-to-album`, `remove-from-album`, and `move-to-album` so automation can use the same album model as the GUI. `add-to-album` should be the default non-destructive operation; `move-to-album` must explicitly name the source album membership to remove.
+
 ### `export-dataset`
 
 Exports a dataset selection manifest into YOLO layout.

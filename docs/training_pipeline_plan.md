@@ -714,6 +714,10 @@ New training-pipeline artifacts should live under `workspace/` and follow this l
 
 ```text
 workspace/
+  albums/
+    index.json
+    <album_id>.json
+
   cache/
     review_crops/
       <image_key>/
@@ -746,6 +750,10 @@ workspace/
         ...
 
   reports/
+    import_jobs/
+      <job_id>.jsonl
+      <job_id>.summary.json
+
     <run_group>_evaluation.json
     <run_group>_evaluation.md
 
@@ -814,6 +822,8 @@ Inputs may come from:
 - one or more file or folder paths passed through the CLI
 - existing GeoTIFF, TIFF, PNG, or JPEG image collections
 - future image collections with arbitrary unique filenames
+
+The GUI should model imported image groups as albums, similar to a phone photo app. An album is an in-software image collection created from a file selection, folder selection, typed folder path, bundle import, or later manual grouping. It is separate from the source filesystem folder: the same source image may appear in more than one album, and importing an album never modifies the source folder.
 
 Sentinel Hub download management is intentionally out of scope for the first version of step 1. The first version imports user-provided local imagery only.
 
@@ -956,12 +966,171 @@ Disallowed transformations at import:
 Output artifacts:
 
 - `workspace/manifests/training_import_manifest.json`
+- `workspace/albums/<album_id>.json`
+- `workspace/albums/index.json`
 - `workspace/cache/imported_images/<image_key>.png`
 - initial per-image review files under `workspace/reviews/<reviewer>/<image_key>.json`
+- import audit logs under `workspace/reports/import_jobs/<job_id>.jsonl` plus a final summary JSON
 
 Step 1 must create or preserve these review files so step 2's queue is populated as soon as import finishes. Auto detection may add detections later, but manual review image visibility must not depend on auto detection.
 
 The cache filename convention is fixed as `<image_key>.png`. Original filenames are metadata only and must not be used as cache identity because filenames can collide across folders, machines, and collaborators.
+
+### Albums, Provenance, And Audit Logging
+
+Every GUI or CLI import invocation should create or append to a durable album record. An album is the user-facing image collection inside OpenDarkSTS, analogous to a Samsung/phone photo album. It is not a duplicate image store; it is membership, provenance, and workflow grouping for one user intent such as importing `/home/gavin/Downloads/AIS data/Sentinel 2A/Singapore/2025` as the album `Singapore 2025`.
+
+Why this is required:
+
+- flat queues mix newly imported unreviewed images with older intentionally unreviewed images
+- browser uploads currently stage files under `workspace/cache/import_staging/<job_id>`, so the selected source folder name can be lost after upload
+- the server log currently captures process startup, but not enough import-job detail to reconstruct what was uploaded, which files succeeded, or which review stubs were created
+- later review, overview, dataset selection, and training should be able to include, exclude, sort, or audit albums without relying on timestamps alone
+
+First-version album scope:
+
+- every GUI or CLI import creates exactly one new album record unless the user explicitly appends to an existing album id
+- album name defaults to the CLI source basename, browser folder top-level `webkitRelativePath` segment, or a synthetic timestamped name for loose browser file uploads
+- the user can override `album_name` before import starts and can later rename it; renaming updates only album metadata, never `album_id`, manifest identity, cache files, review files, or source files
+- the user can optionally provide or later edit `album_description`; descriptions are human notes only and are not used for identity or matching
+- appending to an existing album is by immutable `album_id`; names are mutable and are not valid script identity by themselves
+- first version records album membership, import provenance, import audit logs, and a compact album index
+- first version assumes a single concurrent writer for the import manifest, album record, and album index; future versions may add file locking for simultaneous imports
+- first version does not implement remove-from-album, move-to-album, empty/manual albums, derived albums, step 2 album-scoped queues, or step 3/4 album editing UI; those are future-version features described below
+
+Required first-version album fields:
+
+- `album_id`: stable opaque id, for example `alb_a1b2c3d4e5`; generated once and never changed
+- `album_name`: mutable human label supplied by the GUI/CLI, defaulting from the selected source when available
+- `album_description`: optional mutable human description
+- `source_display_name`: safe non-authoritative provenance label such as `singapore/2025` or browser top-level folder name; it does not automatically change when the album is renamed
+- `source_kind`: `browser_upload`, `local_folder`, `local_file`, or future `bundle_import`
+- `created_at`, `updated_at`, `created_by`, `reviewer`, `manifest_path`, `cache_dir`, `reviews_dir`
+- import options: recursive, force, render profile, create-review-stubs flag
+- aggregate counts: uploaded, discovered, imported, skipped, failed, review stubs created/existing/skipped, members added from imported images, members added from already-known images
+- image membership: ordered list of attempted image records with image key when known, original filename, browser relative path, source path when known, cache path, review stub path, and final import/member status
+- optional `import_job_ids`: all import jobs that contributed to the album
+
+Canonicality rules:
+
+- album records are canonical for membership
+- manifest `album_ids` are a denormalized lookup index for faster filtering and can be rebuilt from album records
+- if album records and manifest `album_ids` conflict, album records win
+- manifest entries must not store `album_names`; names are mutable and should be joined from album records or `workspace/albums/index.json` for display
+- review stubs must not copy album metadata; step 2 should join to album records or the album index when album filtering is implemented
+
+Album list index:
+
+- `workspace/albums/index.json` should contain compact summaries for cheap album listing
+- each index row should include `album_id`, `album_name`, optional `album_description`, `source_display_name`, `source_kind`, image count, counts by status/member status, created/updated timestamps, and latest import job id
+- the index is derived convenience data; individual album records remain canonical
+
+Browser upload rules:
+
+- the browser cannot reliably provide the user's absolute source path, so the backend must not guess it
+- preserve every raw uploaded filename or `webkitRelativePath` before sanitization
+- infer the top-level browser folder only from uploaded relative paths when present
+- allow the user to provide or edit `album_name` and `source_display_name` before upload starts
+- for browser uploads, manifest `source_path` should point at the staging file only if the staging copy is intentionally retained as the workspace source; otherwise it should be `null`
+- for browser uploads, manifest `browser_relative_path`, `source_display_name`, `album_ids`, and album membership are the primary provenance fields
+- for CLI or local-folder imports, default `source_display_name` to the resolved source path unless the user overrides it
+- for browser folder imports, default `source_display_name` to the top-level `webkitRelativePath` segment
+- for loose browser file imports with no folder, default `source_display_name` to `null` and ask for an album label before import starts
+- browser uploads are intended for small or moderate batches until streaming upload is implemented; large folders should use the CLI path to avoid whole-body buffering and browser/server timeout failures
+
+Album membership rules:
+
+- an image can belong to zero, one, or many albums
+- album membership is by `image_key`, not by filename
+- re-importing an already-known image into a new album should add membership to that album while preserving existing review status and annotations
+- copying an image to another album means adding album membership and must not remove it from existing albums
+- moving an image to another album means adding membership to the destination album and removing membership from one or more explicitly chosen source albums; it must never delete the image, cache, review JSON, labels, or source file
+- the default UI action should be `Add to Album` / `Copy to Album`, because it is non-destructive and matches the common “save to album” mental model
+- destructive membership removal should require an explicit `Remove from Album` or `Move from Album A to Album B` action with clear source/destination labels
+- deleting an album should remove album membership only; it must not delete cached images, manifest entries, review files, or source files without a separate explicit cleanup workflow
+- first-version albums can be created from import operations; later versions may support manual album creation from selected existing images
+
+Future album edit operations should be available wherever the user can meaningfully select images:
+
+- Step 1 can import into a new album, append imported files to an existing album, or create an empty/manual album for later use
+- Step 2 can add the current image, selected queue rows, or all visible filtered queue images to another album without leaving review
+- Step 3 can add source images for selected bbox tiles, all visible filtered bbox tiles, or all tiles matching current filters to a new or existing album
+- Step 4 can create an album from the currently filtered/selected dataset candidates before or after assigning them to a dataset
+
+Future derived albums are allowed and should record their derivation filters. For example, from Step 3 the user may filter album `Singapore 2025` to class `ships`, select all visible results, and create a new album named `Singapore 2025 ships`. That new album should contain the source image keys for those selected bbox tiles, not crop-only pseudo-images, unless the user explicitly chooses a future crop-derived dataset workflow.
+
+Audit logging requirements:
+
+- write `workspace/reports/import_jobs/<job_id>.jsonl` as append-only structured events for every import job
+- write a final `workspace/reports/import_jobs/<job_id>.summary.json` with the same result returned to the GUI/API plus album metadata
+- if resume support is implemented, resuming an import job must reuse the original `album_id`, append to the same job JSONL, preserve existing successful/skipped records, and add newly successful retry items to the original album record instead of forking a duplicate album
+- log events for queued, upload-staged, discovered, per-file processing, per-file imported/skipped/failed, manifest-saved, review-stub-created/existing/failed, done, and failed
+- include `job_id`, `album_id`, current filename, raw browser relative path, sanitized staging path, image key when known, status, and failure reason when applicable
+- keep one-line server stdout messages for human diagnosis, but treat JSONL and summary JSON as the source of truth
+- never log source file contents or binary payloads
+- never write logs into read-only source folders
+
+Planned album record shape:
+
+```json
+{
+  "schema_version": 1,
+  "album_id": "alb_a1b2c3d4e5",
+  "album_name": "Singapore 2025",
+  "album_description": "Sentinel 2A Singapore imagery imported for STS review",
+  "source_display_name": "2025",
+  "source_kind": "browser_upload",
+  "import_job_ids": ["imp_9cefdae20292"],
+  "created_at": "2026-05-03T23:05:40Z",
+  "updated_at": "2026-05-03T23:05:53Z",
+  "created_by": "gavin",
+  "reviewer": "gavin",
+  "manifest_path": "workspace/manifests/training_import_manifest.json",
+  "cache_dir": "workspace/cache/imported_images",
+  "reviews_dir": "workspace/reviews",
+  "options": {
+    "recursive": true,
+    "force": false,
+    "render_profile": "auto",
+    "create_review_stubs": true
+  },
+  "counts": {
+    "uploaded": 210,
+    "discovered": 210,
+    "imported": 210,
+    "skipped": 0,
+    "failed": 0,
+    "members_added_imported": 210,
+    "members_added_existing": 0,
+    "review_stubs_created": 210,
+    "review_stubs_existing": 0
+  },
+  "images": [
+    {
+      "image_key": "img_abc123def4567890",
+      "original_filename": "2025-05-24_tile_3_2.tiff",
+      "browser_relative_path": "2025/2025-05-24_tile_3_2.tiff",
+      "source_path": null,
+      "cache_path": "workspace/cache/imported_images/img_abc123def4567890.png",
+      "review_stub_path": "workspace/reviews/gavin/img_abc123def4567890.json",
+      "import_status": "imported",
+      "member_status": "added_imported"
+    }
+  ]
+}
+```
+
+Manifest entries created or refreshed by an import into an album should include:
+
+```json
+{
+  "album_ids": ["alb_a1b2c3d4e5"],
+  "source_display_name": "2025",
+  "browser_relative_path": "2025/2025-05-24_tile_3_2.tiff"
+}
+```
+
+Existing manifest entries without `album_ids` remain valid and are treated as untagged. A later repair/migration helper may create legacy albums from reliable `source_collection` groupings, but first-version albums do not need to backfill the existing manifest automatically.
 
 Import status values are shared by manifest `import_status` fields and CLI/API result item `status` fields:
 
@@ -1185,6 +1354,68 @@ First-version reconciliation rules:
 - conflicted images can appear in step 3 under a `Needs Reconciliation` filter, but should not be exportable into a training dataset until resolved
 - later versions may add IoU-based merge tools for duplicate boxes, but the first version should avoid silent label corruption
 
+### Future Album-Aware Manual Review Queues
+
+Album-scoped step 2 navigation is not part of first-version album implementation. In a later version, step 2 must not expose only one undifferentiated review queue. The all-images queue may remain available for legacy browsing, but the primary training workflow should let the user select one or more albums from a dropdown or multi-select control. The queue should then contain only images from those albums, analogous to reviewing images from selected phone photo albums.
+
+Required queue scopes:
+
+- `Selected Albums`: one or more chosen album ids; default immediately after a successful step 1 GUI import
+- `All Unreviewed`: every review file whose status is not complete
+- `All Images`: legacy full queue for diagnostics and broad browsing
+- `By Collection`: choose a `source_display_name` or legacy `source_collection`
+- `Completed In Selected Albums`: for spot-checking recently reviewed imported images
+
+Queue rows should display enough provenance to avoid ambiguity:
+
+- queue position within the active scope and total count for that scope
+- global queue position only as secondary/debug metadata
+- image filename and image key
+- review status
+- album name or source display name
+- imported-at timestamp
+- counts of detections and reviewed detections when cheap to compute
+
+Queue sorting should be user-selectable. Future sort modes should include:
+
+- album, then imported order
+- album, then filename/date tile order
+- review status, then album
+- newest imported first
+- oldest imported first
+- filename/date tile order
+- image key for diagnostics
+
+Queue behavior after import:
+
+- when step 1 import finishes, the UI should route to `/manual-review?album_id=<album_id>` or otherwise set the active album selection to the new album
+- `Next Image` and `Previous Image` should navigate inside the active album/sort/filter scope, not the global all-image queue
+- explicitly switching to `All Images` should be required before older intentionally unreviewed images are mixed into navigation
+- active album ids, queue scope, filters, and sort mode should be encoded in the URL and browser local storage so refreshes preserve context
+- status updates should update the current scope counts without dropping the selected scope
+
+Album actions in step 2:
+
+- current image menu: `Add to Album`, `Move to Album`, `Remove from Album`, and `Create New Album From Current Image`
+- queue selection menu: same actions for selected queue rows
+- visible-filter action: `Create Album From Visible Queue` for workflows such as all unreviewed Singapore images after applying filters
+- every move action must show the source album(s) that will lose membership and should default to copy/add when there is any ambiguity
+
+Backend/API behavior:
+
+- `/api/state` should accept optional `album_id` (repeatable or comma-separated), `source_display_name`, `status`, `queue_scope`, and `sort` parameters
+- response payload should continue to return a small queue window around the selected image, not the entire full queue
+- backend should cache queue metadata but invalidate it after imports, review saves, or review-stub writes
+- queue filtering should use album records or `workspace/albums/index.json`; it should not require album metadata to be copied into review stubs
+- review files created before album metadata existed should appear under a legacy/unknown album group rather than being silently hidden
+
+Migration behavior:
+
+- existing review JSONs without `album_ids` remain valid
+- existing manifest entries without `album_ids` remain valid
+- a future repair command may backfill album metadata from import logs, album records, source collection, source paths, or timestamp ranges when reliable
+- if no reliable album can be inferred, leave the album as `legacy_unknown` rather than guessing
+
 ## Step 3. Reviewed BBox Overview
 
 Purpose: let the human do one more pass over all reviewed bboxes before dataset selection.
@@ -1205,6 +1436,24 @@ Grid behavior:
 - single-click selects one tile and updates the right sidebar
 - double-click opens the original image in step 2 manual review at the corresponding bbox
 - a right-sidebar `Edit In Manual Review` button performs the same action as double-click
+
+Album filtering and sorting:
+
+- step 3 should have an album multi-select filter just like step 2
+- selected albums constrain which reviewed bbox crops are visible
+- existing class filters such as `ship`, `ships`, `neither`, warnings, and conflicts remain available and combine with album filters
+- tile badges should show album membership when space allows; the sidebar should always show album names for the source image
+- sort modes should include album-first, class-first, image/date order, bbox area, confidence, and review/update time
+- double-clicking a crop should preserve album scope when returning to step 2, for example `/manual-review?album_id=<album_id>&image_id=<image_key>&detection_id=<detection_id>`
+
+Album actions in step 3:
+
+- selected crop tiles can add their source images to a new or existing album
+- all visible filtered crop tiles can add their source images to a new or existing album
+- the UI should deduplicate by `image_key` when multiple selected bboxes come from the same source image
+- derived album creation should record the source album filter, class filter, warning/conflict filter, sort mode when relevant, creation timestamp, and selected detection ids as provenance
+- creating an album from `ships` bboxes in `Singapore 2025` should not remove those images from `Singapore 2025`; it should create another album containing the same source images unless the user explicitly chooses a move operation
+- if the user asks to move from one album to another in step 3, the UI must be clear that membership changes are image-level, not bbox-level, unless a future bbox-album feature is explicitly introduced
 
 Right sidebar information:
 
@@ -1253,6 +1502,7 @@ Selection behavior should follow familiar desktop and mobile conventions:
 
 Dataset assignment behavior:
 
+- the first filter should be an album multi-select so the user can build datasets from one or more albums, such as `Singapore 2025` plus two other reviewed albums
 - selected items can be added to one or more datasets
 - selected items can be removed from one or more datasets
 - the UI should make it clear whether assignment is by whole image or by individual bbox
@@ -1260,6 +1510,23 @@ Dataset assignment behavior:
 - bbox-level selection can be represented as an advanced label-filtering option within selected whole images
 - step 3 crop selections should carry forward into this stage as candidate source-image selections, not as an automatic switch to crop training
 - train/val/test split ownership lives in this stage; later training stages reference the selected dataset and split rather than redefining them
+
+Album-aware dataset selection:
+
+- album selection is an inclusion filter, not the dataset itself
+- other filters still apply inside selected albums, including reviewer, review completion, class labels, warnings, conflicts, date/tile ranges, and positive/negative label rules
+- common workflows should be one click or a few clicks: “include all completed images from these three albums”, “include only `ships_sts` bboxes from selected albums”, or “include manually reviewed positives from selected albums plus background negatives from another album”
+- the dataset selection manifest should record both the album filter used to create the dataset and the concrete selected `image_key` list so exports remain reproducible even if album membership changes later
+- first-version dataset selection supports only snapshot album filters; dynamic album-backed datasets are deferred to a future version and must be explicit if added later
+- UI counts should show selected image count, selected bbox count by class, and count by album before export
+
+Album actions in step 4:
+
+- selected dataset candidates can be added to a new or existing album before export
+- all visible filtered candidates can be saved as a new album, which is useful for reusable curation groups such as `Singapore 2025 reviewed ships`
+- album creation from step 4 should not imply dataset export; albums are reusable organization, while datasets are training/export manifests
+- moving images between albums from step 4 follows the same non-destructive default: copy/add first, remove from source album only when explicitly requested
+- dataset selection manifests should record whether an album action was used to create the selected image set, but the training export should still depend on concrete `image_key` entries by default
 
 `neither` handling:
 
@@ -1277,6 +1544,7 @@ workspace/dataset_selections/<dataset_name>.json
 Each dataset selection manifest should record:
 
 - dataset name and version
+- selected album ids used as filters, if any, plus optional album display-name snapshots for audit only
 - selected image keys
 - optional selected detection ids if bbox-level filtering is enabled
 - review manifest fingerprint or per-image preprocess fingerprints
@@ -1315,6 +1583,11 @@ Example selection manifest:
   "created_by": "gavin",
   "description": "First reviewed Sentinel STS training set",
   "selection_mode": "image",
+  "album_filters": {
+    "mode": "snapshot",
+    "album_ids": ["alb_a1b2c3d4e5"],
+    "album_name_snapshots": {"alb_a1b2c3d4e5": "Singapore 2025"}
+  },
   "classes": {
     "0": "ship",
     "1": "ships"
