@@ -73,12 +73,29 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert result["review_stubs_created_count"] == 1
     assert result["review_stubs_existing_count"] == 0
     assert result["review_stubs_skipped_count"] == 0
+    assert result["import_job_id"].startswith("imp_")
+    assert result["album"]["album_id"].startswith("alb_")
     imported = result["imported"][0]
     assert imported["image_key"].startswith("img_")
     assert imported["render_profile_kind"] == "rgb_original"
+    assert imported["album_id"] == result["album"]["album_id"]
+    assert imported["member_status"] == "added_imported"
     assert Path(imported["cache_path"]).is_file()
     assert imported["review_stub_status"] == "created"
     assert imported["review_stub_path"] == str(reviews_dir / "tester" / f"{imported['image_key']}.json")
+    assert Path(result["import_log_path"]).is_file()
+    assert Path(result["import_summary_path"]).is_file()
+
+    album_path = Path(result["album"]["album_path"])
+    album = json.loads(album_path.read_text())
+    assert album["album_id"] == result["album"]["album_id"]
+    assert album["album_name"] == "source.png"
+    assert album["source_display_name"] == str(source)
+    assert album["counts"]["members_added_imported"] == 1
+    assert album["images"][0]["image_key"] == imported["image_key"]
+    assert album["images"][0]["member_status"] == "added_imported"
+    album_index = json.loads(Path(result["album"]["album_index_path"]).read_text())
+    assert album_index["albums"][0]["album_id"] == album["album_id"]
 
     manifest = json.loads(manifest_path.read_text())
     assert manifest["schema_version"] == 1
@@ -94,6 +111,9 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert entry["source_path"] == str(source)
     assert entry["browser_relative_path"] is None
     assert entry["source_collection"] == str(source)
+    assert entry["source_display_name"] == str(source)
+    assert entry["album_ids"] == [album["album_id"]]
+    assert "album_names" not in entry
     assert entry["cache_path"] == imported["cache_path"]
     assert entry["width"] == 8
     assert entry["height"] == 6
@@ -117,6 +137,7 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert review["height"] == 6
     assert review["review_status"] == "overview_1"
     assert review["detections"] == []
+    assert "album_ids" not in review
 
 
 def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
@@ -134,6 +155,94 @@ def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
     assert envelope["result"]["imported_count"] == 0
     assert envelope["result"]["skipped_count"] == 1
     assert envelope["result"]["skipped"][0]["status"] == "already_imported"
+
+
+def test_cli_import_data_adds_existing_image_to_new_album(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    first = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--album-name",
+        "First album",
+    )
+    assert first.returncode == 0
+    first_result = parse_envelope(first)["result"]
+
+    second = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--album-name",
+        "Second album",
+        "--album-description",
+        "Known image reuse",
+    )
+
+    assert second.returncode == 0
+    result = parse_envelope(second)["result"]
+    assert result["imported_count"] == 0
+    assert result["skipped_count"] == 1
+    skipped = result["skipped"][0]
+    assert skipped["member_status"] == "added_existing"
+    assert skipped["album_id"] != first_result["album"]["album_id"]
+    manifest = json.loads(manifest_path.read_text())
+    entry = manifest["images"][skipped["image_key"]]
+    assert entry["album_ids"] == [first_result["album"]["album_id"], result["album"]["album_id"]]
+    album = json.loads(Path(result["album"]["album_path"]).read_text())
+    assert album["album_name"] == "Second album"
+    assert album["album_description"] == "Known image reuse"
+    assert album["counts"]["members_added_existing"] == 1
+
+
+def test_cli_import_data_appends_to_existing_album_by_id(tmp_path: Path) -> None:
+    source_a = write_png(tmp_path / "inputs" / "a.png")
+    source_b = write_png(tmp_path / "inputs" / "b.png", size=(9, 7))
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    first = run_cli(
+        "import-data",
+        "--source",
+        str(source_a),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--album-name",
+        "Append target",
+    )
+    assert first.returncode == 0
+    album_id = parse_envelope(first)["result"]["album"]["album_id"]
+
+    second = run_cli(
+        "import-data",
+        "--source",
+        str(source_b),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--append-to-album-id",
+        album_id,
+    )
+
+    assert second.returncode == 0
+    result = parse_envelope(second)["result"]
+    assert result["album"]["album_id"] == album_id
+    album = json.loads(Path(result["album"]["album_path"]).read_text())
+    assert album["album_name"] == "Append target"
+    assert len([image for image in album["images"] if image.get("image_key")]) == 2
+    assert len(album["import_job_ids"]) == 2
 
 
 def test_cli_import_data_creates_missing_stub_for_already_imported_image(tmp_path: Path) -> None:

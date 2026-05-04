@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import platform
+import secrets
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,8 @@ SPLITS = ("train", "val", "test")
 SUPPORTED_IMPORT_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 DEFAULT_IMPORT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "training_import_manifest.json"
 DEFAULT_IMPORT_CACHE_DIR = WORKSPACE_DIR / "cache" / "imported_images"
+DEFAULT_ALBUMS_DIR = WORKSPACE_DIR / "albums"
+DEFAULT_IMPORT_JOBS_DIR = WORKSPACE_DIR / "reports" / "import_jobs"
 RGB_ORIGINAL_RENDER_PROFILE = {"kind": "rgb_original"}
 TRUE_COLOR_RENDER_PROFILE = {
     "kind": "true_color",
@@ -160,6 +163,187 @@ def load_import_manifest(manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PAT
 def save_import_manifest(manifest_path: str | Path, manifest: dict[str, Any]) -> None:
     manifest["updated_at"] = utcnow_iso_for_training()
     write_json(manifest_path, manifest)
+
+
+def append_jsonl(path: str | Path, event: dict[str, Any]) -> None:
+    target = repo_resolve(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def default_albums_dir_for_manifest(manifest_path: str | Path) -> Path:
+    manifest_file = repo_resolve(manifest_path)
+    if manifest_file == repo_resolve(DEFAULT_IMPORT_MANIFEST_PATH):
+        return DEFAULT_ALBUMS_DIR
+    return manifest_file.parent.parent / "albums"
+
+
+def default_import_jobs_dir_for_manifest(manifest_path: str | Path) -> Path:
+    manifest_file = repo_resolve(manifest_path)
+    if manifest_file == repo_resolve(DEFAULT_IMPORT_MANIFEST_PATH):
+        return DEFAULT_IMPORT_JOBS_DIR
+    return manifest_file.parent.parent / "reports" / "import_jobs"
+
+
+def new_album_id(albums_dir: str | Path) -> str:
+    root = repo_resolve(albums_dir)
+    while True:
+        album_id = "alb_" + secrets.token_hex(5)
+        if not (root / f"{album_id}.json").exists():
+            return album_id
+
+
+def new_import_job_id(import_jobs_dir: str | Path) -> str:
+    root = repo_resolve(import_jobs_dir)
+    while True:
+        job_id = "imp_" + secrets.token_hex(6)
+        if not (root / f"{job_id}.summary.json").exists() and not (root / f"{job_id}.jsonl").exists():
+            return job_id
+
+
+def load_album_record(albums_dir: str | Path, album_id: str) -> dict[str, Any]:
+    target = repo_resolve(Path(albums_dir) / f"{album_id}.json")
+    if not target.is_file():
+        raise ValueError(f"Album id not found: {album_id}")
+    album = json.loads(target.read_text())
+    if not isinstance(album, dict):
+        raise ValueError(f"Album record must be a JSON object: {target}")
+    return album
+
+
+def derive_album_name(sources: list[str | Path], source_kind: str, source_display_name: str | None) -> str:
+    if source_kind == "browser_upload":
+        if source_display_name:
+            return Path(source_display_name).name or source_display_name
+        return "Untitled " + utcnow_iso_for_training().replace("T", " ")[:16]
+    if sources:
+        first = repo_resolve(sources[0])
+        return first.name or str(first)
+    return "Untitled " + utcnow_iso_for_training().replace("T", " ")[:16]
+
+
+def infer_import_source_kind(sources: list[str | Path]) -> str:
+    if len(sources) == 1:
+        source = repo_resolve(sources[0])
+        if source.is_file():
+            return "local_file"
+        if source.is_dir():
+            return "local_folder"
+    return "local_folder"
+
+
+def default_source_display_name(sources: list[str | Path], source_kind: str) -> str | None:
+    if source_kind == "browser_upload":
+        return None
+    if len(sources) == 1:
+        return str(repo_resolve(sources[0]))
+    return None
+
+
+def append_unique(values: list[Any], value: Any) -> bool:
+    if value in (None, "") or value in values:
+        return False
+    values.append(value)
+    return True
+
+
+def add_album_id_to_entry(entry: dict[str, Any], album_id: str) -> bool:
+    album_ids = entry.setdefault("album_ids", [])
+    if not isinstance(album_ids, list):
+        album_ids = []
+        entry["album_ids"] = album_ids
+    return append_unique(album_ids, album_id)
+
+
+def browser_relative_path_for(source_path: Path, roots: list[Path], source_kind: str) -> str | None:
+    if source_kind != "browser_upload":
+        return None
+    for root in roots:
+        try:
+            return source_path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return source_path.name
+
+
+def album_image_record(
+    entry: dict[str, Any] | None,
+    item: dict[str, Any],
+    *,
+    import_status: str,
+    member_status: str,
+) -> dict[str, Any]:
+    return {
+        "image_key": item.get("image_key") or (entry or {}).get("image_key"),
+        "original_filename": (entry or {}).get("original_filename") or Path(str(item.get("source") or "")).name or None,
+        "browser_relative_path": (entry or {}).get("browser_relative_path"),
+        "source_path": (entry or {}).get("source_path") or item.get("source"),
+        "cache_path": (entry or {}).get("cache_path") or item.get("cache_path"),
+        "review_stub_path": item.get("review_stub_path"),
+        "import_status": import_status,
+        "member_status": member_status,
+        "reason": item.get("reason"),
+    }
+
+
+def merge_album_images(existing_images: list[dict[str, Any]], new_images: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    for image in existing_images:
+        key = image.get("image_key")
+        if key:
+            positions[key] = len(merged)
+        merged.append(image)
+    for image in new_images:
+        key = image.get("image_key")
+        if key and key in positions:
+            merged[positions[key]] = image
+        else:
+            if key:
+                positions[key] = len(merged)
+            merged.append(image)
+    return merged
+
+
+def write_album_index(albums_dir: str | Path, album: dict[str, Any]) -> None:
+    index_path = repo_resolve(Path(albums_dir) / "index.json")
+    if index_path.exists():
+        index = json.loads(index_path.read_text())
+        if not isinstance(index, dict):
+            raise ValueError(f"Album index must be a JSON object: {index_path}")
+    else:
+        index = {"schema_version": SCHEMA_VERSION, "albums": []}
+    albums = index.setdefault("albums", [])
+    if not isinstance(albums, list):
+        albums = []
+        index["albums"] = albums
+    latest_job_id = None
+    job_ids = album.get("import_job_ids") or []
+    if job_ids:
+        latest_job_id = job_ids[-1]
+    summary = {
+        "album_id": album.get("album_id"),
+        "album_name": album.get("album_name"),
+        "album_description": album.get("album_description"),
+        "source_display_name": album.get("source_display_name"),
+        "source_kind": album.get("source_kind"),
+        "image_count": len([image for image in album.get("images") or [] if image.get("image_key")]),
+        "counts": album.get("counts") or {},
+        "created_at": album.get("created_at"),
+        "updated_at": album.get("updated_at"),
+        "latest_import_job_id": latest_job_id,
+    }
+    replaced = False
+    for idx, current in enumerate(albums):
+        if current.get("album_id") == summary["album_id"]:
+            albums[idx] = summary
+            replaced = True
+            break
+    if not replaced:
+        albums.append(summary)
+    index["updated_at"] = utcnow_iso_for_training()
+    write_json(index_path, index)
 
 
 def default_render_profile(kind: str) -> dict[str, Any]:
@@ -338,6 +522,10 @@ def import_manifest_entry(
     render_info: dict[str, Any],
     *,
     source_collection: str,
+    source_kind: str,
+    source_display_name: str | None,
+    browser_relative_path: str | None,
+    album_id: str | None,
     import_status: str,
     previous_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -352,16 +540,17 @@ def import_manifest_entry(
         }
     )
     stat = source_path.stat()
-    return {
+    entry = {
         "schema_version": SCHEMA_VERSION,
         "image_key": image_key,
         "image_filename": f"{image_key}.png",
         "original_filename": source_path.name,
         "display_filename": source_path.name,
         "source_path": str(source_path),
-        "browser_relative_path": None,
+        "browser_relative_path": browser_relative_path,
         "source_collection": source_collection,
-        "source_kind": "imported_image",
+        "source_display_name": source_display_name,
+        "source_kind": source_kind,
         "date": None,
         "tile_row": None,
         "tile_col": None,
@@ -387,6 +576,13 @@ def import_manifest_entry(
             "metadata": render_info.get("metadata") or {},
         },
     }
+    if previous_entry:
+        for key in ("album_ids",):
+            if key in previous_entry:
+                entry[key] = copy.deepcopy(previous_entry[key])
+    if album_id:
+        add_album_id_to_entry(entry, album_id)
+    return entry
 
 
 def import_result_item(entry: dict[str, Any], status: str) -> dict[str, Any]:
@@ -460,6 +656,15 @@ def import_training_data(
     *,
     manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
     cache_dir: str | Path = DEFAULT_IMPORT_CACHE_DIR,
+    albums_dir: str | Path | None = None,
+    import_jobs_dir: str | Path | None = None,
+    album_name: str | None = None,
+    album_description: str | None = None,
+    source_display_name: str | None = None,
+    source_kind: str | None = None,
+    append_to_album_id: str | None = None,
+    import_job_id: str | None = None,
+    resume_job_id: str | None = None,
     render_profile_value: str = "auto",
     reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
     reviewer: str = review_lib.DEFAULT_REVIEWER,
@@ -473,18 +678,77 @@ def import_training_data(
         raise ValueError("At least one --source is required")
     manifest_file = repo_resolve(manifest_path)
     cache_root = repo_resolve(cache_dir)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    job_root = repo_resolve(import_jobs_dir or default_import_jobs_dir_for_manifest(manifest_file))
+    resolved_source_kind = source_kind or infer_import_source_kind(sources)
+    resolved_source_display_name = source_display_name if source_display_name not in {""} else None
+    if resolved_source_display_name is None:
+        resolved_source_display_name = default_source_display_name(sources, resolved_source_kind)
     if manifest_file.exists() and not manifest_file.is_file():
         raise ValueError(f"Import manifest path is not a file: {manifest_file}")
     if cache_root.exists() and not cache_root.is_dir():
         raise ValueError(f"Import cache path is not a directory: {cache_root}")
+    if resume_job_id and append_to_album_id:
+        raise ValueError("Use either --resume-job or --append-to-album-id, not both")
+
+    if resume_job_id:
+        summary_path = job_root / f"{resume_job_id}.summary.json"
+        if not summary_path.is_file():
+            raise ValueError(f"Import job summary not found for resume: {resume_job_id}")
+        summary = json.loads(summary_path.read_text())
+        album_summary = summary.get("album") or summary.get("result", {}).get("album") or {}
+        append_to_album_id = album_summary.get("album_id")
+        if not append_to_album_id:
+            raise ValueError(f"Import job summary has no album id: {resume_job_id}")
+        import_job_id = resume_job_id
+
+    if import_job_id is None:
+        import_job_id = new_import_job_id(job_root)
+
+    if append_to_album_id:
+        existing_album = load_album_record(album_root, append_to_album_id)
+        album_id = append_to_album_id
+        resolved_album_name = existing_album.get("album_name") or album_name or album_id
+        resolved_album_description = existing_album.get("album_description")
+        if album_description not in {None, ""}:
+            resolved_album_description = album_description
+        if resolved_source_display_name is None:
+            resolved_source_display_name = existing_album.get("source_display_name")
+        existing_album_images = existing_album.get("images") or []
+    else:
+        existing_album = None
+        album_id = new_album_id(album_root)
+        resolved_album_name = album_name or derive_album_name(sources, resolved_source_kind, resolved_source_display_name)
+        resolved_album_description = album_description or None
+        existing_album_images = []
+
+    album_existing_keys = {image.get("image_key") for image in existing_album_images if image.get("image_key")}
+    log_path = job_root / f"{import_job_id}.jsonl"
+    summary_path = job_root / f"{import_job_id}.summary.json"
+
+    def log_event(event: dict[str, Any]) -> None:
+        if dry_run:
+            return
+        payload = {
+            "logged_at": utcnow_iso_for_training(),
+            "job_id": import_job_id,
+            "album_id": album_id,
+            **event,
+        }
+        append_jsonl(log_path, payload)
 
     manifest = load_import_manifest(manifest_file)
     manifest["manifest_type"] = "training_import"
     manifest["cache_dir"] = repo_relative(cache_root)
     files, failed = discover_import_files(sources, recursive=recursive)
+    initial_failed_count = len(failed)
     imported: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    album_images: list[dict[str, Any]] = []
     review_stub_counts = {"created": 0, "existing": 0, "skipped": 0}
+    member_counts = {"added_imported": 0, "added_existing": 0, "already_present": 0, "failed": 0}
+    manifest_changed = False
+    browser_roots = [repo_resolve(source).resolve() for source in sources]
 
     def emit(event: dict[str, Any]) -> None:
         if progress_callback is None:
@@ -494,24 +758,42 @@ def import_training_data(
         except Exception:
             pass
 
-    emit({
+    log_event({
+        "phase": "queued",
+        "sources": [str(repo_resolve(source)) for source in sources],
+        "source_kind": resolved_source_kind,
+        "source_display_name": resolved_source_display_name,
+    })
+
+    discovered_event = {
         "phase": "discovered",
         "total": len(files),
         "discovered_failed": len(failed),
-    })
+    }
+    emit(discovered_event)
+    log_event(discovered_event)
+
+    for item in failed:
+        member_counts["failed"] += 1
+        album_images.append(album_image_record(None, item, import_status="failed", member_status="failed"))
+        log_event({"phase": "failed", "source": item.get("source"), "reason": item.get("reason")})
 
     for index, candidate in enumerate(files):
         source_path = repo_resolve(candidate["source_path"])
         source_collection = str(candidate["source_collection"])
-        emit({
+        browser_relative_path = browser_relative_path_for(source_path, browser_roots, resolved_source_kind)
+        processing_event = {
             "phase": "processing",
             "index": index,
             "total": len(files),
             "current": source_path.name,
+            "browser_relative_path": browser_relative_path,
             "imported_count": len(imported),
             "skipped_count": len(skipped),
             "failed_count": len(failed),
-        })
+        }
+        emit(processing_event)
+        log_event(processing_event)
         try:
             render_profile = resolve_import_render_profile(render_profile_value, source_path)
             image_key = review_lib.image_key_for_source(source_path, render_profile)
@@ -531,9 +813,26 @@ def import_training_data(
                 )
                 if item["review_stub_status"] == "failed":
                     failed.append(review_stub_failure_item(item))
+                    member_counts["failed"] += 1
+                    album_images.append(album_image_record(existing, item, import_status="failed", member_status="failed"))
+                    log_event({"phase": "failed", "image_key": image_key, "current": source_path.name, "reason": item.get("review_stub_error")})
                     continue
+                if add_album_id_to_entry(existing, album_id):
+                    manifest_changed = True
+                if resolved_source_display_name and not existing.get("source_display_name"):
+                    existing["source_display_name"] = resolved_source_display_name
+                    manifest_changed = True
+                if browser_relative_path and not existing.get("browser_relative_path"):
+                    existing["browser_relative_path"] = browser_relative_path
+                    manifest_changed = True
                 review_stub_counts[item["review_stub_status"]] += 1
+                member_status = "already_present" if image_key in album_existing_keys else "added_existing"
+                member_counts[member_status] += 1
+                item["album_id"] = album_id
+                item["member_status"] = member_status
+                album_images.append(album_image_record(existing, item, import_status="already_imported", member_status=member_status))
                 skipped.append(item)
+                log_event({"phase": "skipped", "image_key": image_key, "current": source_path.name, "status": "already_imported", "member_status": member_status})
                 continue
 
             status = "regenerated_cache" if existing else "imported"
@@ -544,6 +843,10 @@ def import_training_data(
                 render_profile,
                 render_info,
                 source_collection=source_collection,
+                source_kind=resolved_source_kind,
+                source_display_name=resolved_source_display_name,
+                browser_relative_path=browser_relative_path,
+                album_id=album_id,
                 import_status=status,
                 previous_entry=existing,
             )
@@ -558,41 +861,119 @@ def import_training_data(
             )
             if item["review_stub_status"] == "failed":
                 failed.append(review_stub_failure_item(item))
+                member_counts["failed"] += 1
+                album_images.append(album_image_record(entry, item, import_status="failed", member_status="failed"))
+                log_event({"phase": "failed", "image_key": image_key, "current": source_path.name, "reason": item.get("review_stub_error")})
                 continue
             review_stub_counts[item["review_stub_status"]] += 1
+            member_status = "added_imported" if status == "imported" else "added_existing"
+            if image_key in album_existing_keys:
+                member_status = "already_present"
+            member_counts[member_status] += 1
+            item["album_id"] = album_id
+            item["member_status"] = member_status
+            album_images.append(album_image_record(entry, item, import_status=status, member_status=member_status))
             imported.append(item)
             if not dry_run:
                 manifest.setdefault("images", {})[image_key] = entry
+                manifest_changed = True
+            log_event({"phase": "imported", "image_key": image_key, "current": source_path.name, "status": status, "member_status": member_status})
         except Exception as exc:
             render_profile_kind = None
             try:
                 render_profile_kind = resolve_import_render_profile(render_profile_value, source_path).get("kind")
             except Exception:
                 pass
-            failed.append(
-                {
-                    "image_key": None,
-                    "source": str(source_path),
-                    "cache_path": None,
-                    "render_profile_kind": render_profile_kind,
-                    "status": "failed",
-                    "reason": str(exc),
-                }
-            )
+            item = {
+                "image_key": None,
+                "source": str(source_path),
+                "cache_path": None,
+                "render_profile_kind": render_profile_kind,
+                "status": "failed",
+                "reason": str(exc),
+            }
+            failed.append(item)
+            member_counts["failed"] += 1
+            album_images.append(album_image_record(None, item, import_status="failed", member_status="failed"))
+            log_event({"phase": "failed", "current": source_path.name, "source": str(source_path), "reason": str(exc)})
 
-    if not dry_run and imported:
+    if not dry_run and manifest_changed:
         emit({"phase": "saving", "total": len(files)})
+        log_event({"phase": "manifest-saving", "total": len(files)})
         save_import_manifest(manifest_file, manifest)
+        log_event({"phase": "manifest-saved", "manifest_path": repo_relative(manifest_file)})
 
-    emit({
+    album_counts = {
+        "uploaded": len(files) + initial_failed_count,
+        "discovered": len(files),
+        "imported": len(imported),
+        "skipped": len(skipped),
+        "failed": len(failed),
+        "members_added_imported": member_counts["added_imported"],
+        "members_added_existing": member_counts["added_existing"],
+        "members_already_present": member_counts["already_present"],
+        "members_failed": member_counts["failed"],
+        "review_stubs_created": review_stub_counts["created"],
+        "review_stubs_existing": review_stub_counts["existing"],
+        "review_stubs_skipped": review_stub_counts["skipped"],
+    }
+
+    album_record = {
+        "schema_version": SCHEMA_VERSION,
+        "album_id": album_id,
+        "album_name": resolved_album_name,
+        "album_description": resolved_album_description,
+        "source_display_name": resolved_source_display_name,
+        "source_kind": resolved_source_kind,
+        "import_job_ids": list((existing_album or {}).get("import_job_ids") or []),
+        "created_at": (existing_album or {}).get("created_at") or utcnow_iso_for_training(),
+        "updated_at": utcnow_iso_for_training(),
+        "created_by": (existing_album or {}).get("created_by") or reviewer,
+        "reviewer": reviewer,
+        "manifest_path": repo_relative(manifest_file),
+        "cache_dir": repo_relative(cache_root),
+        "reviews_dir": repo_relative(reviews_dir),
+        "options": {
+            "recursive": bool(recursive),
+            "force": bool(force),
+            "render_profile": render_profile_value,
+            "create_review_stubs": bool(create_review_stubs),
+        },
+        "counts": album_counts,
+        "images": merge_album_images(existing_album_images, album_images),
+    }
+    append_unique(album_record["import_job_ids"], import_job_id)
+    album_path = album_root / f"{album_id}.json"
+    if not dry_run:
+        write_json(album_path, album_record)
+        write_album_index(album_root, album_record)
+        log_event({"phase": "album-saved", "album_path": repo_relative(album_path)})
+
+    done_event = {
         "phase": "done",
         "total": len(files),
         "imported_count": len(imported),
         "skipped_count": len(skipped),
         "failed_count": len(failed),
-    })
+    }
+    emit(done_event)
+    log_event(done_event)
 
-    return {
+    album_summary = {
+        "album_id": album_id,
+        "album_name": resolved_album_name,
+        "album_description": resolved_album_description,
+        "album_path": repo_relative(album_path),
+        "album_index_path": repo_relative(album_root / "index.json"),
+        "source_display_name": resolved_source_display_name,
+        "source_kind": resolved_source_kind,
+        "image_count": len([image for image in album_record["images"] if image.get("image_key")]),
+    }
+    result = {
+        "import_job_id": import_job_id,
+        "import_log_path": repo_relative(log_path),
+        "import_summary_path": repo_relative(summary_path),
+        "album": album_summary,
         "manifest_path": repo_relative(manifest_file),
         "cache_dir": repo_relative(cache_root),
         "processed_count": len(imported) + len(skipped) + len(failed),
@@ -606,6 +987,9 @@ def import_training_data(
         "skipped": skipped,
         "failed": failed,
     }
+    if not dry_run:
+        write_json(summary_path, {"schema_version": SCHEMA_VERSION, "job_id": import_job_id, "album": album_summary, "result": result})
+    return result
 
 
 def yaml_defines_required_classes(data_yaml: Path) -> bool:

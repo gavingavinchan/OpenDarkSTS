@@ -2,6 +2,8 @@
 
 `scripts/training_pipeline_cli.py` is the machine-readable command-line interface for the training-side pipeline. It calls the same backend helpers used by the reviewer and training pipeline code, so prefer it for automation, smoke checks, and LLM/developer diagnostics instead of reimplementing pipeline logic in shell scripts.
 
+Review-queue selection, pruning, and safe archive semantics are planned in `docs/review_queue_selection_removal_plan.md`.
+
 Run commands from the repository root:
 
 ```bash

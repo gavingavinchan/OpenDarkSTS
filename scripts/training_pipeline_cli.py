@@ -143,6 +143,13 @@ def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         list(args.source),
         manifest_path=args.manifest,
         cache_dir=args.cache_dir,
+        albums_dir=args.albums_dir,
+        import_jobs_dir=args.import_jobs_dir,
+        album_name=args.album_name,
+        album_description=args.album_description,
+        source_display_name=args.source_display_name,
+        append_to_album_id=args.append_to_album_id,
+        resume_job_id=args.resume_job,
         render_profile_value=args.render_profile,
         reviews_dir=args.reviews_dir,
         reviewer=args.reviewer,
@@ -212,6 +219,13 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--source", action="append", required=True)
     import_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
     import_parser.add_argument("--cache-dir", default=str(pipeline.DEFAULT_IMPORT_CACHE_DIR))
+    import_parser.add_argument("--albums-dir")
+    import_parser.add_argument("--import-jobs-dir")
+    import_parser.add_argument("--album-name")
+    import_parser.add_argument("--album-description")
+    import_parser.add_argument("--source-display-name")
+    import_parser.add_argument("--append-to-album-id")
+    import_parser.add_argument("--resume-job")
     import_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
     import_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
     import_parser.add_argument("--render-profile", default="auto")

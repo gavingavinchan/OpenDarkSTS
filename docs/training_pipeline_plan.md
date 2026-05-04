@@ -10,6 +10,7 @@ Planning hierarchy:
 2. This document describes the training pipeline end to end.
 3. `docs/visual_review_plan.md` describes step 2 of this training pipeline in detail.
 4. `docs/visual_review_file_storage_plan.md` describes the file-backed review storage used by step 2 and consumed by later training stages.
+5. `docs/review_queue_selection_removal_plan.md` describes shared Step 1/Step 3 selection tools and safe review-queue removal/archive behavior.
 
 The operational/deployment pipeline is separate. It consumes promoted trained weights and model metadata produced by this training pipeline, but it does not own import, review, curation, augmentation, training, or model evaluation.
 
@@ -976,6 +977,8 @@ Step 1 must create or preserve these review files so step 2's queue is populated
 
 The cache filename convention is fixed as `<image_key>.png`. Original filenames are metadata only and must not be used as cache identity because filenames can collide across folders, machines, and collaborators.
 
+Queue cleanup, bulk selection, and safe archiving of unreviewed review stubs are specified in `docs/review_queue_selection_removal_plan.md`. Step 1 should use that shared selection/removal model instead of adding one-off delete buttons.
+
 ### Albums, Provenance, And Audit Logging
 
 Every GUI or CLI import invocation should create or append to a durable album record. An album is the user-facing image collection inside OpenDarkSTS, analogous to a Samsung/phone photo album. It is not a duplicate image store; it is membership, provenance, and workflow grouping for one user intent such as importing `/home/gavin/Downloads/AIS data/Sentinel 2A/Singapore/2025` as the album `Singapore 2025`.
@@ -1436,6 +1439,8 @@ Grid behavior:
 - single-click selects one tile and updates the right sidebar
 - double-click opens the original image in step 2 manual review at the corresponding bbox
 - a right-sidebar `Edit In Manual Review` button performs the same action as double-click
+
+Shared checkbox/range selection and safe queue-removal behavior for Step 3 are specified in `docs/review_queue_selection_removal_plan.md`.
 
 Album filtering and sorting:
 

@@ -162,7 +162,24 @@ def progress_caption(event: dict) -> str:
     return ""
 
 
-def run_import_job(job_id: str, staging_dir: Path, *, force: bool, recursive: bool) -> None:
+def query_text(parsed, name: str) -> str | None:
+    values = parse_qs(parsed.query).get(name)
+    if not values:
+        return None
+    value = values[0].strip()
+    return value or None
+
+
+def run_import_job(
+    job_id: str,
+    staging_dir: Path,
+    *,
+    force: bool,
+    recursive: bool,
+    album_name: str | None,
+    album_description: str | None,
+    source_display_name: str | None,
+) -> None:
     def callback(event: dict) -> None:
         phase = event.get("phase")
         fields = {
@@ -189,6 +206,11 @@ def run_import_job(job_id: str, staging_dir: Path, *, force: bool, recursive: bo
             sources=[str(staging_dir)],
             manifest_path=IMPORT_MANIFEST_PATH,
             cache_dir=IMPORT_CACHE_DIR,
+            album_name=album_name,
+            album_description=album_description,
+            source_display_name=source_display_name,
+            source_kind="browser_upload",
+            import_job_id=job_id,
             reviews_dir=REVIEWS_DIR,
             reviewer=IMPORT_REVIEWER,
             recursive=recursive,
@@ -207,6 +229,7 @@ def run_import_job(job_id: str, staging_dir: Path, *, force: bool, recursive: bo
                 "failed_count": result["failed_count"],
             }),
             result=result,
+            album=result.get("album"),
             finished_at=utcnow_iso(),
             finished_epoch=time.time(),
         )
@@ -222,7 +245,14 @@ def run_import_job(job_id: str, staging_dir: Path, *, force: bool, recursive: bo
         )
 
 
-def start_import_job(uploads: list[tuple[str, bytes]], *, force: bool) -> str:
+def start_import_job(
+    uploads: list[tuple[str, bytes]],
+    *,
+    force: bool,
+    album_name: str | None,
+    album_description: str | None,
+    source_display_name: str | None,
+) -> str:
     job_id = new_job_id()
     staging_dir = IMPORT_STAGING_ROOT / job_id
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -253,13 +283,23 @@ def start_import_job(uploads: list[tuple[str, bytes]], *, force: bool) -> str:
             "finished_epoch": 0,
             "error": None,
             "result": None,
+            "album": None,
             "staging_dir": str(staging_dir),
             "force": bool(force),
+            "album_name": album_name,
+            "album_description": album_description,
+            "source_display_name": source_display_name,
         }
     thread = threading.Thread(
         target=run_import_job,
         args=(job_id, staging_dir),
-        kwargs={"force": force, "recursive": True},
+        kwargs={
+            "force": force,
+            "recursive": True,
+            "album_name": album_name,
+            "album_description": album_description,
+            "source_display_name": source_display_name,
+        },
         daemon=True,
         name=f"import-job-{job_id}",
     )
@@ -293,6 +333,8 @@ def manifest_summary() -> dict:
             "browser_relative_path": entry.get("browser_relative_path"),
             "source_path": entry.get("source_path"),
             "source_collection": entry.get("source_collection"),
+            "source_display_name": entry.get("source_display_name"),
+            "album_ids": entry.get("album_ids") or [],
             "source_size_bytes": entry.get("source_size_bytes"),
             "width": entry.get("width"),
             "height": entry.get("height"),
@@ -985,6 +1027,10 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     }
     .intake-options label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
     .intake-options input { accent-color: var(--stamp); }
+    .album-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+    .album-fields label { display: grid; gap: 5px; color: var(--muted); font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+    .album-fields input { width: 100%; border: 1px solid var(--line); border-radius: 3px; background: rgba(255,255,255,0.52); padding: 9px 10px; color: var(--ink); font: 13px var(--mono); }
+    .album-fields .wide { grid-column: 1 / -1; }
     .intake-footer {
       margin-top: 22px;
       font-family: var(--mono);
@@ -1298,6 +1344,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       aside.detail { position: static; height: auto; border-left: 0; border-top: 1px solid var(--line); }
       .intake-card { padding: 36px 28px 28px; }
       .intake-actions { grid-template-columns: 1fr; }
+      .album-fields { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1343,6 +1390,9 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       search: '',
       selectedKey: null,
       forceRefresh: false,
+      albumName: '',
+      albumDescription: '',
+      sourceDisplayName: '',
     };
 
     function restoreState() {
@@ -1353,12 +1403,17 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         if (typeof raw.search === 'string') state.search = raw.search;
         if (typeof raw.selectedKey === 'string') state.selectedKey = raw.selectedKey;
         if (typeof raw.forceRefresh === 'boolean') state.forceRefresh = raw.forceRefresh;
+        if (typeof raw.albumName === 'string') state.albumName = raw.albumName;
+        if (typeof raw.albumDescription === 'string') state.albumDescription = raw.albumDescription;
+        if (typeof raw.sourceDisplayName === 'string') state.sourceDisplayName = raw.sourceDisplayName;
       } catch (e) {}
     }
     function persistState() {
       localStorage.setItem(stateKey, JSON.stringify({
         view: state.view, sort: state.sort, search: state.search,
         selectedKey: state.selectedKey, forceRefresh: state.forceRefresh,
+        albumName: state.albumName, albumDescription: state.albumDescription,
+        sourceDisplayName: state.sourceDisplayName,
       }));
     }
 
@@ -1434,6 +1489,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
                 <span class="hint">recursive scan, hidden skipped</span>
               </button>
             </div>
+            ${renderAlbumFields()}
             <div class="intake-options">
               <label><input type="checkbox" id="forceRefresh" ${state.forceRefresh ? 'checked' : ''}> Force re-render existing cache</label>
             </div>
@@ -1452,6 +1508,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
             <button class="toolbar-btn" id="pickFiles">+ Pick Images</button>
             <button class="toolbar-btn ghost" id="pickFolder">+ Pick Folder</button>
             <span class="pill"><strong>${m.image_count}</strong> imported · ${(sc.imported || 0)}+${(sc.regenerated_cache || 0)}+${(sc.already_imported || 0)}</span>
+            <input class="toolbar-search" id="albumName" placeholder="album name" value="${escape(state.albumName)}">
             <input class="toolbar-search" id="search" placeholder="search filename, key, status" value="${escape(state.search)}">
             <select class="sort-select" id="sort">
               <option value="imported_desc" ${state.sort === 'imported_desc' ? 'selected' : ''}>Newest first</option>
@@ -1473,6 +1530,16 @@ IMPORT_HTML = r"""<!DOCTYPE html>
             </section>
             <aside class="detail" id="detail">${renderDetail()}</aside>
           </div>
+        </div>
+      `;
+    }
+
+    function renderAlbumFields() {
+      return `
+        <div class="album-fields">
+          <label>Album name<input id="albumName" value="${escape(state.albumName)}" placeholder="defaults from selected folder"></label>
+          <label>Source label<input id="sourceDisplayName" value="${escape(state.sourceDisplayName)}" placeholder="e.g. Singapore / 2025"></label>
+          <label class="wide">Description<input id="albumDescription" value="${escape(state.albumDescription)}" placeholder="optional notes for this album"></label>
         </div>
       `;
     }
@@ -1558,6 +1625,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
           <dt>Loader</dt><dd>${escape(im.loader || '-')}</dd>
           <dt>Imported at</dt><dd>${formatTime(im.imported_at)}</dd>
           <dt>Updated at</dt><dd>${formatTime(im.updated_at)}</dd>
+          <dt>Album ids</dt><dd>${(im.album_ids || []).map(escape).join(', ') || '-'}</dd>
+          <dt>Source label</dt><dd>${escape(im.source_display_name || '-')}</dd>
           <dt>Source path</dt><dd>${escape(im.source_path || im.browser_relative_path || '-')}</dd>
           <dt>Source collection</dt><dd>${escape(im.source_collection || '-')}</dd>
           <dt>Cache path</dt><dd>${escape(im.cache_path || '-')}</dd>
@@ -1602,6 +1671,12 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       if (fileBtn) fileBtn.onclick = () => document.getElementById('fileInput').click();
       if (folderBtn) folderBtn.onclick = () => document.getElementById('folderInput').click();
       if (force) force.onchange = (e) => { state.forceRefresh = e.target.checked; persistState(); };
+      const albumName = document.getElementById('albumName');
+      const albumDescription = document.getElementById('albumDescription');
+      const sourceDisplayName = document.getElementById('sourceDisplayName');
+      if (albumName) albumName.oninput = (e) => { state.albumName = e.target.value; persistState(); };
+      if (albumDescription) albumDescription.oninput = (e) => { state.albumDescription = e.target.value; persistState(); };
+      if (sourceDisplayName) sourceDisplayName.oninput = (e) => { state.sourceDisplayName = e.target.value; persistState(); };
     }
 
     function wireToolbarControls() {
@@ -1643,11 +1718,28 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     async function uploadFiles(fileList) {
       if (!fileList || fileList.length === 0) return;
       const formData = new FormData();
+      let topLevel = '';
       for (const f of fileList) {
         const name = f.webkitRelativePath || f.name;
+        if (!topLevel && f.webkitRelativePath && f.webkitRelativePath.includes('/')) {
+          topLevel = f.webkitRelativePath.split('/')[0];
+        }
         formData.append('files', f, name);
       }
-      const url = '/api/import/upload' + (state.forceRefresh ? '?force=1' : '');
+      let albumName = state.albumName.trim();
+      const sourceDisplayName = state.sourceDisplayName.trim() || topLevel;
+      if (!albumName && !sourceDisplayName) {
+        albumName = window.prompt('Album name for these files?', '') || '';
+        if (!albumName.trim()) return;
+        state.albumName = albumName.trim();
+        persistState();
+      }
+      const params = new URLSearchParams();
+      if (state.forceRefresh) params.set('force', '1');
+      if (albumName.trim()) params.set('album_name', albumName.trim());
+      if (state.albumDescription.trim()) params.set('album_description', state.albumDescription.trim());
+      if (sourceDisplayName) params.set('source_display_name', sourceDisplayName);
+      const url = '/api/import/upload' + (params.toString() ? '?' + params.toString() : '');
       try {
         const resp = await fetch(url, { method: 'POST', body: formData });
         if (!resp.ok) {
@@ -1781,8 +1873,17 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json({"error": "no files in upload"}, status=400)
             return
         force = query_bool(parsed, "force", False)
+        album_name = query_text(parsed, "album_name")
+        album_description = query_text(parsed, "album_description")
+        source_display_name = query_text(parsed, "source_display_name")
         try:
-            job_id = start_import_job(files, force=force)
+            job_id = start_import_job(
+                files,
+                force=force,
+                album_name=album_name,
+                album_description=album_description,
+                source_display_name=source_display_name,
+            )
         except Exception as exc:
             self._respond_json({"error": f"could not stage upload: {exc}"}, status=500)
             return
