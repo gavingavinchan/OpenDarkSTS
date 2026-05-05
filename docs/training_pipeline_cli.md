@@ -2,7 +2,7 @@
 
 `scripts/training_pipeline_cli.py` is the machine-readable command-line interface for the training-side pipeline. It calls the same backend helpers used by the reviewer and training pipeline code, so prefer it for automation, smoke checks, and LLM/developer diagnostics instead of reimplementing pipeline logic in shell scripts.
 
-Review-queue selection, pruning, and safe archive semantics are planned in `docs/review_queue_selection_removal_plan.md`.
+Selection and workspace image-removal semantics are specified in `docs/review_queue_selection_removal_plan.md`.
 
 Run commands from the repository root:
 
@@ -195,6 +195,77 @@ The command validates the render profile and returns:
 - `image_key`: stable key derived from source content and render profile
 
 Use this when diagnosing identity mismatches between preprocessing, review files, crops, and exported datasets.
+
+### `remove-images`
+
+Removes selected images from the local training workspace. This deletes import manifest entries, album membership, active review JSONs for the selected reviewer, legacy archived review JSONs for the same reviewer/key, workspace cache files, and browser-upload staging files under `workspace/cache/import_staging`. It does not modify original source imagery outside the repository/workspace.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py remove-images \
+  --reviewer gavin \
+  --image-key img_abc \
+  --image-key img_def
+```
+
+Options:
+
+- `--reviewer <name>`: reviewer folder to clean. Defaults to `$USER`, or `default` when unset.
+- `--reviews-dir <path>`: review root. Defaults to `workspace/reviews`.
+- `--manifest <path>`: import manifest path. Defaults to `workspace/manifests/training_import_manifest.json`.
+- `--albums-dir <path>`: album ledger root. Defaults from the manifest path.
+- `--reports-dir <path>`: removal report destination. Defaults to `workspace/reports/image_removals`.
+- `--image-key <key>`: image key to remove, repeatable. Explicit keys are removed regardless of reviewed/unreviewed status.
+- `--filter inactive-review`: expand to manifest-backed images that no longer have an active review JSON for the selected reviewer.
+- `--dry-run`: preview removable/missing counts and affected paths without deleting files or updating records.
+
+Report path:
+
+```text
+workspace/reports/image_removals/<timestamp_ms>.json
+```
+
+Use `remove-images --dry-run` before bulk removal. Example for cleaning old manifest rows whose active review JSONs are already absent:
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty remove-images \
+  --reviewer gavin \
+  --filter inactive-review \
+  --dry-run
+```
+
+### Legacy: `prune-review-queue`
+
+Archives safe unreviewed review stubs without deleting source images, cache PNGs, manifest entries, or album records.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py prune-review-queue \
+  --reviewer gavin \
+  --image-key img_abc \
+  --image-key img_def
+```
+
+Options:
+
+- `--reviewer <name>`: reviewer folder to inspect. Defaults to `$USER`, or `default` when unset.
+- `--reviews-dir <path>`: review root. Defaults to `workspace/reviews`.
+- `--reports-dir <path>`: prune report destination. Defaults to `workspace/reports/review_queue_prune`.
+- `--image-key <key>`: image key to evaluate, repeatable.
+- `--filter unreviewed`: expand to safe unreviewed stubs; when combined with explicit keys, reports which explicit keys match the unreviewed/archive-safe rule.
+- `--dry-run`: preview archivable/protected counts without moving files.
+
+Protection rules are conservative. Only initial `overview_1` review files with no reviewed detections, no review labels, and no manual detections are archived. Corrupt, missing, completed, partially reviewed, manually labeled, and ambiguous review files are protected and reported.
+
+Archive path:
+
+```text
+workspace/reviews/_archived_unreviewed/<timestamp_ms>/<reviewer>/<image_key>.json
+```
+
+Report path:
+
+```text
+workspace/reports/review_queue_prune/<timestamp_ms>.json
+```
 
 ### Planned: `export-bundle`
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from _helpers import detection, write_json, write_review, write_selection, write_training_config
+from _helpers import detection, load_training_lib, write_json, write_review, write_selection, write_training_config
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -144,10 +144,11 @@ def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
-    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    reviews_dir = tmp_path / "reviews"
+    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--reviews-dir", str(reviews_dir))
     assert first.returncode == 0
 
-    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--reviews-dir", str(reviews_dir))
 
     assert second.returncode == 0
     envelope = parse_envelope(second)
@@ -161,6 +162,7 @@ def test_cli_import_data_adds_existing_image_to_new_album(tmp_path: Path) -> Non
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
     first = run_cli(
         "import-data",
         "--source",
@@ -169,6 +171,8 @@ def test_cli_import_data_adds_existing_image_to_new_album(tmp_path: Path) -> Non
         str(manifest_path),
         "--cache-dir",
         str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
         "--album-name",
         "First album",
     )
@@ -183,6 +187,8 @@ def test_cli_import_data_adds_existing_image_to_new_album(tmp_path: Path) -> Non
         str(manifest_path),
         "--cache-dir",
         str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
         "--album-name",
         "Second album",
         "--album-description",
@@ -210,6 +216,7 @@ def test_cli_import_data_appends_to_existing_album_by_id(tmp_path: Path) -> None
     source_b = write_png(tmp_path / "inputs" / "b.png", size=(9, 7))
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
     first = run_cli(
         "import-data",
         "--source",
@@ -218,6 +225,8 @@ def test_cli_import_data_appends_to_existing_album_by_id(tmp_path: Path) -> None
         str(manifest_path),
         "--cache-dir",
         str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
         "--album-name",
         "Append target",
     )
@@ -232,6 +241,8 @@ def test_cli_import_data_appends_to_existing_album_by_id(tmp_path: Path) -> None
         str(manifest_path),
         "--cache-dir",
         str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
         "--append-to-album-id",
         album_id,
     )
@@ -343,12 +354,13 @@ def test_cli_import_data_regenerates_missing_cache_with_documented_status(tmp_pa
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
-    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    reviews_dir = tmp_path / "reviews"
+    first = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--reviews-dir", str(reviews_dir))
     assert first.returncode == 0
     first_item = parse_envelope(first)["result"]["imported"][0]
     Path(first_item["cache_path"]).unlink()
 
-    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    second = run_cli("import-data", "--source", str(source), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--reviews-dir", str(reviews_dir))
 
     assert second.returncode == 0
     envelope = parse_envelope(second)
@@ -367,8 +379,9 @@ def test_cli_import_data_folder_scan_skips_hidden_and_unsupported_files(tmp_path
     (input_dir / "notes.txt").write_text("not an image\n")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
     cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
 
-    process = run_cli("import-data", "--source", str(input_dir), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir))
+    process = run_cli("import-data", "--source", str(input_dir), "--manifest", str(manifest_path), "--cache-dir", str(cache_dir), "--reviews-dir", str(reviews_dir))
 
     assert process.returncode == 0
     envelope = parse_envelope(process)
@@ -388,6 +401,255 @@ def test_cli_import_data_missing_sources_exit_1(tmp_path: Path) -> None:
     assert_envelope(envelope, command="import-data", ok=False)
     assert envelope["result"]["failed_count"] == 1
     assert "No input source" in envelope["errors"][0]
+
+
+def test_cli_prune_review_queue_dry_run_protects_reviewed_and_ambiguous_files(tmp_path: Path) -> None:
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    safe = write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_safe", review_status="overview_1")
+    write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_done", review_status="completed")
+    write_review(
+        reviews_dir,
+        cache_dir,
+        reviewer="tester",
+        image_key="img_manual",
+        review_status="overview_1",
+        detections=[{**detection("manual-0001", "ship_non_sts"), "source_type": "manual", "reviewed": False, "review_label": None}],
+    )
+    corrupt = reviews_dir / "tester" / "img_corrupt.json"
+    corrupt.write_text("{not-json\n")
+
+    process = run_cli(
+        "prune-review-queue",
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--image-key",
+        "img_safe",
+        "--image-key",
+        "img_done",
+        "--image-key",
+        "img_manual",
+        "--image-key",
+        "img_corrupt",
+        "--image-key",
+        "img_missing",
+        "--dry-run",
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="prune-review-queue", ok=True)
+    result = envelope["result"]
+    assert result["requested_count"] == 5
+    assert result["archivable_count"] == 1
+    assert result["protected_count"] == 4
+    assert result["archivable"][0]["image_key"] == "img_safe"
+    reasons = {item["image_key"]: item["reason"] for item in result["protected"]}
+    assert "review_status" in reasons["img_done"]
+    assert "manual" in reasons["img_manual"]
+    assert "unreadable" in reasons["img_corrupt"]
+    assert "missing" in reasons["img_missing"]
+    assert safe.is_file()
+
+
+def test_cli_prune_review_queue_archives_only_safe_unreviewed_stubs(tmp_path: Path) -> None:
+    reviews_dir = tmp_path / "reviews"
+    reports_dir = tmp_path / "reports" / "review_queue_prune"
+    cache_dir = tmp_path / "cache"
+    safe = write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_safe", review_status="overview_1")
+    protected = write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_done", review_status="completed")
+
+    process = run_cli(
+        "prune-review-queue",
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reports-dir",
+        str(reports_dir),
+        "--reviewer",
+        "tester",
+        "--image-key",
+        "img_safe",
+        "--image-key",
+        "img_done",
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="prune-review-queue", ok=True)
+    result = envelope["result"]
+    assert result["archived_count"] == 1
+    assert not safe.exists()
+    assert protected.is_file()
+    archived_path = Path(result["archived"][0]["archive_path"])
+    assert archived_path.is_file()
+    assert "_archived_unreviewed" in archived_path.parts
+    report_path = Path(result["report_path"])
+    assert report_path.is_file()
+    report = json.loads(report_path.read_text())
+    assert report["archived"][0]["image_key"] == "img_safe"
+    assert report["protected"][0]["image_key"] == "img_done"
+
+
+def test_cli_prune_review_queue_filter_unreviewed_intersects_explicit_keys(tmp_path: Path) -> None:
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_safe", review_status="overview_1")
+    write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_done", review_status="completed")
+
+    process = run_cli(
+        "prune-review-queue",
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--filter",
+        "unreviewed",
+        "--image-key",
+        "img_safe",
+        "--image-key",
+        "img_done",
+        "--dry-run",
+    )
+
+    assert process.returncode == 0
+    result = parse_envelope(process)["result"]
+    assert [item["image_key"] for item in result["archivable"]] == ["img_safe"]
+    assert [item["image_key"] for item in result["protected"]] == ["img_done"]
+
+
+def test_review_queue_filter_summary_classifies_step1_filters(tmp_path: Path) -> None:
+    pipeline = load_training_lib()
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_unreviewed", review_status="overview_1")
+    write_review(reviews_dir, cache_dir, reviewer="tester", image_key="img_reviewed", review_status="completed")
+    write_review(
+        reviews_dir,
+        cache_dir,
+        reviewer="tester",
+        image_key="img_partial",
+        review_status="overview_1",
+        detections=[detection("auto-0001", "ship_non_sts")],
+    )
+    archived_path = reviews_dir / "_archived_unreviewed" / "2026-05-04T00-00-00-000Z" / "tester" / "img_archived.json"
+    write_json(archived_path, {"image_key": "img_archived", "review_status": "overview_1", "detections": []})
+
+    assert pipeline.review_queue_filter_summary("img_unreviewed", "tester", reviews_dir)["review_queue_filter"] == "unreviewed"
+    assert pipeline.review_queue_filter_summary("img_unreviewed", "tester", reviews_dir)["unreviewed_archivable"] is True
+    assert pipeline.review_queue_filter_summary("img_reviewed", "tester", reviews_dir)["review_queue_filter"] == "reviewed"
+    assert pipeline.review_queue_filter_summary("img_partial", "tester", reviews_dir)["review_queue_filter"] == "partially_reviewed"
+    assert pipeline.review_queue_filter_summary("img_archived", "tester", reviews_dir)["review_queue_filter"] == "missing_review"
+    assert pipeline.review_queue_filter_summary("img_missing", "tester", reviews_dir)["review_queue_filter"] == "missing_review"
+
+
+def test_cli_remove_images_removes_manifest_album_cache_and_reviews(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+    reports_dir = tmp_path / "reports" / "image_removals"
+    import_process = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--album-name",
+        "Removal fixture",
+    )
+    assert import_process.returncode == 0
+    import_result = parse_envelope(import_process)["result"]
+    image_key = import_result["imported"][0]["image_key"]
+    cache_path = Path(import_result["imported"][0]["cache_path"])
+    review_path = reviews_dir / "tester" / f"{image_key}.json"
+    album_path = Path(import_result["album"]["album_path"])
+    review_doc = json.loads(review_path.read_text())
+    review_doc["review_status"] = "completed"
+    write_json(review_path, review_doc)
+
+    dry_run = run_cli(
+        "remove-images",
+        "--manifest",
+        str(manifest_path),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--reports-dir",
+        str(reports_dir),
+        "--image-key",
+        image_key,
+        "--dry-run",
+    )
+    assert dry_run.returncode == 0
+    assert parse_envelope(dry_run)["result"]["removable_count"] == 1
+    assert cache_path.is_file()
+    assert review_path.is_file()
+
+    process = run_cli(
+        "remove-images",
+        "--manifest",
+        str(manifest_path),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--reports-dir",
+        str(reports_dir),
+        "--image-key",
+        image_key,
+    )
+
+    assert process.returncode == 0
+    result = parse_envelope(process)["result"]
+    assert result["removed_count"] == 1
+    assert not cache_path.exists()
+    assert not review_path.exists()
+    assert image_key not in json.loads(manifest_path.read_text())["images"]
+    assert all(image.get("image_key") != image_key for image in json.loads(album_path.read_text())["images"])
+    assert Path(result["report_path"]).is_file()
+
+
+def test_cli_remove_images_filter_returns_zero_when_no_inactive_reviews(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    reviews_dir = tmp_path / "reviews"
+    write_json(
+        manifest_path,
+        {
+            "schema_version": 1,
+            "manifest_type": "training_import",
+            "created_at": "2026-05-05T00:00:00Z",
+            "updated_at": "2026-05-05T00:00:00Z",
+            "cache_dir": str(tmp_path / "cache"),
+            "images": {},
+        },
+    )
+
+    process = run_cli(
+        "remove-images",
+        "--manifest",
+        str(manifest_path),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--filter",
+        "inactive-review",
+        "--dry-run",
+    )
+
+    assert process.returncode == 0
+    result = parse_envelope(process)["result"]
+    assert result["requested_count"] == 0
+    assert result["removable_count"] == 0
 
 
 def test_cli_check_training_ready_exits_3_with_blockers(tmp_path: Path) -> None:

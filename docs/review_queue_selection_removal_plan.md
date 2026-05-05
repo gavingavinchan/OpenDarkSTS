@@ -2,17 +2,15 @@
 
 ## Purpose
 
-Add safe, general-purpose image selection and review-queue removal tools to the training pipeline GUI. The immediate use case is clearing a long queue of unreviewed review stubs before re-importing already-known imagery to test album behavior, without risking reviewed work or source data.
+Add safe, general-purpose image selection and workspace removal tools to the training pipeline GUI. The immediate use case is clearing unwanted imported imagery and review queue entries from the local training workspace without modifying read-only/original source imagery.
 
 This plan covers Step 1 import/intake and Step 3 reviewed bbox overview. It intentionally treats selection as a reusable UI primitive, not a delete-only feature.
 
 ## Non-Goals
 
-- Do not delete source imagery.
-- Do not delete cache PNGs.
-- Do not remove import manifest entries.
-- Do not remove album records or album membership.
-- Do not overwrite reviewed or partially reviewed review JSON files.
+- Do not delete source imagery outside the repository/workspace.
+- Do not modify read-only source folders.
+- Do not overwrite reviewed or partially reviewed review JSON files during import.
 - Do not implement import multithreading until duplicate/re-import correctness and queue removal safety are tested.
 
 ## Selection Model
@@ -65,11 +63,17 @@ Step 3 filter dropdown should include existing bbox filters and later album/sour
 - reviewed/incomplete filters where useful
 - album/source filters when album-aware Step 3 work is implemented
 
-`Unreviewed images` in Step 1 means images whose review JSON is safe to archive under the protection rules below. It is not just a manifest import status.
+`Unreviewed images` in Step 1 means images with an active review JSON under `workspace/reviews/<reviewer>/` whose review file is still an initial unreviewed stub. It is not a manifest-only status and it does not include removed/archived review files.
 
 Album filters such as `Selected album` and `No album` should be hidden or disabled until first-version album metadata is available in the Step 1 listing payload. The UI must not ship inert filter options.
 
-For performance, Step 1's listing API should expose a server-computed `unreviewed_archivable` boolean per image. Computing this requires reading review JSONs and applying the protection rules; it should happen server-side so client-side filtering remains fast for queues with thousands of images. The preview endpoint remains the confirmation source, not the primary way to populate the filter.
+For performance, Step 1's listing API should expose a server-computed `unreviewed_archivable` boolean per image for the active unreviewed filter. Computing this requires reading active review JSONs; it should happen server-side so client-side filtering remains fast for queues with thousands of images. The remove preview endpoint remains the confirmation source for destructive removal.
+
+Implemented note:
+
+- Step 1 now merges active review JSONs that are not present in the import manifest into the listing as `review_only` rows, so `Reviewed images` and `Partially reviewed images` filters reflect the actual manual review queue rather than only manifest-backed imports.
+- The Step 1 filter dropdown labels include `Filter:` for discoverability.
+- Step 1 no longer exposes an `archived_unreviewed` filter. Images intentionally removed from the workspace should be removed from the manifest/album listing instead of lingering as archived queue entries.
 
 ## Select Dropdown
 
@@ -83,54 +87,58 @@ The select dropdown should include:
 
 ## Removal Semantics
 
-Removal from the queue means archiving review JSON files, not deleting training data.
+Step 1 removal means removing selected images from the local training workspace. This removes import manifest entries, album membership, active review JSONs, archived review JSONs for the same reviewer/key, workspace cache PNGs, and browser-upload staging copies when they live under `workspace/cache/import_staging`.
+
+Removal does not modify original source imagery outside the repository/workspace. If an imported row points at an external source path, that path is left untouched.
 
 When the user presses `Remove`:
 
-- show a confirmation dialog with the selected count, for example `Remove 143 selected images from the review queue?`
-- explain that source files, cache files, import manifest entries, and album records are untouched
-- explain that review files are archived, not permanently deleted
-- always show how many selected items are expected to be removable and how many are protected
-- if preview takes more than about one second, show a spinner and wait for the preview before opening the confirmation dialog; never show a removal dialog without protected counts
-- after success, show a toast such as `Archived 140 reviews` with the report path
+- show a confirmation dialog with the selected count, for example `Remove 143 selected images from this workspace?`
+- explain that import records, album membership, active review files, archived review files, workspace cache files, and browser-upload staging files will be removed
+- explain that original external source files are untouched
+- always show how many selected items are expected to be removable and how many requested keys are missing
+- if preview takes more than about one second, show a spinner and wait for the preview before opening the confirmation dialog; never show a removal dialog without removable/missing counts
+- after success, show a toast such as `Removed 140 images` with the report path
 - in Step 3, make source-image deduplication explicit, for example `Remove 12 images from the review queue (deduplicated from 47 selected bbox tiles)?`; show an affected-image list when the count is small enough
-
-Archive destination:
-
-```text
-workspace/reviews/_archived_unreviewed/<timestamp_ms>/<reviewer>/<image_key>.json
-```
-
-Use a millisecond-precision UTC timestamp such as `YYYY-MM-DDTHH-MM-SS-fffZ` for archive directories. First version assumes a single writer per reviewer, matching the training import album plan's single-writer assumption.
 
 Report destination:
 
 ```text
-workspace/reports/review_queue_prune/<timestamp>.json
+workspace/reports/image_removals/<timestamp>.json
 ```
+
+Use a millisecond-precision UTC timestamp such as `YYYY-MM-DDTHH-MM-SS-fffZ` for removal reports.
 
 The report should include:
 
 - timestamp
 - reviewer
 - requested image keys
-- archived image keys and paths
-- protected/skipped image keys and reasons
+- removed image keys and deleted workspace paths
+- missing/skipped image keys and reasons
 - active filters, if removal came from a filtered selection workflow
 
-After a successful archive operation:
+After a successful remove operation:
 
-- Step 2 queue caches must observe review-directory filesystem mtimes and invalidate automatically when review JSONs are moved; the training UI should not rely on reaching into another server process's memory
+- Step 2 queue caches must observe review-directory filesystem mtimes or be explicitly invalidated by the integrated training UI
 - refresh Step 1 counts and filters
-- keep the import manifest and album records unchanged
+- removed images must no longer appear in Step 1 or Step 2
 
-Step 2 reviewer enumeration must skip review-root directories whose names begin with `_`, including `_archived_unreviewed`, so archived review files do not appear as a pseudo-reviewer.
+## Step 1 Review Handoff
 
-Archiving a review JSON removes it from the active queue, but the import manifest still exists. Re-importing the same image can recreate a fresh unreviewed stub if no active review JSON exists. Permanent removal from queue regeneration requires manifest cleanup and is a separate future feature.
+Every image in Step 1 should provide an `Edit in manual review` action from the detail sidebar. The action routes to Step 2 for that exact image with `/manual-review?image_id=<image_key>`, matching the Step 3 pattern of returning to manual review with source-image context.
+
+Implemented note:
+
+- Step 1 shows `Edit in manual review` for every selected row, including unreviewed, partially reviewed, reviewed, review-only, and manifest-backed images.
+
+Step 2 reviewer enumeration must skip review-root directories whose names begin with `_`, including legacy `_archived_unreviewed`, so old archive folders do not appear as pseudo-reviewers.
+
+Re-importing the same external source after removal is allowed and will create a new manifest entry, cache PNG, album membership, and review stub for the same stable `image_key`.
 
 ## Protection Rules
 
-Only archive review JSONs that are clearly unreviewed initial stubs.
+The legacy `prune-review-queue` helper only archives review JSONs that are clearly unreviewed initial stubs. Step 1's primary `Remove selected` action does not use these protection rules; it is an explicit workspace removal action and may remove reviewed, partially reviewed, or unreviewed selected images.
 
 Safe to archive:
 
@@ -157,7 +165,7 @@ If in doubt, protect the file and report the reason.
 Preview endpoint:
 
 ```text
-POST /api/review-queue/prune-unreviewed/preview
+POST /api/images/remove/preview
 ```
 
 Input:
@@ -175,17 +183,17 @@ Output:
 ```json
 {
   "requested_count": 143,
-  "archivable_count": 140,
-  "protected_count": 3,
-  "archivable": [{"image_key": "img_...", "review_path": "..."}],
-  "protected": [{"image_key": "img_...", "reason": "has reviewed detection"}]
+  "removable_count": 140,
+  "missing_count": 3,
+  "removable": [{"image_key": "img_...", "cache_paths": ["..."]}],
+  "missing": [{"image_key": "img_...", "reason": "not found"}]
 }
 ```
 
 Confirm endpoint:
 
 ```text
-POST /api/review-queue/prune-unreviewed
+POST /api/images/remove
 ```
 
 Input:
@@ -194,25 +202,25 @@ Input:
 {
   "reviewer": "gavin",
   "image_keys": ["img_..."],
-  "confirmed_archivable_count": 140,
+  "confirmed_removable_count": 140,
   "filters": {}
 }
 ```
 
-The confirm endpoint should recompute protection rules server-side instead of trusting the preview payload. `confirmed_archivable_count` is only a guard against accidental stale confirmations.
+The confirm endpoint should recompute the removal preview server-side instead of trusting the preview payload. `confirmed_removable_count` is only a guard against accidental stale confirmations.
 
 Reviewer scope:
 
-- preview and confirm consider only review JSONs under `<reviews-dir>/<reviewer>/`
-- other reviewers' review files for the same `image_key` are never archived by this operation
+- preview and confirm remove only review JSONs under `<reviews-dir>/<reviewer>/` and legacy archives for that reviewer/key
+- other reviewers' review files for the same `image_key` are not removed by this operation
 - cross-reviewer cleanup must be an explicit future operation
 
 ## CLI Plan
 
-Future CLI helper:
+First-version CLI helper:
 
 ```bash
-.venv/bin/python scripts/training_pipeline_cli.py prune-review-queue \
+.venv/bin/python scripts/training_pipeline_cli.py remove-images \
   --reviewer gavin \
   --image-key img_abc \
   --image-key img_def
@@ -222,8 +230,9 @@ Useful options:
 
 - `--reviewer <name>`
 - `--reviews-dir <path>`
+- `--reports-dir <path>`
 - `--image-key <key>` repeatable
-- `--filter unreviewed`
+- `--filter inactive-review` to remove manifest-backed images that no longer have an active review JSON
 - `--album-id <id>` later, once album-aware queue filtering is implemented
 - `--dry-run`
 
@@ -231,12 +240,12 @@ The CLI must use the same backend helper as the GUI endpoints.
 
 CLI semantics:
 
-- if both `--image-key` and `--filter unreviewed` are provided, the filter narrows the explicit image-key list
-- if only `--filter unreviewed` is provided, expand to all matching keys for that reviewer
+- explicit `--image-key` values are removed regardless of review status
+- if only `--filter inactive-review` is provided, expand to manifest-backed images without an active review JSON for that reviewer
 - if only `--image-key` values are provided, evaluate those keys without extra filter expansion
 - if neither `--image-key` nor `--filter` is provided, return a usage error
 - `--dry-run` should return the same JSON envelope shape as the preview endpoint, not a separate free-form summary
-- successful non-dry-run output should include the archive report path and archived/protected counts
+- successful non-dry-run output should include the removal report path, removed count, and deleted workspace paths
 
 ## Re-Import Safety
 
@@ -251,7 +260,7 @@ Review overwrite rules:
 
 - existing review JSON files are never overwritten during import
 - reviewed or partially reviewed JSON files remain untouched
-- if an unreviewed stub was archived, re-import may create a new fresh stub for that image
+- if an image was removed, re-import may create a new fresh manifest/cache/review entry for that image
 - import may add album membership and manifest `album_ids` for already-known images without changing review labels, detections, or review status
 
 Tests before queue removal ships:
@@ -259,12 +268,12 @@ Tests before queue removal ships:
 - same content under two filenames produces the same `image_key`
 - same filename with different content produces a different `image_key`
 - re-import of a reviewed image does not overwrite the review JSON
-- pruning archives only safe unreviewed stubs
-- pruning protects reviewed, partially reviewed, manually labeled, manually drawn, corrupt, and ambiguous review files
+- `remove-images --image-key` removes reviewed, partially reviewed, and unreviewed selected images from the local workspace
+- `remove-images --filter inactive-review` removes manifest rows whose active review JSON is absent
 - Step 3 removal deduplicates selected bbox tiles by source `image_key`
 - Step 2 reviewer enumeration skips `_archived_unreviewed` and other underscore-prefixed directories
 - Step 2 queue cache invalidates when review-directory mtimes change
-- CLI `--filter unreviewed` intersects correctly with explicit `--image-key` values
+- CLI `remove-images --dry-run` previews affected manifest entries, review paths, cache paths, and album membership
 
 ## Import Multithreading Later
 

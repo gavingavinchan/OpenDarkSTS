@@ -21,3 +21,11 @@ Every YOLO weight file (`*.pt`) kept in this repository must have accompanying d
 # Server Rule
 
 When running a local development server or long-lived process, agents must start it as a detached background process so the LLM session remains usable. Prefer `nohup ... > workspace/reports/<name>.log 2>&1 < /dev/null &` and then verify it with `pgrep` or a targeted health check instead of leaving it attached to the current session. See the [visual review server runbook](docs/visual_review_server_runbook.md) for an example background server workflow.
+
+# GUI/CLI Parity Rule
+
+Every training-pipeline GUI function should have a corresponding backend helper and CLI/API command so agents and automated checks can exercise the same behavior without relying on browser interaction. When implementing or changing GUI behavior, update or add the matching CLI/backend path and verify the backend through the CLI whenever feasible. If no CLI exists yet for a GUI action, either add one or document the gap in the relevant plan before treating the feature as complete.
+
+# GUI Interaction Logging Rule
+
+Training-pipeline GUI actions should emit lightweight debug logs for user presses, clicks, selections, uploads, and destructive confirmations so UI problems can be diagnosed from `workspace/reports/` without relying only on browser inspection. Logs must avoid binary payloads and secrets, but should include timestamps, action names, selected ids/counts, current filters, job ids, and error messages where useful. When changing GUI behavior, update or preserve this logging path.

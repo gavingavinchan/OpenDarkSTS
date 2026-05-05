@@ -10,7 +10,7 @@ Planning hierarchy:
 2. This document describes the training pipeline end to end.
 3. `docs/visual_review_plan.md` describes step 2 of this training pipeline in detail.
 4. `docs/visual_review_file_storage_plan.md` describes the file-backed review storage used by step 2 and consumed by later training stages.
-5. `docs/review_queue_selection_removal_plan.md` describes shared Step 1/Step 3 selection tools and safe review-queue removal/archive behavior.
+5. `docs/review_queue_selection_removal_plan.md` describes shared Step 1/Step 3 selection tools and local workspace image-removal behavior.
 
 The operational/deployment pipeline is separate. It consumes promoted trained weights and model metadata produced by this training pipeline, but it does not own import, review, curation, augmentation, training, or model evaluation.
 
@@ -61,6 +61,7 @@ Command-line entry points should eventually cover the pipeline backend without r
 
 ```text
 scripts/training_pipeline_cli.py import-data ...
+scripts/training_pipeline_cli.py remove-images ...
 scripts/training_pipeline_cli.py run-auto-detect ...
 scripts/training_pipeline_cli.py generate-crops ...
 scripts/training_pipeline_cli.py export-dataset --selection workspace/dataset_selections/<dataset_name>.json
@@ -80,6 +81,7 @@ The exact flags may evolve, but these capabilities should exist outside the GUI.
 Recommended CLI behavior:
 
 - `import-data` creates or updates the import manifest and cache artifacts.
+- `remove-images` removes selected images from the local training workspace records/cache/review files without modifying original external source imagery.
 - `run-auto-detect` creates review stubs from configured model weights.
 - `generate-crops` creates or refreshes review crop PNGs and sidecar JSON files for completed or selected reviews.
 - `export-dataset` consumes a dataset selection manifest and writes a standard YOLO dataset plus `dataset_manifest.json`.
@@ -1032,6 +1034,8 @@ Browser upload rules:
 
 - the browser cannot reliably provide the user's absolute source path, so the backend must not guess it
 - preserve every raw uploaded filename or `webkitRelativePath` before sanitization
+- if a browser upload selection contains duplicate staging filenames, the GUI should stop before upload and show a Windows Explorer-style conflict dialog with the image preview when available, filename, and `Skip`, `Replace`, and `Duplicate` choices; `Duplicate` stages the incoming browser file with ` (1)`, ` (2)`, etc. appended before the extension
+- browser duplicate filename conflict resolution is a client-side staging concern, not a content-identity override; content-based `image_key` duplicate detection still decides whether an image is already known after staging
 - infer the top-level browser folder only from uploaded relative paths when present
 - allow the user to provide or edit `album_name` and `source_display_name` before upload starts
 - for browser uploads, manifest `source_path` should point at the staging file only if the staging copy is intentionally retained as the workspace source; otherwise it should be `null`
@@ -1066,6 +1070,7 @@ Audit logging requirements:
 
 - write `workspace/reports/import_jobs/<job_id>.jsonl` as append-only structured events for every import job
 - write a final `workspace/reports/import_jobs/<job_id>.summary.json` with the same result returned to the GUI/API plus album metadata
+- write lightweight GUI interaction diagnostics under `workspace/reports/` for clicks, selections, upload starts, duplicate-conflict choices, destructive confirmations, job ids, and visible filter/sort context; these logs must avoid binary payloads and secrets
 - if resume support is implemented, resuming an import job must reuse the original `album_id`, append to the same job JSONL, preserve existing successful/skipped records, and add newly successful retry items to the original album record instead of forking a duplicate album
 - log events for queued, upload-staged, discovered, per-file processing, per-file imported/skipped/failed, manifest-saved, review-stub-created/existing/failed, done, and failed
 - include `job_id`, `album_id`, current filename, raw browser relative path, sanitized staging path, image key when known, status, and failure reason when applicable

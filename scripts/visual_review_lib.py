@@ -505,6 +505,8 @@ def save_review_document(review: dict[str, Any], review_path: str | Path) -> Non
 
 def list_review_documents(reviewer: str, reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> list[dict[str, Any]]:
     root = repo_resolve(Path(reviews_dir) / reviewer)
+    if root.name.startswith("_"):
+        return []
     if not root.exists():
         return []
     reviews = []
@@ -523,6 +525,12 @@ def collect_review_documents(reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> l
     reviews = []
     seen_by_key: dict[str, Path] = {}
     for path in sorted(root.glob("**/*.json")):
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if any(part.startswith("_") for part in relative_parts[:-1]):
+            continue
         review = load_review_document(path)
         image_key = str(review.get("image_key") or "")
         if not image_key:
@@ -1025,6 +1033,12 @@ def review_file_groups(reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> dict[st
     if not root.exists():
         return groups
     for path in sorted(root.glob("**/*.json")):
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if any(part.startswith("_") for part in relative_parts[:-1]):
+            continue
         review = load_review_document(path)
         image_key = str(review.get("image_key") or path.stem)
         review.setdefault("image_key", image_key)

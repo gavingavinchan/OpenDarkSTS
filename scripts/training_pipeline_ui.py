@@ -47,6 +47,7 @@ IMPORT_MANIFEST_PATH = pipeline.DEFAULT_IMPORT_MANIFEST_PATH
 IMPORT_CACHE_DIR = pipeline.DEFAULT_IMPORT_CACHE_DIR
 IMPORT_STAGING_ROOT = WORKSPACE_DIR / "cache" / "import_staging"
 IMPORT_REVIEWER = DEFAULT_REVIEWER
+TRAINING_UI_INTERACTION_LOG_PATH = WORKSPACE_DIR / "reports" / "training_pipeline_ui_interactions.jsonl"
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
@@ -135,6 +136,17 @@ def update_job(job_id: str, **fields) -> None:
         if not job:
             return
         job.update(fields)
+
+
+def append_training_ui_interaction(payload: dict) -> None:
+    TRAINING_UI_INTERACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "server_received_at": utcnow_iso(),
+        "reviewer": IMPORT_REVIEWER,
+        "event": payload,
+    }
+    with TRAINING_UI_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def progress_caption(event: dict) -> str:
@@ -307,15 +319,95 @@ def start_import_job(
     return job_id
 
 
+def cache_url_for(cache_path: str | None) -> str | None:
+    if not cache_path:
+        return None
+    try:
+        resolved = repo_resolve(cache_path).resolve()
+        cache_root = repo_resolve("workspace/cache").resolve()
+    except OSError:
+        return None
+    if resolved == cache_root or cache_root in resolved.parents:
+        return "/cache/" + pipeline.repo_relative(resolved)
+    return None
+
+
+def review_summary_from_document(review: dict, review_path: Path) -> dict:
+    can_archive, reason = pipeline.review_archivable_status(review)
+    summary = {
+        "review_path": pipeline.repo_relative(review_path),
+        "review_queue_filter": "unreviewed" if can_archive else "protected",
+        "unreviewed_archivable": bool(can_archive),
+        "review_protected_reason": reason,
+        "review_status": review.get("review_status", "overview_1"),
+        "review_counts": {},
+    }
+    try:
+        counts = pipeline.review_lib.review_counts(review)
+    except Exception:
+        counts = {}
+    summary["review_counts"] = counts
+    if can_archive:
+        return summary
+    if review.get("review_status") == "completed":
+        summary["review_queue_filter"] = "reviewed"
+    elif int(counts.get("reviewed_active_detections") or 0) > 0 or any(
+        isinstance(detection, dict) and detection.get("review_label") is not None
+        for detection in review.get("detections", [])
+    ):
+        summary["review_queue_filter"] = "partially_reviewed"
+    return summary
+
+
 def manifest_summary() -> dict:
     manifest_file = repo_resolve(IMPORT_MANIFEST_PATH)
+    album_index_path = pipeline.default_albums_dir_for_manifest(manifest_file) / "index.json"
+    albums: list[dict] = []
+    album_names: dict[str, str] = {}
+    if album_index_path.is_file():
+        try:
+            album_index = pipeline.load_json(album_index_path)
+            albums = [album for album in album_index.get("albums") or [] if isinstance(album, dict) and album.get("album_id")]
+            album_names = {str(album["album_id"]): str(album.get("album_name") or album["album_id"]) for album in albums}
+        except Exception:
+            albums = []
+            album_names = {}
+    review_docs = pipeline.review_lib.list_review_documents(IMPORT_REVIEWER, REVIEWS_DIR)
+    reviews_by_key = {str(review.get("image_key")): review for review in review_docs if review.get("image_key")}
     if not manifest_file.exists():
+        images = []
+        for review in review_docs:
+            image_key = str(review.get("image_key") or "")
+            review_path = Path(review.get("_path")) if review.get("_path") else pipeline.review_lib.review_file_path(image_key, IMPORT_REVIEWER, REVIEWS_DIR)
+            images.append({
+                "image_key": image_key,
+                "original_filename": review.get("original_filename") or review.get("display_filename") or review.get("image_filename") or image_key,
+                "browser_relative_path": None,
+                "source_path": None,
+                "source_collection": "review_only",
+                "source_display_name": "Review queue",
+                "album_ids": [],
+                "album_names": [],
+                "source_size_bytes": None,
+                "width": review.get("width"),
+                "height": review.get("height"),
+                "import_status": "review_only",
+                "imported_at": None,
+                "updated_at": review.get("updated_at"),
+                "render_profile_kind": None,
+                "loader": None,
+                "warnings": ["not_in_import_manifest"],
+                "cache_url": cache_url_for(review.get("cache_path")),
+                "cache_path": review.get("cache_path"),
+                **review_summary_from_document(review, review_path),
+            })
         return {
             "manifest_exists": False,
             "manifest_path": str(manifest_file),
-            "image_count": 0,
-            "images": [],
-            "status_counts": {},
+            "image_count": len(images),
+            "images": images,
+            "albums": albums,
+            "status_counts": {"review_only": len(images)} if images else {},
             "updated_at": None,
         }
     manifest = pipeline.load_import_manifest(manifest_file)
@@ -326,7 +418,14 @@ def manifest_summary() -> dict:
         status = entry.get("import_status", "imported")
         status_counts[status] = status_counts.get(status, 0) + 1
         cache_path = entry.get("cache_path")
-        cache_url = "/cache/" + cache_path[len("workspace/"):] if cache_path and cache_path.startswith("workspace/") else None
+        cache_url = cache_url_for(cache_path)
+        album_ids = entry.get("album_ids") or []
+        review = reviews_by_key.pop(str(image_key), None)
+        if review is not None:
+            review_path = Path(review.get("_path")) if review.get("_path") else pipeline.review_lib.review_file_path(image_key, IMPORT_REVIEWER, REVIEWS_DIR)
+            review_summary = review_summary_from_document(review, review_path)
+        else:
+            review_summary = pipeline.review_queue_filter_summary(image_key, IMPORT_REVIEWER, REVIEWS_DIR)
         images.append({
             "image_key": image_key,
             "original_filename": entry.get("original_filename"),
@@ -334,7 +433,8 @@ def manifest_summary() -> dict:
             "source_path": entry.get("source_path"),
             "source_collection": entry.get("source_collection"),
             "source_display_name": entry.get("source_display_name"),
-            "album_ids": entry.get("album_ids") or [],
+            "album_ids": album_ids,
+            "album_names": [album_names.get(str(album_id), str(album_id)) for album_id in album_ids],
             "source_size_bytes": entry.get("source_size_bytes"),
             "width": entry.get("width"),
             "height": entry.get("height"),
@@ -346,6 +446,32 @@ def manifest_summary() -> dict:
             "warnings": entry.get("warnings") or [],
             "cache_url": cache_url,
             "cache_path": cache_path,
+            **review_summary,
+        })
+    for image_key, review in reviews_by_key.items():
+        review_path = Path(review.get("_path")) if review.get("_path") else pipeline.review_lib.review_file_path(image_key, IMPORT_REVIEWER, REVIEWS_DIR)
+        status_counts["review_only"] = status_counts.get("review_only", 0) + 1
+        images.append({
+            "image_key": image_key,
+            "original_filename": review.get("original_filename") or review.get("display_filename") or review.get("image_filename") or image_key,
+            "browser_relative_path": None,
+            "source_path": None,
+            "source_collection": "review_only",
+            "source_display_name": "Review queue",
+            "album_ids": [],
+            "album_names": [],
+            "source_size_bytes": None,
+            "width": review.get("width"),
+            "height": review.get("height"),
+            "import_status": "review_only",
+            "imported_at": None,
+            "updated_at": review.get("updated_at"),
+            "render_profile_kind": None,
+            "loader": None,
+            "warnings": ["not_in_import_manifest"],
+            "cache_url": cache_url_for(review.get("cache_path")),
+            "cache_path": review.get("cache_path"),
+            **review_summary_from_document(review, review_path),
         })
     images.sort(key=lambda item: item.get("imported_at") or "", reverse=True)
     return {
@@ -353,6 +479,7 @@ def manifest_summary() -> dict:
         "manifest_path": str(manifest_file),
         "image_count": len(images),
         "images": images,
+        "albums": albums,
         "status_counts": status_counts,
         "updated_at": manifest.get("updated_at"),
     }
@@ -1111,8 +1238,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     .ledger { display: grid; grid-template-rows: auto auto 1fr; min-height: calc(100vh - 110px); }
 
     .compact-toolbar {
-      display: grid;
-      grid-template-columns: auto auto auto 1fr auto auto auto;
+      display: flex;
+      flex-wrap: wrap;
       gap: 10px; align-items: center;
       padding: 14px 28px;
       border-bottom: 1px solid var(--line);
@@ -1139,6 +1266,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     }
     .toolbar-btn.ghost { background: transparent; color: var(--ink); }
     .toolbar-btn.ghost:hover { background: rgba(17, 23, 19, 0.06); }
+    .toolbar-btn.danger { background: var(--stamp); border-color: var(--stamp); }
+    .toolbar-btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .toolbar-search {
       border: 1px solid var(--line);
       background: var(--card);
@@ -1166,6 +1295,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       font-size: 12px;
       color: var(--ink);
     }
+    .filter-select { min-width: 190px; }
+    .selection-select { min-width: 210px; }
 
     .layout {
       display: grid; grid-template-columns: minmax(0, 1fr) 360px;
@@ -1196,6 +1327,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       border-bottom: 1.5px solid var(--ink);
       background: var(--card-deep);
     }
+    .select-cell { width: 42px; text-align: center; }
+    .select-cell input { accent-color: var(--green); }
     .ledger-table tbody td {
       padding: 10px 12px;
       border-bottom: 1px solid var(--rule);
@@ -1249,6 +1382,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     }
     .tile:hover { transform: translateY(-2px); box-shadow: 0 14px 28px rgba(17, 23, 19, 0.12); border-color: rgba(15, 107, 79, 0.4); }
     .tile.selected { border-color: var(--green); box-shadow: 0 14px 28px rgba(15, 107, 79, 0.2); }
+    .tile-select { position: absolute; top: 8px; left: 8px; z-index: 2; accent-color: var(--green); }
+    .tile { position: relative; }
     .tile-img {
       aspect-ratio: 1.2 / 1;
       background: #17211b;
@@ -1308,6 +1443,21 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       display: grid; place-items: center;
     }
     .detail-thumb img { width: 100%; height: 100%; object-fit: contain; }
+    .detail-actions { display: grid; gap: 8px; margin: 0 0 18px; }
+    .detail-action {
+      border: 1px solid var(--green);
+      background: var(--green);
+      color: var(--card);
+      border-radius: 2px;
+      padding: 11px 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .detail-action:hover { filter: brightness(0.94); }
     .kv {
       display: grid; grid-template-columns: 110px 1fr;
       gap: 8px 12px; font-size: 12px;
@@ -1337,6 +1487,40 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     .toast.error { background: var(--stamp); }
 
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(17, 23, 19, 0.48);
+      display: grid; place-items: center;
+      z-index: 80;
+      padding: 24px;
+    }
+    .conflict-modal {
+      width: min(760px, 100%);
+      background: var(--card);
+      border: 1px solid var(--ink);
+      box-shadow: 0 30px 90px rgba(17, 23, 19, 0.36);
+      padding: 26px;
+      display: grid;
+      gap: 18px;
+    }
+    .conflict-modal h3 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 30px;
+      font-weight: 400;
+      letter-spacing: -0.03em;
+    }
+    .conflict-modal p { margin: 0; color: var(--muted); line-height: 1.45; }
+    .conflict-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .conflict-card { border: 1px solid var(--line); background: var(--card-deep); padding: 12px; display: grid; gap: 10px; }
+    .conflict-card img { width: 100%; aspect-ratio: 1.4 / 1; object-fit: contain; background: #17211b; border: 1px solid var(--line); }
+    .conflict-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+    .conflict-name { font-family: var(--mono); font-size: 12px; word-break: break-word; color: var(--ink); }
+    .conflict-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .conflict-actions button { border-radius: 2px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .conflict-actions .danger { background: var(--stamp); border-color: var(--stamp); color: var(--card); }
+    .conflict-actions .primary { background: var(--green); border-color: var(--green); color: var(--card); }
+
     @media (max-width: 980px) {
       header, .compact-toolbar { position: static; grid-template-columns: 1fr; }
       .rail { justify-content: flex-start; }
@@ -1345,6 +1529,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       .intake-card { padding: 36px 28px 28px; }
       .intake-actions { grid-template-columns: 1fr; }
       .album-fields { grid-template-columns: 1fr; }
+      .conflict-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1387,8 +1572,12 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       pollTimer: null,
       view: 'ledger',
       sort: 'imported_desc',
+      filter: 'all',
       search: '',
       selectedKey: null,
+      selectedKeys: [],
+      lastSelectedKey: null,
+      selectionPersistenceWarned: false,
       forceRefresh: false,
       albumName: '',
       albumDescription: '',
@@ -1400,8 +1589,11 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         const raw = JSON.parse(localStorage.getItem(stateKey) || '{}');
         if (raw.view === 'grid' || raw.view === 'ledger') state.view = raw.view;
         if (typeof raw.sort === 'string') state.sort = raw.sort;
+        if (typeof raw.filter === 'string') state.filter = raw.filter;
         if (typeof raw.search === 'string') state.search = raw.search;
         if (typeof raw.selectedKey === 'string') state.selectedKey = raw.selectedKey;
+        if (Array.isArray(raw.selectedKeys)) state.selectedKeys = raw.selectedKeys.filter(x => typeof x === 'string');
+        if (typeof raw.lastSelectedKey === 'string') state.lastSelectedKey = raw.lastSelectedKey;
         if (typeof raw.forceRefresh === 'boolean') state.forceRefresh = raw.forceRefresh;
         if (typeof raw.albumName === 'string') state.albumName = raw.albumName;
         if (typeof raw.albumDescription === 'string') state.albumDescription = raw.albumDescription;
@@ -1409,9 +1601,11 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       } catch (e) {}
     }
     function persistState() {
+      const persistSelection = state.selectedKeys.length <= 50000;
       localStorage.setItem(stateKey, JSON.stringify({
-        view: state.view, sort: state.sort, search: state.search,
-        selectedKey: state.selectedKey, forceRefresh: state.forceRefresh,
+        view: state.view, sort: state.sort, filter: state.filter, search: state.search,
+        selectedKey: state.selectedKey, selectedKeys: persistSelection ? state.selectedKeys : [], lastSelectedKey: state.lastSelectedKey, forceRefresh: state.forceRefresh,
+        selectionPersistenceDropped: !persistSelection,
         albumName: state.albumName, albumDescription: state.albumDescription,
         sourceDisplayName: state.sourceDisplayName,
       }));
@@ -1445,9 +1639,134 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       showToast._t = setTimeout(() => toast.classList.remove('show'), 2400);
     }
 
+    function logAction(action, details) {
+      const payload = {
+        action,
+        timestamp: new Date().toISOString(),
+        page: 'import',
+        filter: state.filter,
+        sort: state.sort,
+        search: state.search,
+        selected_count: state.selectedKeys.length,
+        selected_key: state.selectedKey,
+        details: details || {},
+      };
+      const body = JSON.stringify(payload);
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/training-ui-interaction', new Blob([body], { type: 'application/json' }));
+          return;
+        }
+      } catch (e) {}
+      fetch('/api/training-ui-interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
+    }
+
+    function uploadNameForFile(file) {
+      return file.webkitRelativePath || file.name;
+    }
+
+    function duplicateUploadName(name, usedNames) {
+      const slash = name.lastIndexOf('/');
+      const dir = slash >= 0 ? name.slice(0, slash + 1) : '';
+      const filename = slash >= 0 ? name.slice(slash + 1) : name;
+      const dot = filename.lastIndexOf('.');
+      const stem = dot > 0 ? filename.slice(0, dot) : filename;
+      const suffix = dot > 0 ? filename.slice(dot) : '';
+      let index = 1;
+      let candidate = `${dir}${stem} (${index})${suffix}`;
+      while (usedNames.has(candidate)) {
+        index += 1;
+        candidate = `${dir}${stem} (${index})${suffix}`;
+      }
+      return candidate;
+    }
+
+    function filePreviewUrl(file) {
+      if (!file || !file.type || !file.type.startsWith('image/')) return '';
+      return URL.createObjectURL(file);
+    }
+
+    function resolveUploadConflict(existing, incoming, conflictNumber) {
+      return new Promise(resolve => {
+        const oldUrl = filePreviewUrl(existing.file);
+        const newUrl = filePreviewUrl(incoming.file);
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `
+          <section class="conflict-modal" role="dialog" aria-modal="true" aria-labelledby="conflictTitle">
+            <div>
+              <p class="detail-eyebrow">Upload conflict ${conflictNumber}</p>
+              <h3 id="conflictTitle">Duplicate filename found</h3>
+            </div>
+            <p>The selected upload contains another file named <strong>${escape(incoming.uploadName)}</strong>. Choose how to stage this incoming file. This does not modify your source files.</p>
+            <div class="conflict-grid">
+              <article class="conflict-card">
+                <div class="conflict-label">Already staged</div>
+                ${oldUrl ? `<img src="${oldUrl}" alt="">` : '<div class="detail-thumb">No preview</div>'}
+                <div class="conflict-name">${escape(existing.uploadName)}</div>
+              </article>
+              <article class="conflict-card">
+                <div class="conflict-label">Incoming file</div>
+                ${newUrl ? `<img src="${newUrl}" alt="">` : '<div class="detail-thumb">No preview</div>'}
+                <div class="conflict-name">${escape(incoming.uploadName)}</div>
+              </article>
+            </div>
+            <div class="conflict-actions">
+              <button id="conflictSkip">Skip</button>
+              <button class="danger" id="conflictReplace">Replace</button>
+              <button class="primary" id="conflictDuplicate">Duplicate</button>
+            </div>
+          </section>
+        `;
+        const cleanup = (choice) => {
+          if (oldUrl) URL.revokeObjectURL(oldUrl);
+          if (newUrl) URL.revokeObjectURL(newUrl);
+          backdrop.remove();
+          logAction('upload_duplicate_choice', { choice, upload_name: incoming.uploadName });
+          resolve(choice);
+        };
+        document.body.appendChild(backdrop);
+        backdrop.querySelector('#conflictSkip').onclick = () => cleanup('skip');
+        backdrop.querySelector('#conflictReplace').onclick = () => cleanup('replace');
+        backdrop.querySelector('#conflictDuplicate').onclick = () => cleanup('duplicate');
+      });
+    }
+
+    async function resolveDuplicateUploads(fileList) {
+      const accepted = [];
+      const positions = new Map();
+      let conflictNumber = 0;
+      for (const file of Array.from(fileList || [])) {
+        const uploadName = uploadNameForFile(file);
+        const incoming = { file, uploadName };
+        if (!positions.has(uploadName)) {
+          positions.set(uploadName, accepted.length);
+          accepted.push(incoming);
+          continue;
+        }
+        conflictNumber += 1;
+        const existingIndex = positions.get(uploadName);
+        const choice = await resolveUploadConflict(accepted[existingIndex], incoming, conflictNumber);
+        if (choice === 'skip') continue;
+        if (choice === 'replace') {
+          accepted[existingIndex] = incoming;
+          continue;
+        }
+        if (choice === 'duplicate') {
+          const duplicateName = duplicateUploadName(uploadName, positions);
+          positions.set(duplicateName, accepted.length);
+          accepted.push({ file, uploadName: duplicateName });
+        }
+      }
+      return accepted;
+    }
+
     async function loadManifest() {
       const resp = await fetch('/api/import');
       state.manifest = await resp.json();
+      const known = new Set((state.manifest.images || []).map(im => im.image_key));
+      state.selectedKeys = state.selectedKeys.filter(key => known.has(key));
+      if (state.selectedKey && !known.has(state.selectedKey)) state.selectedKey = null;
       render();
     }
 
@@ -1502,12 +1821,24 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function renderPopulatedState() {
       const m = state.manifest;
       const sc = m.status_counts || {};
+      const selectedShown = filteredImages().filter(im => state.selectedKeys.includes(im.image_key)).length;
       return `
         <div class="ledger">
           <div class="compact-toolbar">
             <button class="toolbar-btn" id="pickFiles">+ Pick Images</button>
             <button class="toolbar-btn ghost" id="pickFolder">+ Pick Folder</button>
-            <span class="pill"><strong>${m.image_count}</strong> imported · ${(sc.imported || 0)}+${(sc.regenerated_cache || 0)}+${(sc.already_imported || 0)}</span>
+            <span class="pill"><strong>${m.image_count}</strong> images · ${(sc.imported || 0)}+${(sc.regenerated_cache || 0)}+${(sc.already_imported || 0)} imported · ${(sc.review_only || 0)} review-only</span>
+            <span class="pill"><strong>${state.selectedKeys.length}</strong> selected · ${selectedShown} shown</span>
+            <select class="sort-select filter-select" id="filter">
+              ${renderFilterOptions()}
+            </select>
+            <select class="sort-select selection-select" id="selectionAction">
+              <option value="">Selection actions</option>
+              <option value="select_matching">Select all matching filter</option>
+              <option value="invert_filtered">Invert current filtered selection</option>
+              <option value="clear">Clear selection</option>
+            </select>
+            <button class="toolbar-btn danger" id="removeSelected" ${state.selectedKeys.length ? '' : 'disabled'}>Remove selected</button>
             <input class="toolbar-search" id="albumName" placeholder="album name" value="${escape(state.albumName)}">
             <input class="toolbar-search" id="search" placeholder="search filename, key, status" value="${escape(state.search)}">
             <select class="sort-select" id="sort">
@@ -1534,6 +1865,24 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       `;
     }
 
+    function renderFilterOptions() {
+      const albums = state.manifest?.albums || [];
+      const options = [
+        ['all', 'Filter: All images'],
+        ['unreviewed', 'Filter: Unreviewed images'],
+        ['reviewed', 'Filter: Reviewed images'],
+        ['partially_reviewed', 'Filter: Partially reviewed images'],
+      ];
+      if (albums.length) {
+        options.push(['no_album', 'Filter: No album']);
+        for (const album of albums) {
+          options.push(['album:' + album.album_id, 'Filter: Album: ' + (album.album_name || album.album_id)]);
+        }
+      }
+      if (!options.some(([value]) => value === state.filter)) state.filter = 'all';
+      return options.map(([value, label]) => `<option value="${escape(value)}" ${state.filter === value ? 'selected' : ''}>${escape(label)}</option>`).join('');
+    }
+
     function renderAlbumFields() {
       return `
         <div class="album-fields">
@@ -1546,11 +1895,28 @@ IMPORT_HTML = r"""<!DOCTYPE html>
 
     function filteredImages() {
       const images = (state.manifest?.images || []).slice();
+      let filtered = images;
+      if (state.filter === 'unreviewed') {
+        filtered = filtered.filter(im => im.unreviewed_archivable === true);
+      } else if (state.filter === 'reviewed') {
+        filtered = filtered.filter(im => im.review_queue_filter === 'reviewed');
+      } else if (state.filter === 'partially_reviewed') {
+        filtered = filtered.filter(im => im.review_queue_filter === 'partially_reviewed');
+      } else if (state.filter === 'no_album') {
+        filtered = filtered.filter(im => !im.album_ids || im.album_ids.length === 0);
+      } else if (state.filter.startsWith('album:')) {
+        const albumId = state.filter.slice('album:'.length);
+        filtered = filtered.filter(im => (im.album_ids || []).includes(albumId));
+      }
       const q = state.search.trim().toLowerCase();
-      const filtered = q ? images.filter(im => {
-        const hay = [im.image_key, im.original_filename, im.import_status, im.source_collection, im.source_path].join(' ').toLowerCase();
+      filtered = q ? filtered.filter(im => {
+        const hay = [
+          im.image_key, im.original_filename, im.import_status, im.source_collection,
+          im.source_path, im.source_display_name, im.review_queue_filter,
+          ...(im.album_names || []), ...(im.album_ids || [])
+        ].join(' ').toLowerCase();
         return hay.includes(q);
-      }) : images;
+      }) : filtered;
       const sortKey = state.sort;
       filtered.sort((a, b) => {
         if (sortKey === 'imported_asc') return String(a.imported_at || '').localeCompare(String(b.imported_at || ''));
@@ -1564,8 +1930,10 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function renderLedger() {
       const images = filteredImages();
       if (!images.length) return '<p style="font-family:var(--serif);font-style:italic;color:var(--muted);padding:40px 0;">No imported images match the current search.</p>';
+      const selected = new Set(state.selectedKeys);
       const rows = images.map((im, idx) => `
         <tr class="${im.image_key === state.selectedKey ? 'selected' : ''}" onclick="selectImage('${escape(im.image_key)}')">
+          <td class="select-cell"><input type="checkbox" ${selected.has(im.image_key) ? 'checked' : ''} onclick="toggleImageSelection('${escape(im.image_key)}', ${idx}, event)"></td>
           <td class="row-num">${String(idx + 1).padStart(4, '0')}</td>
           <td class="row-thumb">${im.cache_url ? `<img loading="lazy" src="${escape(im.cache_url)}" alt="">` : ''}</td>
           <td class="row-name">${escape(im.original_filename || im.image_key)}</td>
@@ -1580,6 +1948,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         <table class="ledger-table">
           <thead>
             <tr>
+              <th class="select-cell"></th>
               <th class="row-num">№</th>
               <th></th>
               <th>Filename</th>
@@ -1598,12 +1967,14 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function renderGrid() {
       const images = filteredImages();
       if (!images.length) return '<p style="font-family:var(--serif);font-style:italic;color:var(--muted);padding:40px 0;">No imported images match the current search.</p>';
+      const selected = new Set(state.selectedKeys);
       return '<div class="grid">' + images.map(im => `
         <article class="tile ${im.image_key === state.selectedKey ? 'selected' : ''}" onclick="selectImage('${escape(im.image_key)}')">
+          <input class="tile-select" type="checkbox" ${selected.has(im.image_key) ? 'checked' : ''} onclick="toggleImageSelection('${escape(im.image_key)}', ${images.indexOf(im)}, event)">
           <div class="tile-img">${im.cache_url ? `<img loading="lazy" src="${escape(im.cache_url)}" alt="">` : 'no cache'}</div>
           <div class="tile-meta">
             <div class="tile-name">${escape(im.original_filename || im.image_key)}</div>
-            <div class="tile-sub">${im.width || '?'}×${im.height || '?'} · ${escape(im.import_status)}</div>
+            <div class="tile-sub">${im.width || '?'}×${im.height || '?'} · ${escape(im.import_status)}${im.unreviewed_archivable ? ' · unreviewed' : ''}</div>
           </div>
         </article>
       `).join('') + '</div>';
@@ -1612,11 +1983,13 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function renderDetail() {
       const im = (state.manifest?.images || []).find(x => x.image_key === state.selectedKey);
       if (!im) return '<div class="detail-empty">Select an entry to inspect its manifest record, render profile, and cache path.</div>';
+      const editAction = `<div class="detail-actions"><button class="detail-action" onclick="editInManualReview('${escape(im.image_key)}')">Edit in manual review</button></div>`;
       return `
         <p class="detail-eyebrow">Manifest record</p>
         <h3 class="detail-title">${escape(im.original_filename || im.image_key)}</h3>
         <div class="detail-key">${escape(im.image_key)}</div>
         <div class="detail-thumb">${im.cache_url ? `<img src="${escape(im.cache_url)}" alt="">` : ''}</div>
+        ${editAction}
         <dl class="kv">
           <dt>Status</dt><dd class="value-strong"><span class="status-tag ${escape(im.import_status)}">${escape(im.import_status)}</span></dd>
           <dt>Dimensions</dt><dd>${im.width || '?'} × ${im.height || '?'}</dd>
@@ -1626,13 +1999,20 @@ IMPORT_HTML = r"""<!DOCTYPE html>
           <dt>Imported at</dt><dd>${formatTime(im.imported_at)}</dd>
           <dt>Updated at</dt><dd>${formatTime(im.updated_at)}</dd>
           <dt>Album ids</dt><dd>${(im.album_ids || []).map(escape).join(', ') || '-'}</dd>
+          <dt>Albums</dt><dd>${(im.album_names || []).map(escape).join(', ') || '-'}</dd>
           <dt>Source label</dt><dd>${escape(im.source_display_name || '-')}</dd>
+          <dt>Review queue</dt><dd>${escape(im.review_queue_filter || '-')}</dd>
+          <dt>Review status</dt><dd>${escape(im.review_status || '-')}</dd>
           <dt>Source path</dt><dd>${escape(im.source_path || im.browser_relative_path || '-')}</dd>
           <dt>Source collection</dt><dd>${escape(im.source_collection || '-')}</dd>
           <dt>Cache path</dt><dd>${escape(im.cache_path || '-')}</dd>
           <dt>Warnings</dt><dd>${(im.warnings || []).map(escape).join(', ') || 'none'}</dd>
         </dl>
       `;
+    }
+
+    function editInManualReview(imageKey) {
+      window.location.href = '/manual-review?image_id=' + encodeURIComponent(imageKey);
     }
 
     function renderProgressInto(host, opts) {
@@ -1668,9 +2048,9 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       const fileBtn = document.getElementById('pickFiles');
       const folderBtn = document.getElementById('pickFolder');
       const force = document.getElementById('forceRefresh');
-      if (fileBtn) fileBtn.onclick = () => document.getElementById('fileInput').click();
-      if (folderBtn) folderBtn.onclick = () => document.getElementById('folderInput').click();
-      if (force) force.onchange = (e) => { state.forceRefresh = e.target.checked; persistState(); };
+      if (fileBtn) fileBtn.onclick = () => { const input = document.getElementById('fileInput'); input.value = ''; logAction('pick_files_pressed'); input.click(); };
+      if (folderBtn) folderBtn.onclick = () => { const input = document.getElementById('folderInput'); input.value = ''; logAction('pick_folder_pressed'); input.click(); };
+      if (force) force.onchange = (e) => { state.forceRefresh = e.target.checked; persistState(); logAction('force_refresh_changed', { checked: state.forceRefresh }); };
       const albumName = document.getElementById('albumName');
       const albumDescription = document.getElementById('albumDescription');
       const sourceDisplayName = document.getElementById('sourceDisplayName');
@@ -1683,16 +2063,29 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       wireIntakeControls();
       const search = document.getElementById('search');
       if (search) {
-        search.oninput = (e) => { state.search = e.target.value; persistState(); rerenderCanvas(); };
+        search.oninput = (e) => { state.search = e.target.value; persistState(); logAction('search_changed', { length: state.search.length }); render(); };
       }
       const sort = document.getElementById('sort');
       if (sort) {
-        sort.onchange = (e) => { state.sort = e.target.value; persistState(); rerenderCanvas(); };
+        sort.onchange = (e) => { state.sort = e.target.value; persistState(); logAction('sort_changed', { sort: state.sort }); render(); };
+      }
+      const filter = document.getElementById('filter');
+      if (filter) {
+        filter.onchange = (e) => { state.filter = e.target.value; persistState(); logAction('filter_changed', { filter: state.filter }); render(); };
+      }
+      const selectionAction = document.getElementById('selectionAction');
+      if (selectionAction) {
+        selectionAction.onchange = (e) => {
+          applySelectionAction(e.target.value);
+          logAction('selection_action_changed', { action: e.target.value });
+          e.target.value = '';
+        };
       }
       const vL = document.getElementById('viewLedger');
       const vG = document.getElementById('viewGrid');
-      if (vL) vL.onclick = () => { state.view = 'ledger'; persistState(); rerenderCanvas(true); };
-      if (vG) vG.onclick = () => { state.view = 'grid'; persistState(); rerenderCanvas(true); };
+      if (vL) vL.onclick = () => { state.view = 'ledger'; persistState(); logAction('view_changed', { view: state.view }); rerenderCanvas(true); };
+      if (vG) vG.onclick = () => { state.view = 'grid'; persistState(); logAction('view_changed', { view: state.view }); rerenderCanvas(true); };
+      document.getElementById('removeSelected')?.addEventListener('click', removeSelectedFromReviewQueue);
     }
 
     function rerenderCanvas(includeToggle) {
@@ -1709,20 +2102,135 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function selectImage(key) {
       state.selectedKey = key;
       persistState();
+      logAction('image_selected', { image_key: key });
       document.querySelectorAll('.ledger-table tbody tr, .tile').forEach(el => el.classList.remove('selected'));
       const detail = document.getElementById('detail');
       if (detail) detail.innerHTML = renderDetail();
       rerenderCanvas();
     }
 
+    function setSelectedKeys(keys) {
+      const seen = new Set();
+      state.selectedKeys = [];
+      for (const key of keys) {
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        state.selectedKeys.push(key);
+      }
+      if (state.selectedKeys.length > 50000) {
+        if (!state.selectionPersistenceWarned) {
+          showToast('Selection exceeds 50,000 images; it will not be restored after refresh', 'error');
+          state.selectionPersistenceWarned = true;
+        }
+      } else {
+        state.selectionPersistenceWarned = false;
+      }
+      persistState();
+    }
+
+    function toggleImageSelection(key, index, event) {
+      if (event) event.stopPropagation();
+      const selected = new Set(state.selectedKeys);
+      const images = filteredImages();
+      if (event?.shiftKey && state.lastSelectedKey) {
+        const start = images.findIndex(im => im.image_key === state.lastSelectedKey);
+        const end = images.findIndex(im => im.image_key === key);
+        if (start >= 0 && end >= 0) {
+          for (const im of images.slice(Math.min(start, end), Math.max(start, end) + 1)) selected.add(im.image_key);
+        } else if (selected.has(key)) {
+          selected.delete(key);
+        } else {
+          selected.add(key);
+        }
+      } else if (selected.has(key)) {
+        selected.delete(key);
+      } else {
+        selected.add(key);
+      }
+      state.lastSelectedKey = key;
+      setSelectedKeys(Array.from(selected));
+      logAction('image_checkbox_toggled', { image_key: key, selected_count: state.selectedKeys.length, shift: !!event?.shiftKey });
+      render();
+    }
+
+    function selectAllMatching() {
+      const selected = new Set(state.selectedKeys);
+      for (const im of filteredImages()) selected.add(im.image_key);
+      setSelectedKeys(Array.from(selected));
+      logAction('select_all_matching', { matching_count: filteredImages().length, selected_count: state.selectedKeys.length });
+      render();
+    }
+
+    function invertCurrentFilteredSelection() {
+      const selected = new Set(state.selectedKeys);
+      for (const im of filteredImages()) {
+        if (selected.has(im.image_key)) selected.delete(im.image_key);
+        else selected.add(im.image_key);
+      }
+      setSelectedKeys(Array.from(selected));
+      logAction('invert_filtered_selection', { matching_count: filteredImages().length, selected_count: state.selectedKeys.length });
+      render();
+    }
+
+    function clearSelection() {
+      setSelectedKeys([]);
+      logAction('clear_selection');
+      render();
+    }
+
+    function applySelectionAction(action) {
+      if (action === 'select_matching') selectAllMatching();
+      else if (action === 'invert_filtered') invertCurrentFilteredSelection();
+      else if (action === 'clear') clearSelection();
+    }
+
+    async function removeSelectedFromReviewQueue() {
+      const imageKeys = state.selectedKeys.slice();
+      if (!imageKeys.length) return;
+      logAction('remove_selected_pressed', { selected_count: imageKeys.length });
+      try {
+        const previewResp = await fetch('/api/images/remove/preview', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_keys: imageKeys, filters: { search: state.search, sort: state.sort, filter: state.filter } })
+        });
+        const preview = await previewResp.json();
+        if (!previewResp.ok) throw new Error(preview.error || 'preview failed');
+        const message = `Remove ${preview.removable_count} selected images from this workspace? This removes import records, album membership, active review files, archived review files, and workspace cache/staging copies. Original external source files are untouched.`;
+        if (!preview.removable_count) return;
+        const confirmed = window.confirm(message);
+        logAction('remove_selected_confirmation', { confirmed, removable_count: preview.removable_count, missing_count: preview.missing_count });
+        if (!confirmed) return;
+        const confirmResp = await fetch('/api/images/remove', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_keys: imageKeys, confirmed_removable_count: preview.removable_count, filters: { search: state.search, sort: state.sort, filter: state.filter } })
+        });
+        const result = await confirmResp.json();
+        if (!confirmResp.ok) throw new Error(result.error || 'remove failed');
+        const removed = new Set((result.removed || []).map(item => item.image_key));
+        setSelectedKeys(state.selectedKeys.filter(key => !removed.has(key)));
+        showToast(`Removed ${result.removed_count || 0} images`);
+        await loadManifest();
+      } catch (err) {
+        showToast('Remove failed: ' + err.message, 'error');
+      }
+    }
+
     async function uploadFiles(fileList) {
       if (!fileList || fileList.length === 0) return;
+      logAction('upload_files_selected', { selected_file_count: fileList.length });
+      const resolvedFiles = await resolveDuplicateUploads(fileList);
+      if (!resolvedFiles.length) {
+        logAction('upload_cancelled_no_files_after_conflicts', { original_file_count: fileList.length });
+        showToast('No files selected for import after duplicate choices', 'error');
+        return;
+      }
       const formData = new FormData();
       let topLevel = '';
-      for (const f of fileList) {
-        const name = f.webkitRelativePath || f.name;
-        if (!topLevel && f.webkitRelativePath && f.webkitRelativePath.includes('/')) {
-          topLevel = f.webkitRelativePath.split('/')[0];
+      for (const item of resolvedFiles) {
+        const f = item.file;
+        const name = item.uploadName;
+        if (!topLevel && name.includes('/')) {
+          topLevel = name.split('/')[0];
         }
         formData.append('files', f, name);
       }
@@ -1730,6 +2238,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       const sourceDisplayName = state.sourceDisplayName.trim() || topLevel;
       if (!albumName && !sourceDisplayName) {
         albumName = window.prompt('Album name for these files?', '') || '';
+        logAction('album_name_prompt_answered', { provided: !!albumName.trim() });
         if (!albumName.trim()) return;
         state.albumName = albumName.trim();
         persistState();
@@ -1741,18 +2250,22 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       if (sourceDisplayName) params.set('source_display_name', sourceDisplayName);
       const url = '/api/import/upload' + (params.toString() ? '?' + params.toString() : '');
       try {
+        logAction('upload_started', { file_count: resolvedFiles.length, force: state.forceRefresh, album_name: !!albumName.trim(), source_display_name: sourceDisplayName || null });
         const resp = await fetch(url, { method: 'POST', body: formData });
         if (!resp.ok) {
           const text = await resp.text();
           showToast('Upload failed: ' + text.slice(0, 120), 'error');
+          logAction('upload_failed_response', { status: resp.status, message: text.slice(0, 200) });
           return;
         }
         const data = await resp.json();
         state.job = { state: 'queued', current_step: 'Uploaded. Queued for import.', total_count: 0, processed_count: 0 };
+        logAction('upload_queued', { job_id: data.job_id, queued_files: data.queued_files });
         render();
         startPolling(data.job_id);
       } catch (err) {
         showToast('Upload error: ' + err.message, 'error');
+        logAction('upload_error', { message: err.message });
       }
     }
 
@@ -1769,12 +2282,16 @@ IMPORT_HTML = r"""<!DOCTYPE html>
             stopPolling();
             if (job.state === 'done') {
               showToast(`Imported ${job.imported_count}, skipped ${job.skipped_count}, failed ${job.failed_count}`);
+              logAction('import_job_done', { job_id: jobId, imported_count: job.imported_count, skipped_count: job.skipped_count, failed_count: job.failed_count });
               await loadManifest();
               setTimeout(() => { state.job = null; render(); }, 4000);
+            } else {
+              logAction('import_job_failed', { job_id: jobId, error: job.error || job.current_step });
             }
           }
         } catch (err) {
           stopPolling();
+          logAction('import_job_poll_error', { job_id: jobId, message: err.message });
         }
       };
       tick();
@@ -1784,10 +2301,23 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
     }
 
-    document.getElementById('fileInput').addEventListener('change', (e) => uploadFiles(e.target.files));
-    document.getElementById('folderInput').addEventListener('change', (e) => uploadFiles(e.target.files));
+    document.getElementById('fileInput').addEventListener('change', async (e) => { await uploadFiles(e.target.files); e.target.value = ''; });
+    document.getElementById('folderInput').addEventListener('change', async (e) => { await uploadFiles(e.target.files); e.target.value = ''; });
+
+    document.addEventListener('click', event => {
+      const target = event.target && event.target.closest ? event.target.closest('button,a,input,select') : null;
+      if (!target) return;
+      logAction('gui_click', {
+        tag: target.tagName,
+        id: target.id || null,
+        text: (target.innerText || target.value || '').slice(0, 80),
+        href: target.getAttribute && target.getAttribute('href'),
+      });
+    }, true);
 
     window.selectImage = selectImage;
+    window.toggleImageSelection = toggleImageSelection;
+    window.editInManualReview = editInManualReview;
 
     restoreState();
     loadManifest();
@@ -1848,8 +2378,17 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/training-ui-interaction":
+            self._handle_training_ui_interaction()
+            return
         if parsed.path == "/api/import/upload":
             self._handle_upload(parsed)
+            return
+        if parsed.path == "/api/images/remove/preview":
+            self._handle_remove_preview()
+            return
+        if parsed.path == "/api/images/remove":
+            self._handle_remove_confirm()
             return
         if parsed.path in REVIEW_POST_PATHS:
             review_ui.ReviewHandler.do_POST(self)
@@ -1888,6 +2427,86 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json({"error": f"could not stage upload: {exc}"}, status=500)
             return
         self._respond_json({"job_id": job_id, "queued_files": len(files)}, status=202)
+
+    def _handle_training_ui_interaction(self) -> None:
+        try:
+            payload = self._json_body()
+            append_training_ui_interaction(payload)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json({"ok": True})
+
+    def _json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8")) if raw else {}
+
+    def _handle_prune_preview(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.preview_review_queue_prune(
+                reviewer=str(payload.get("reviewer") or IMPORT_REVIEWER),
+                reviews_dir=REVIEWS_DIR,
+                image_keys=[str(value) for value in payload.get("image_keys") or []],
+                filters=payload.get("filters") or {},
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_prune_confirm(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.prune_review_queue(
+                reviewer=str(payload.get("reviewer") or IMPORT_REVIEWER),
+                reviews_dir=REVIEWS_DIR,
+                image_keys=[str(value) for value in payload.get("image_keys") or []],
+                filters=payload.get("filters") or {},
+                confirmed_archivable_count=int(payload.get("confirmed_archivable_count")),
+            )
+            review_ui.invalidate_review_queue_cache()
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_remove_preview(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.preview_remove_images(
+                reviewer=str(payload.get("reviewer") or IMPORT_REVIEWER),
+                reviews_dir=REVIEWS_DIR,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                image_keys=[str(value) for value in payload.get("image_keys") or []],
+                filter_mode=payload.get("filter"),
+                filters=payload.get("filters") or {},
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_remove_confirm(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.remove_images(
+                reviewer=str(payload.get("reviewer") or IMPORT_REVIEWER),
+                reviews_dir=REVIEWS_DIR,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                image_keys=[str(value) for value in payload.get("image_keys") or []],
+                filter_mode=payload.get("filter"),
+                filters=payload.get("filters") or {},
+                confirmed_removable_count=int(payload.get("confirmed_removable_count")),
+            )
+            review_ui.invalidate_review_queue_cache()
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
 
     def _serve_cache_file(self, relative_path: str) -> None:
         cleaned = relative_path.lstrip("/")

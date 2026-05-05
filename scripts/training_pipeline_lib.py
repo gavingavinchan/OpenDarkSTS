@@ -30,6 +30,8 @@ DEFAULT_IMPORT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "training_import_ma
 DEFAULT_IMPORT_CACHE_DIR = WORKSPACE_DIR / "cache" / "imported_images"
 DEFAULT_ALBUMS_DIR = WORKSPACE_DIR / "albums"
 DEFAULT_IMPORT_JOBS_DIR = WORKSPACE_DIR / "reports" / "import_jobs"
+DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR = WORKSPACE_DIR / "reports" / "review_queue_prune"
+DEFAULT_IMAGE_REMOVAL_REPORTS_DIR = WORKSPACE_DIR / "reports" / "image_removals"
 RGB_ORIGINAL_RENDER_PROFILE = {"kind": "rgb_original"}
 TRUE_COLOR_RENDER_PROFILE = {
     "kind": "true_color",
@@ -108,6 +110,14 @@ def repo_relative(path: str | Path) -> str:
         return str(candidate.relative_to(ROOT_DIR))
     except ValueError:
         return str(candidate)
+
+
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def load_json(path: str | Path) -> dict[str, Any]:
@@ -639,6 +649,500 @@ def review_stub_failure_item(item: dict[str, Any]) -> dict[str, Any]:
     failed_item["status"] = "failed"
     failed_item["reason"] = f"Review stub failed: {item.get('review_stub_error') or 'unknown error'}"
     return failed_item
+
+
+def unique_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def review_archivable_status(review: dict[str, Any]) -> tuple[bool, str | None]:
+    image_key = str(review.get("image_key") or "").strip()
+    if not image_key:
+        return False, "missing image_key"
+    status = review.get("review_status", "overview_1")
+    if status != "overview_1":
+        return False, f"review_status is {status!r}"
+    if review.get("completed_at") or review.get("reviewed_at") or review.get("image_reviewed") is True:
+        return False, "image-level review completion metadata is present"
+    detections = review.get("detections", [])
+    if not isinstance(detections, list):
+        return False, "detections is not a list"
+    for index, detection in enumerate(detections):
+        if not isinstance(detection, dict):
+            return False, f"detection {index} is not an object"
+        if detection.get("reviewed") is True:
+            return False, f"detection {index} has reviewed=true"
+        if detection.get("review_label") is not None:
+            return False, f"detection {index} has review_label"
+        if detection.get("source_type") == "manual":
+            return False, f"detection {index} is manual"
+    return True, None
+
+
+def review_archivable_for_image_key(image_key: str, reviewer: str, reviews_dir: str | Path) -> tuple[bool, str | None, Path]:
+    review_path = review_lib.review_file_path(image_key, reviewer, reviews_dir)
+    if not review_path.exists():
+        return False, "review file missing", review_path
+    try:
+        review = review_lib.load_review_document(review_path)
+    except Exception as exc:
+        return False, f"review file unreadable: {exc}", review_path
+    review_image_key = str(review.get("image_key") or "")
+    if review_image_key != image_key:
+        return False, f"review image_key mismatch: {review_image_key or 'missing'}", review_path
+    archivable, reason = review_archivable_status(review)
+    return archivable, reason, review_path
+
+
+def latest_archived_review_path(image_key: str, reviewer: str, reviews_dir: str | Path) -> Path | None:
+    archive_root = repo_resolve(reviews_dir) / "_archived_unreviewed"
+    if not image_key or not reviewer or not archive_root.exists():
+        return None
+    matches = sorted(archive_root.glob(f"*/{reviewer}/{image_key}.json"), key=lambda path: str(path.parent.parent.name))
+    return matches[-1] if matches else None
+
+
+def archived_review_paths_by_key(reviewer: str, reviews_dir: str | Path) -> dict[str, Path]:
+    archive_root = repo_resolve(reviews_dir) / "_archived_unreviewed"
+    if not reviewer or not archive_root.exists():
+        return {}
+    archived: dict[str, Path] = {}
+    for path in sorted(archive_root.glob(f"*/{reviewer}/*.json"), key=lambda item: str(item.parent.parent.name)):
+        archived[path.stem] = path
+    return archived
+
+
+def review_queue_filter_summary(
+    image_key: str,
+    reviewer: str,
+    reviews_dir: str | Path,
+    archived_reviews: dict[str, Path] | None = None,
+) -> dict[str, Any]:
+    can_archive, reason, review_path = review_archivable_for_image_key(image_key, reviewer, reviews_dir)
+    summary: dict[str, Any] = {
+        "review_path": repo_relative(review_path),
+        "review_queue_filter": "unreviewed" if can_archive else "protected",
+        "unreviewed_archivable": bool(can_archive),
+        "review_protected_reason": reason,
+        "review_status": None,
+        "review_counts": {},
+    }
+    if can_archive:
+        return summary
+    if reason == "review file missing":
+        summary["review_queue_filter"] = "missing_review"
+        return summary
+
+    try:
+        review = review_lib.load_review_document(review_path)
+    except Exception:
+        return summary
+
+    summary["review_status"] = review.get("review_status", "overview_1")
+    try:
+        counts = review_lib.review_counts(review)
+    except Exception:
+        counts = {}
+    summary["review_counts"] = counts
+    if review.get("review_status") == "completed":
+        summary["review_queue_filter"] = "reviewed"
+    elif int(counts.get("reviewed_active_detections") or 0) > 0 or any(
+        isinstance(detection, dict) and detection.get("review_label") is not None
+        for detection in review.get("detections", [])
+    ):
+        summary["review_queue_filter"] = "partially_reviewed"
+    return summary
+
+
+def list_reviewer_review_image_keys(reviewer: str, reviews_dir: str | Path) -> list[str]:
+    reviewer_dir = repo_resolve(Path(reviews_dir) / reviewer)
+    if not reviewer_dir.exists():
+        return []
+    keys: list[str] = []
+    for path in sorted(reviewer_dir.glob("*.json")):
+        try:
+            review = review_lib.load_review_document(path)
+        except Exception:
+            keys.append(path.stem)
+            continue
+        keys.append(str(review.get("image_key") or path.stem))
+    return unique_preserving_order(keys)
+
+
+def preview_review_queue_prune(
+    *,
+    reviewer: str,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    image_keys: list[str] | None = None,
+    filter_mode: str | None = None,
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if filter_mode not in {None, "unreviewed"}:
+        raise ValueError(f"Unsupported review queue prune filter: {filter_mode}")
+    explicit_keys = unique_preserving_order(image_keys or [])
+    if filter_mode is None and not explicit_keys:
+        raise ValueError("Provide at least one --image-key or --filter unreviewed")
+
+    all_keys = list_reviewer_review_image_keys(reviewer, reviews_dir)
+    if filter_mode == "unreviewed" and explicit_keys:
+        requested_keys = explicit_keys
+    elif filter_mode == "unreviewed":
+        requested_keys = all_keys
+    else:
+        requested_keys = explicit_keys
+
+    archivable: list[dict[str, Any]] = []
+    protected: list[dict[str, Any]] = []
+    for image_key in requested_keys:
+        can_archive, reason, review_path = review_archivable_for_image_key(image_key, reviewer, reviews_dir)
+        item = {
+            "image_key": image_key,
+            "review_path": repo_relative(review_path),
+        }
+        if can_archive:
+            archivable.append(item)
+        elif filter_mode == "unreviewed" and not explicit_keys:
+            continue
+        else:
+            protected.append({**item, "reason": reason or "protected"})
+
+    return {
+        "requested_count": len(requested_keys),
+        "archivable_count": len(archivable),
+        "protected_count": len(protected),
+        "reviewer": reviewer,
+        "reviews_dir": repo_relative(reviews_dir),
+        "filters": filters or ({"filter": filter_mode} if filter_mode else {}),
+        "requested_image_keys": requested_keys,
+        "archivable": archivable,
+        "protected": protected,
+    }
+
+
+def utc_timestamp_ms_for_path() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")[:23] + "Z"
+
+
+def prune_review_queue(
+    *,
+    reviewer: str,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    image_keys: list[str] | None = None,
+    filter_mode: str | None = None,
+    filters: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    confirmed_archivable_count: int | None = None,
+    reports_dir: str | Path = DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR,
+) -> dict[str, Any]:
+    preview = preview_review_queue_prune(
+        reviewer=reviewer,
+        reviews_dir=reviews_dir,
+        image_keys=image_keys,
+        filter_mode=filter_mode,
+        filters=filters,
+    )
+    if dry_run:
+        return preview
+    if confirmed_archivable_count is not None and int(confirmed_archivable_count) != int(preview["archivable_count"]):
+        raise ValueError(
+            "confirmed_archivable_count does not match current preview "
+            f"({confirmed_archivable_count} != {preview['archivable_count']})"
+        )
+
+    timestamp = utc_timestamp_ms_for_path()
+    archive_root = repo_resolve(reviews_dir) / "_archived_unreviewed" / timestamp / reviewer
+    report_path = repo_resolve(reports_dir) / f"{timestamp}.json"
+    archived: list[dict[str, Any]] = []
+    for item in preview["archivable"]:
+        image_key = item["image_key"]
+        source_path = review_lib.review_file_path(image_key, reviewer, reviews_dir)
+        target_path = archive_root / f"{image_key}.json"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source_path), str(target_path))
+        archived.append(
+            {
+                "image_key": image_key,
+                "review_path": repo_relative(source_path),
+                "archive_path": repo_relative(target_path),
+            }
+        )
+
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "timestamp": timestamp,
+        "reviewer": reviewer,
+        "reviews_dir": repo_relative(reviews_dir),
+        "requested_image_keys": preview["requested_image_keys"],
+        "archived": archived,
+        "protected": preview["protected"],
+        "filters": preview.get("filters") or {},
+    }
+    write_json(report_path, report)
+
+    return {
+        **preview,
+        "archived_count": len(archived),
+        "archived": archived,
+        "report_path": repo_relative(report_path),
+    }
+
+
+def removable_image_keys_for_filter(
+    *,
+    manifest: dict[str, Any],
+    reviewer: str,
+    reviews_dir: str | Path,
+    filter_mode: str | None,
+) -> list[str]:
+    if filter_mode is None:
+        return []
+    if filter_mode != "inactive-review":
+        raise ValueError(f"Unsupported image removal filter: {filter_mode}")
+    keys: list[str] = []
+    for image_key in (manifest.get("images") or {}).keys():
+        review_path = review_lib.review_file_path(str(image_key), reviewer, reviews_dir)
+        if not review_path.exists():
+            keys.append(str(image_key))
+    return keys
+
+
+def archived_review_paths_for_image_key(image_key: str, reviewer: str, reviews_dir: str | Path) -> list[Path]:
+    archive_root = repo_resolve(reviews_dir) / "_archived_unreviewed"
+    if not image_key or not reviewer or not archive_root.exists():
+        return []
+    return sorted(archive_root.glob(f"*/{reviewer}/{image_key}.json"))
+
+
+def safe_workspace_file(path_value: str | Path | None) -> Path | None:
+    if not path_value:
+        return None
+    path = repo_resolve(path_value)
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if path_is_relative_to(resolved, WORKSPACE_DIR):
+        return resolved
+    return None
+
+
+def safe_file_in_roots(path_value: str | Path | None, roots: list[str | Path]) -> Path | None:
+    if not path_value:
+        return None
+    path = repo_resolve(path_value)
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    for root in roots:
+        if path_is_relative_to(resolved, repo_resolve(root)):
+            return resolved
+    return None
+
+
+def remove_empty_parents(path: Path, stop_at: Path) -> None:
+    stop = stop_at.resolve()
+    current = path.parent
+    while current != stop and path_is_relative_to(current, stop):
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def preview_remove_images(
+    *,
+    reviewer: str,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    albums_dir: str | Path | None = None,
+    image_keys: list[str] | None = None,
+    filter_mode: str | None = None,
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    manifest = load_import_manifest(manifest_file)
+    explicit_keys = unique_preserving_order(image_keys or [])
+    requested_keys = explicit_keys or removable_image_keys_for_filter(
+        manifest=manifest,
+        reviewer=reviewer,
+        reviews_dir=reviews_dir,
+        filter_mode=filter_mode,
+    )
+    if not requested_keys and filter_mode is None:
+        raise ValueError("Provide at least one --image-key or --filter inactive-review")
+
+    removable: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    images = manifest.get("images") or {}
+    for image_key in requested_keys:
+        entry = images.get(image_key)
+        review_path = review_lib.review_file_path(image_key, reviewer, reviews_dir)
+        review: dict[str, Any] | None = None
+        if review_path.exists():
+            try:
+                review = review_lib.load_review_document(review_path)
+            except Exception:
+                review = None
+        cache_paths: list[str] = []
+        source_paths: list[str] = []
+        if isinstance(entry, dict):
+            if entry.get("cache_path"):
+                cache_paths.append(repo_relative(repo_resolve(entry["cache_path"])))
+            source_path = safe_workspace_file(entry.get("source_path"))
+            if source_path and path_is_relative_to(source_path, WORKSPACE_DIR / "cache" / "import_staging"):
+                source_paths.append(repo_relative(source_path))
+        if review and review.get("cache_path"):
+            cache_path = safe_workspace_file(review.get("cache_path"))
+            if cache_path:
+                cache_paths.append(repo_relative(cache_path))
+        archive_paths = [repo_relative(path) for path in archived_review_paths_for_image_key(image_key, reviewer, reviews_dir)]
+        if entry is None and not review_path.exists() and not archive_paths:
+            missing.append({"image_key": image_key, "reason": "not found"})
+            continue
+        removable.append(
+            {
+                "image_key": image_key,
+                "in_manifest": entry is not None,
+                "active_review_path": repo_relative(review_path) if review_path.exists() else None,
+                "archived_review_paths": archive_paths,
+                "cache_paths": unique_preserving_order(cache_paths),
+                "source_paths": unique_preserving_order(source_paths),
+                "album_ids": list((entry or {}).get("album_ids") or []),
+            }
+        )
+
+    return {
+        "requested_count": len(requested_keys),
+        "removable_count": len(removable),
+        "missing_count": len(missing),
+        "reviewer": reviewer,
+        "reviews_dir": repo_relative(reviews_dir),
+        "manifest_path": repo_relative(manifest_file),
+        "albums_dir": repo_relative(album_root),
+        "filters": filters or ({"filter": filter_mode} if filter_mode else {}),
+        "requested_image_keys": requested_keys,
+        "removable": removable,
+        "missing": missing,
+    }
+
+
+def remove_images(
+    *,
+    reviewer: str,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    albums_dir: str | Path | None = None,
+    image_keys: list[str] | None = None,
+    filter_mode: str | None = None,
+    filters: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    confirmed_removable_count: int | None = None,
+    reports_dir: str | Path = DEFAULT_IMAGE_REMOVAL_REPORTS_DIR,
+) -> dict[str, Any]:
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    preview = preview_remove_images(
+        reviewer=reviewer,
+        reviews_dir=reviews_dir,
+        manifest_path=manifest_file,
+        albums_dir=album_root,
+        image_keys=image_keys,
+        filter_mode=filter_mode,
+        filters=filters,
+    )
+    if dry_run:
+        return preview
+    if confirmed_removable_count is not None and int(confirmed_removable_count) != int(preview["removable_count"]):
+        raise ValueError(
+            "confirmed_removable_count does not match current preview "
+            f"({confirmed_removable_count} != {preview['removable_count']})"
+        )
+
+    manifest = load_import_manifest(manifest_file)
+    images = manifest.get("images") or {}
+    cache_root = repo_resolve(manifest.get("cache_dir") or DEFAULT_IMPORT_CACHE_DIR)
+    allowed_delete_roots = [WORKSPACE_DIR, repo_resolve(reviews_dir), cache_root]
+    removed_keys = {item["image_key"] for item in preview["removable"]}
+    removed: list[dict[str, Any]] = []
+    deleted_files: list[str] = []
+    already_missing_files: list[str] = []
+
+    for item in preview["removable"]:
+        image_key = item["image_key"]
+        images.pop(image_key, None)
+        file_candidates = []
+        file_candidates.extend(item.get("cache_paths") or [])
+        file_candidates.extend(item.get("source_paths") or [])
+        if item.get("active_review_path"):
+            file_candidates.append(item["active_review_path"])
+        file_candidates.extend(item.get("archived_review_paths") or [])
+        item_deleted: list[str] = []
+        for path_text in unique_preserving_order(file_candidates):
+            target = safe_file_in_roots(path_text, allowed_delete_roots)
+            if target is None:
+                continue
+            if target.exists() and target.is_file():
+                target.unlink()
+                deleted = repo_relative(target)
+                deleted_files.append(deleted)
+                item_deleted.append(deleted)
+                if "_archived_unreviewed" in target.parts:
+                    remove_empty_parents(target, repo_resolve(reviews_dir) / "_archived_unreviewed")
+            else:
+                already_missing_files.append(repo_relative(target))
+        removed.append({**item, "deleted_files": item_deleted})
+
+    for album_path in sorted(album_root.glob("alb_*.json")):
+        album = load_json(album_path)
+        original_images = album.get("images") or []
+        filtered_images = [image for image in original_images if image.get("image_key") not in removed_keys]
+        if len(filtered_images) == len(original_images):
+            continue
+        album["images"] = filtered_images
+        album["updated_at"] = utcnow_iso_for_training()
+        write_json(album_path, album)
+        write_album_index(album_root, album)
+
+    save_import_manifest(manifest_file, manifest)
+    timestamp = utc_timestamp_ms_for_path()
+    report_path = repo_resolve(reports_dir) / f"{timestamp}.json"
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "timestamp": timestamp,
+        "reviewer": reviewer,
+        "reviews_dir": repo_relative(reviews_dir),
+        "manifest_path": repo_relative(manifest_file),
+        "albums_dir": repo_relative(album_root),
+        "requested_image_keys": preview["requested_image_keys"],
+        "removed": removed,
+        "missing": preview["missing"],
+        "deleted_files": deleted_files,
+        "already_missing_files": unique_preserving_order(already_missing_files),
+        "filters": preview.get("filters") or {},
+    }
+    write_json(report_path, report)
+
+    return {
+        **preview,
+        "removed_count": len(removed),
+        "removed": removed,
+        "deleted_files": deleted_files,
+        "already_missing_files": unique_preserving_order(already_missing_files),
+        "report_path": repo_relative(report_path),
+    }
 
 
 def import_entry_contract_complete(entry: dict[str, Any]) -> bool:

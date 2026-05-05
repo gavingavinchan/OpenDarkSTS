@@ -64,6 +64,13 @@ def print_human(payload: dict[str, Any]) -> None:
         "run_dir",
         "image_key",
         "source_content_hash",
+        "requested_count",
+        "removable_count",
+        "removed_count",
+        "archivable_count",
+        "protected_count",
+        "archived_count",
+        "report_path",
     ):
         if key in result:
             print(f"{key}: {result[key]}")
@@ -208,6 +215,34 @@ def command_image_key(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     return 0, envelope("image-key", ok=True, result=result)
 
 
+def command_prune_review_queue(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.prune_review_queue(
+        reviewer=args.reviewer,
+        reviews_dir=args.reviews_dir,
+        image_keys=list(args.image_key or []),
+        filter_mode=args.filter,
+        dry_run=bool(args.dry_run),
+        reports_dir=args.reports_dir,
+    )
+    add_diagnostics(result, args, "prune_review_queue", reviews_dir=args.reviews_dir)
+    return 0, envelope("prune-review-queue", ok=True, result=result)
+
+
+def command_remove_images(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.remove_images(
+        reviewer=args.reviewer,
+        reviews_dir=args.reviews_dir,
+        manifest_path=args.manifest,
+        albums_dir=args.albums_dir,
+        image_keys=list(args.image_key or []),
+        filter_mode=args.filter,
+        dry_run=bool(args.dry_run),
+        reports_dir=args.reports_dir,
+    )
+    add_diagnostics(result, args, "remove_images", manifest_path=args.manifest, reviews_dir=args.reviews_dir)
+    return 0, envelope("remove-images", ok=True, result=result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Training pipeline automation CLI")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
@@ -256,6 +291,26 @@ def build_parser() -> argparse.ArgumentParser:
     image_key_parser.add_argument("--source", required=True)
     image_key_parser.add_argument("--render-profile", required=True)
     image_key_parser.set_defaults(handler=command_image_key)
+
+    prune_parser = subparsers.add_parser("prune-review-queue")
+    prune_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    prune_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    prune_parser.add_argument("--reports-dir", default=str(pipeline.DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR))
+    prune_parser.add_argument("--image-key", action="append")
+    prune_parser.add_argument("--filter", choices=["unreviewed"])
+    prune_parser.add_argument("--dry-run", action="store_true")
+    prune_parser.set_defaults(handler=command_prune_review_queue)
+
+    remove_parser = subparsers.add_parser("remove-images")
+    remove_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    remove_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    remove_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    remove_parser.add_argument("--albums-dir")
+    remove_parser.add_argument("--reports-dir", default=str(pipeline.DEFAULT_IMAGE_REMOVAL_REPORTS_DIR))
+    remove_parser.add_argument("--image-key", action="append")
+    remove_parser.add_argument("--filter", choices=["inactive-review"])
+    remove_parser.add_argument("--dry-run", action="store_true")
+    remove_parser.set_defaults(handler=command_remove_images)
 
     return parser
 

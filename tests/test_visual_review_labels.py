@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from _helpers import load_review_lib
+from pathlib import Path
+
+from _helpers import load_review_lib, write_json
 
 
 def test_mark_manual_detection_neither_preserves_box_for_review_visibility() -> None:
@@ -60,3 +62,19 @@ def test_delete_detection_removes_manual_box() -> None:
     review_lib.delete_detection(review, "manual-0001")
 
     assert review["detections"] == []
+
+
+def test_review_document_enumeration_skips_underscore_archive_dirs(tmp_path: Path) -> None:
+    review_lib = load_review_lib()
+    active = tmp_path / "reviews" / "tester" / "img_active.json"
+    archived = tmp_path / "reviews" / "_archived_unreviewed" / "2026-05-04T00-00-00-000Z" / "tester" / "img_archived.json"
+    write_json(active, {"image_key": "img_active", "review_status": "overview_1", "detections": []})
+    write_json(archived, {"image_key": "img_archived", "review_status": "overview_1", "detections": []})
+
+    listed = review_lib.list_review_documents("tester", tmp_path / "reviews")
+    collected = review_lib.collect_review_documents(tmp_path / "reviews")
+    grouped = review_lib.review_file_groups(tmp_path / "reviews")
+
+    assert [review["image_key"] for review in listed] == ["img_active"]
+    assert [review["image_key"] for review in collected] == ["img_active"]
+    assert sorted(grouped) == ["img_active"]
