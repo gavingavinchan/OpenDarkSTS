@@ -149,6 +149,8 @@ If new boxes are added during the second overview pass, the image should return 
 - Per-image detection count: `12 detections (8 reviewed)`
 - A bbox is considered reviewed after a review decision is saved: `Ships (STS)`, `Ship (non-STS)`, `Neither`, permanent delete, accepting the current displayed class with `Space` / Right arrow / `Accept / Next`, or saving a geometry edit.
 - Geometry edits count as a review decision and save the current class for that bbox.
+- Pressing `Tab` while a bbox is selected cycles its class and must persist that class change immediately, independent of later navigation, geometry autosave, detail review, image completion, or page refresh. `Tab` must not advance focus, change the selected bbox, or move the detail cursor; the user advances only with Next/Right/Space or explicit navigation.
+- Geometry-only autosaves must not send or overwrite class fields unless the user has an unsaved class change pending for that same bbox.
 - A manually drawn bbox is saved as reviewed using the currently selected class because drawing it is an explicit human addition.
 - Once a bbox is reviewed, its saved label is ground truth for training and dataset statistics regardless of whether the bbox started as an auto detection or was manually drawn. `source_type` is provenance only, not a label-quality distinction.
 - An image is considered completed automatically when every active bbox has been reviewed; image navigation does not itself complete an image.

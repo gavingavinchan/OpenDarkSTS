@@ -411,6 +411,31 @@ def plain_counts(counts: dict[str, Any]) -> dict[str, Any]:
     return convert(counts)
 
 
+def recreate_command(args: argparse.Namespace) -> str:
+    command = [".venv/bin/python", "scripts/build_madhulika_manual_sts_balanced_dataset.py"]
+    if args.old_dataset != str(DEFAULT_OLD_DATASET):
+        command.extend(["--old-dataset", args.old_dataset])
+    if args.reviews_dir != str(DEFAULT_REVIEWS_DIR):
+        command.extend(["--reviews-dir", args.reviews_dir])
+    if args.output_dir != str(DEFAULT_OUTPUT_DIR):
+        command.extend(["--output-dir", args.output_dir])
+    if args.dataset_name != "madhulika_rectbbox_plus_manual_sts_balanced":
+        command.extend(["--dataset-name", args.dataset_name])
+    if args.dataset_version != 1:
+        command.extend(["--dataset-version", str(args.dataset_version)])
+    if args.seed != 42:
+        command.extend(["--seed", str(args.seed)])
+    if args.crop_min_size != 256:
+        command.extend(["--crop-min-size", str(args.crop_min_size)])
+    if args.crop_max_size != 512:
+        command.extend(["--crop-max-size", str(args.crop_max_size)])
+    if args.crop_scale != 10.0:
+        command.extend(["--crop-scale", str(args.crop_scale)])
+    if args.overwrite:
+        command.append("--overwrite")
+    return " ".join(command)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build balanced Madhulika + manual-reviewed STS YOLO dataset.")
     parser.add_argument("--old-dataset", default=str(DEFAULT_OLD_DATASET))
@@ -420,6 +445,8 @@ def main() -> None:
     parser.add_argument("--crop-min-size", type=int, default=256)
     parser.add_argument("--crop-max-size", type=int, default=512)
     parser.add_argument("--crop-scale", type=float, default=10.0)
+    parser.add_argument("--dataset-name", default="madhulika_rectbbox_plus_manual_sts_balanced")
+    parser.add_argument("--dataset-version", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -455,19 +482,16 @@ def main() -> None:
 
     manifest = {
         "schema_version": 1,
-        "dataset_name": "madhulika_rectbbox_plus_manual_sts_balanced",
-        "dataset_version": 1,
+        "dataset_name": args.dataset_name,
+        "dataset_version": args.dataset_version,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "generator": str(Path(__file__).relative_to(ROOT_DIR)),
-        "command_recreate": (
-            ".venv/bin/python scripts/build_madhulika_manual_sts_balanced_dataset.py "
-            "--overwrite"
-        ),
+        "command_recreate": recreate_command(args),
         "user_intent": (
             "Combine the old Madhulika rectbbox dataset used for the old promoted weights with the completed "
             "manual-reviewed STS examples. The old 426 `ships` boxes are treated as already augmented; the new "
-            "35 manual `ships` boxes are augmented with targeted train-only crops and no blur. Ship-only manual "
-            "reviews are intentionally excluded from this first balanced run so the class ratio stays about 1:1."
+            "manual `ships` boxes are augmented with targeted train-only crops and no blur. Ship-only manual "
+            "reviews are excluded so the class ratio stays about 1:1."
         ),
         "classes": {str(class_id): name for class_id, name in CLASS_NAMES.items()},
         "sources": {

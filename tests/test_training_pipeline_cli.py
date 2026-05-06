@@ -140,6 +140,52 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert "album_ids" not in review
 
 
+def test_import_data_auto_detect_writes_initial_review_bboxes(tmp_path: Path, monkeypatch) -> None:
+    pipeline = load_training_lib()
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+
+    monkeypatch.setattr(pipeline.review_lib, "load_yolo_models", lambda model_paths: {"yolov8n": object()})
+    monkeypatch.setattr(
+        pipeline.review_lib,
+        "run_model_predictions",
+        lambda image_path, models, conf_threshold: [
+            {
+                "temp_id": "yolov8n:1",
+                "source_model": "yolov8n",
+                "class_id": 0,
+                "class_name": "ship",
+                "confidence": 0.91,
+                "x_center": 0.5,
+                "y_center": 0.5,
+                "width": 0.25,
+                "height": 0.2,
+            }
+        ],
+    )
+
+    result = pipeline.import_training_data(
+        [source],
+        manifest_path=manifest_path,
+        cache_dir=cache_dir,
+        reviews_dir=reviews_dir,
+        reviewer="tester",
+        auto_detect=True,
+    )
+
+    imported = result["imported"][0]
+    assert imported["auto_detect_status"] == "created_review"
+    assert imported["auto_detection_count"] == 1
+    assert result["auto_detect_created_review_count"] == 1
+    review = json.loads((reviews_dir / "tester" / f"{imported['image_key']}.json").read_text())
+    assert len(review["detections"]) == 1
+    assert review["detections"][0]["detection_id"] == "auto-0001"
+    assert review["detections"][0]["source_models"] == ["yolov8n"]
+    assert review["detections"][0]["reviewed"] is False
+
+
 def test_cli_import_data_skips_existing_identical_image(tmp_path: Path) -> None:
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"

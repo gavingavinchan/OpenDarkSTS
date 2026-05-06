@@ -38,6 +38,7 @@ try:
         review_file_path,
         save_review_document,
         set_review_status,
+        set_detection_review_label,
         start_detail_mode,
         sync_review_status,
         utcnow_iso,
@@ -72,6 +73,7 @@ except ImportError:
         review_file_path,
         save_review_document,
         set_review_status,
+        set_detection_review_label,
         start_detail_mode,
         sync_review_status,
         utcnow_iso,
@@ -1501,22 +1503,20 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         }}
         return;
       }}
-      const classId = pendingLabel
-        ? (pendingLabel === 'ships_sts' ? 1 : 0)
-        : parseInt(document.getElementById('newClassSelect')?.value || String(layer.detection.class_id), 10);
-      const reviewLabel = reviewLabelForClassId(classId);
+      const classId = pendingLabel ? (pendingLabel === 'ships_sts' ? 1 : 0) : null;
       const pendingClassChange = pendingLabel && pendingLabel !== layer.detection.review_label;
-      if (!pendingClassChange && geometryMatchesDetection(geometry, layer.detection) && classId === layer.detection.class_id) return;
+      if (!pendingClassChange && geometryMatchesDetection(geometry, layer.detection)) return;
       try {{
-        await postJson('/api/save-detection', {{
+        const payload = {{
           image_id: state.image.image_id,
           detection_id: targetId,
-          class_id: classId,
           x_center: geometry.x_center,
           y_center: geometry.y_center,
           width: geometry.width,
           height: geometry.height,
-        }});
+        }};
+        if (classId !== null) payload.class_id = classId;
+        await postJson('/api/save-detection', payload);
         delete layer.detection.pending_review_label;
       }} catch (e) {{
         console.warn('Autosave failed:', e);
@@ -1599,20 +1599,16 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       if (layer) refreshLayerVisual(layer);
       renderSidebar();
       try {{
-        if (nextLabel === 'neither') {{
-          await postJson('/api/mark-neither', {{ image_id: state.image.image_id, detection_id: targetId }});
-        }} else {{
-          await postJson('/api/label-detection', {{
-            image_id: state.image.image_id,
-            detection_id: targetId,
-            review_label: nextLabel,
-            class_id: nextLabel === 'ships_sts' ? 1 : 0,
-            x_center: geometry.x_center,
-            y_center: geometry.y_center,
-            width: geometry.width,
-            height: geometry.height,
-          }});
-        }}
+        await postJson('/api/set-detection-class', {{
+          image_id: state.image.image_id,
+          detection_id: targetId,
+          review_label: nextLabel,
+          class_id: nextLabel === 'neither' ? null : (nextLabel === 'ships_sts' ? 1 : 0),
+          x_center: geometry.x_center,
+          y_center: geometry.y_center,
+          width: geometry.width,
+          height: geometry.height,
+        }});
         selectedDetectionId = targetId;
         await fetchState(state.image.image_id);
       }} catch (error) {{
@@ -1964,8 +1960,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 reopen_if_completed(review)
                 x_center, y_center, width, height = parse_detection_geometry(payload)
                 detection_id = payload.get("detection_id")
-                class_id = int(payload.get("class_id", 0))
                 if detection_id is None:
+                    class_id = int(payload.get("class_id", 0))
                     detection_id = create_manual_detection(
                         review,
                         class_id=class_id,
@@ -1977,6 +1973,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     detection_id = str(detection_id)
+                    class_id = int(payload["class_id"]) if "class_id" in payload else None
                     update_detection_geometry(review, str(detection_id), x_center, y_center, width, height, class_id=class_id)
                 refresh_detection_crop(review, review_path, str(detection_id))
                 save_review(review, review_path)
@@ -1988,6 +1985,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 class_id = int(payload.get("class_id", REVIEW_LABEL_TO_CLASS[review_label]))
                 x_center, y_center, width, height = parse_detection_geometry(payload)
                 label_detection(review, detection_id, review_label, class_id, x_center, y_center, width, height)
+                refresh_detection_crop(review, review_path, detection_id)
+                save_review(review, review_path)
+                self._respond_json(build_state(image_id))
+            elif parsed.path == "/api/set-detection-class":
+                reopen_if_completed(review)
+                detection_id = str(payload["detection_id"])
+                review_label = payload["review_label"]
+                class_id = None if review_label == "neither" else int(payload.get("class_id", REVIEW_LABEL_TO_CLASS[review_label]))
+                x_center, y_center, width, height = parse_detection_geometry(payload)
+                set_detection_review_label(review, detection_id, review_label, class_id, x_center, y_center, width, height)
                 refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id))

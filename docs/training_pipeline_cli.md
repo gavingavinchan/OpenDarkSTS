@@ -61,12 +61,39 @@ Options:
 - `--reviews-dir <path>`: review stub root. Defaults to `workspace/reviews`.
 - `--reviewer <name>`: reviewer folder for review stubs. Defaults to `$USER`, or `default` when unset.
 - `--render-profile auto|rgb_original|true_color|false_color|<profile.json>`: rendering profile. Defaults to `auto`.
+- `--auto-detect`: run YOLO inference and create or enrich safe review stubs with automatic bboxes during import.
+- `--auto-detect-weight <name=path>`: YOLO weight to use for import-time auto detection, repeatable. Defaults to the current YOLOv8n auto-detect weight when `--auto-detect` is set.
+- `--auto-detect-conf <float>`: YOLO confidence threshold. Defaults to `0.25`.
+- `--auto-detect-iou <float>`: class-aware merge IoU threshold. Defaults to `0.5`.
 - `--recursive`: scan folders recursively. Hidden files and directories are skipped.
 - `--force`: refresh an existing manifest/cache entry.
 - `--no-review-stubs`: skip creating missing step 2 review JSON stubs.
 - `--dry-run`: validate inputs and report actions without writing the manifest or cache.
 
 The command never modifies source files. It writes or updates the import manifest, cache, and missing review stubs unless `--dry-run` is used. Already-imported identical image/profile pairs are skipped and reported in `skipped_count`; their missing review stubs are still created unless `--no-review-stubs` is set.
+
+The integrated GUI upload path enables auto detection by default. The CLI keeps it explicit through `--auto-detect` so automation can choose between fast manifest/cache import and YOLO-backed import.
+
+### `run-auto-detect`
+
+Runs YOLO inference for images already present in the import manifest and creates or enriches safe step 2 review stubs. Existing completed, reviewed, labeled, or manual-bbox review files are protected and not overwritten.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py run-auto-detect \
+  --reviewer gavin
+```
+
+Options:
+
+- `--manifest <path>`: import manifest path. Defaults to `workspace/manifests/training_import_manifest.json`.
+- `--reviews-dir <path>`: review root. Defaults to `workspace/reviews`.
+- `--reviewer <name>`: reviewer folder to update.
+- `--image-key <key>`: restrict to one image key, repeatable.
+- `--limit <n>`: only process the first `n` requested/imported images.
+- `--weight <name=path>`: YOLO weight to use, repeatable. Defaults to the current YOLOv8n auto-detect weight.
+- `--conf <float>`: YOLO confidence threshold. Defaults to `0.25`.
+- `--iou <float>`: class-aware merge IoU threshold. Defaults to `0.5`.
+- `--dry-run`: report which review files would be created, updated, or protected without loading YOLO or writing files.
 
 Planned album/provenance options:
 

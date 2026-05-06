@@ -380,6 +380,70 @@ Training durations:
 
 Known gaps: these are run-local checkpoints, not promoted/current-best copies. Further evaluation against old Madhulika test behavior and raw manual STS recall is still needed before promotion.
 
+### Expanded Manual STS Balanced v2 Runs
+
+These runs repeat the v1 setup above after more manual `ships_sts` labels were completed. The intent is a fair comparison against v1 by keeping the starting weights and training parameters unchanged while changing only the derived dataset version.
+
+Dataset: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v2/data.yaml`.
+
+Dataset manifest: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v2/dataset_manifest.json`.
+
+Builder command:
+
+```bash
+.venv/bin/python scripts/build_madhulika_manual_sts_balanced_dataset.py \
+  --output-dir workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v2 \
+  --dataset-version 2 \
+  --overwrite
+```
+
+Generated dataset counts: `1086 ship`, `1086 ships` overall.
+
+Manual `ships_sts` source counts: `106` raw manual `ships` labels plus `554` train-only augmented manual `ships` labels, for `660` manual `ships` labels after augmentation. The dataset also keeps the old `426` Madhulika rectbbox `ships` labels.
+
+Training command script: `workspace/reports/run_madhulika_manual_sts_balanced_v2_training.sh`.
+
+Recreate the sequence with:
+
+```bash
+bash workspace/reports/run_madhulika_manual_sts_balanced_v2_training.sh
+```
+
+Common parameters: `epochs=150`, `imgsz=960`, `batch=8`, `device=0`, `seed=42`, `patience=30`, `workers=4`.
+
+Online augmentation parameters intentionally disabled: `copy_paste=0.0`, `degrees=0.0`, `fliplr=0.0`, `flipud=0.0`, `hsv_h=0.0`, `hsv_s=0.0`, `hsv_v=0.0`, `mixup=0.0`, `mosaic=0.0`, `scale=0.0`, `translate=0.0`.
+
+Covered weights:
+
+| Weight | Starting weights | Training config | Run metadata |
+|---|---|---|---|
+| `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/weights/best.pt` | `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v2_yolov8n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/weights/last.pt` | `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v2_yolov8n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolo26n_rectbbox_e150_img960/weights/best.pt` | `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v2_yolo26n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolo26n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolo26n_rectbbox_e150_img960/weights/last.pt` | `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v2_yolo26n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolo26n_rectbbox_e150_img960/args.yaml` |
+
+Logs:
+
+- `workspace/reports/train_madhulika_manual_sts_balanced_v2_yolov8n_rectbbox.log`
+- `workspace/reports/train_madhulika_manual_sts_balanced_v2_yolo26n_rectbbox.log`
+- `workspace/reports/run_madhulika_manual_sts_balanced_v2_training.log`
+
+Run outcomes:
+
+- YOLOv8n stopped early after `34` epochs; best results were observed at epoch `4` according to the training log, and the best checkpoint was saved as `best.pt`.
+- YOLO26n stopped early after `31` epochs; best results were observed at epoch `1` according to the training log, and the best checkpoint was saved as `best.pt`.
+
+Training durations:
+
+| Run | Sequence wall time | Ultralytics reported train time |
+|---|---:|---:|
+| `yolov8n_rectbbox_e150_img960` | `2m 39s` (`2026-05-05T04:56:54-05:00` to `2026-05-05T04:59:33-05:00`) | `0.040 hours` (`2m 24s`) |
+| `yolo26n_rectbbox_e150_img960` | `3m 17s` (`2026-05-05T04:59:33-05:00` to `2026-05-05T05:02:50-05:00`) | `0.053 hours` (`3m 11s`) |
+
+Promotion note: at user request on 2026-05-05, the YOLOv8n `best.pt` from this run became the default YOLOv8n weight for `scripts/preprocess_sentinel_tiles.py` so new visual-review preprocessing uses the expanded manual STS training. The checkpoint remains in its run-local path rather than being copied to `workspace/model_weights/`.
+
+Known gaps: further evaluation against the old v1 validation/test behavior, old Madhulika test behavior, and raw manual STS recall is still needed before treating these as fully validated current-best copies.
+
 ## Updating This Registry
 
 When adding, moving, renaming, promoting, or deleting a YOLO `*.pt` file, update this document in the same change. If a weight has an adjacent doc instead, that doc must include the same reproduction fields and this registry should still point to it.

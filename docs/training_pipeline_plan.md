@@ -165,8 +165,8 @@ Behavior:
 - Writes browser-ready RGB cache images to `workspace/cache/imported_images/<image_key>.png` unless `--dry-run` is set.
 - Writes or updates `workspace/manifests/training_import_manifest.json` unless `--dry-run` is set.
 - Creates missing per-image review stubs under `workspace/reviews/<reviewer>/<image_key>.json` unless `--dry-run` or `--no-review-stubs` is set.
-- Populates or updates the step 2 manual-review queue automatically. After step 1 succeeds, refreshing/restarting the step 2 GUI should show the imported images even if no auto detections have been run yet.
-- Leaves existing review JSON files untouched by default so manual labels, manual detections, and review progress are not overwritten by re-importing or regenerating cache files.
+- Populates or updates the step 2 manual-review queue automatically. The integrated GUI upload path should run YOLO auto detection before creating or enriching safe review stubs so the user starts from model-proposed boxes.
+- Leaves existing reviewed, labeled, completed, or manual-bbox review JSON files untouched by default so manual labels, manual detections, and review progress are not overwritten by re-importing, regenerating cache files, or running auto detection.
 - Defaults `--reviewer` to `visual_review_lib.DEFAULT_REVIEWER`, which is `$USER` or `default` when the environment variable is unset.
 - Uses the same image identity and render-profile validation helpers as the GUI.
 - Skips already-imported identical `image_key` entries by default and reports them in `skipped_count`.
@@ -244,11 +244,11 @@ Per-file failures should be listed in `result.failed` for structured automation 
 Review-stub behavior:
 
 - Step 1 owns image availability for step 2. Step 2 is manual review and should not have to discover imported images independently.
-- A review stub is an empty review document for an imported image, with `review_status: "overview_1"`, `detections: []`, the imported image dimensions, and the cache path.
-- `import-data` should create a missing stub for every successfully imported, skipped, or regenerated image unless `--no-review-stubs` is set.
-- Existing review documents must not be overwritten by default. This protects in-progress and completed manual review work.
-- Auto-detect may later enrich these stubs with model detections, but auto-detect is not required for images to appear in the manual-review queue.
-- CLI/API results should include review-stub counts or per-item review-stub status so automation can tell whether step 2 was newly populated or already populated.
+- A review stub is a review document for an imported image, with `review_status: "overview_1"`, imported image dimensions, cache path, and either model-proposed auto detections or `detections: []` when auto detection is intentionally skipped or produces no boxes.
+- `import-data` should create a missing stub for every successfully imported, skipped, or regenerated image unless `--no-review-stubs` is set. GUI imports should enable YOLO auto detection by default; CLI imports may require an explicit `--auto-detect` flag for fast automation.
+- Existing review documents with completed, reviewed, labeled, or manual detections must not be overwritten by default. Safe unreviewed auto-only or empty stubs may be enriched/replaced by auto detection.
+- `run-auto-detect` may later enrich safe stubs with model detections, but an empty stub is still valid when auto detection is intentionally skipped or unavailable.
+- CLI/API results should include review-stub and auto-detect counts or per-item statuses so automation can tell whether step 2 was newly populated, enriched, preserved, or protected.
 - `review_stub_status` values are `created`, `existing`, `skipped`, and `failed`.
 - `created` means a new review JSON was written; `existing` means an existing review JSON was preserved; `skipped` means `--no-review-stubs` or `--dry-run` prevented writing a stub; `failed` means the review stub could not be written.
 - Review-stub write failures are per-image failures unless stub creation was intentionally skipped. The source file should be listed in `failed[]` and warned about, because step 1's contract includes populating the manual-review queue.
@@ -1306,6 +1306,7 @@ Crop rules:
 - crop metadata is stored separately, including source image key, detection id, bbox geometry, crop padding, source image dimensions, and generation timestamp
 - stale crop pixels are regenerated when bbox geometry or source image fingerprint changes
 - class changes refresh crop metadata and UI badges, but do not require regenerating crop pixels
+- Step 2 class changes, including `Tab` hotkey changes, must be saved immediately and must not be overwritten by later geometry-only autosaves or navigation actions. `Tab` is class-only and must not advance the selected bbox or detail cursor.
 - crop jobs must be safe to rerun
 
 The crop should show the reviewed bbox with enough padding to provide visual context. The exact padding should be configurable.

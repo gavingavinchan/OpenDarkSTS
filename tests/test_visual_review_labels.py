@@ -64,6 +64,96 @@ def test_delete_detection_removes_manual_box() -> None:
     assert review["detections"] == []
 
 
+def test_geometry_update_without_class_preserves_saved_class() -> None:
+    review_lib = load_review_lib()
+    review = {
+        "image_key": "img_abc123",
+        "review_status": "overview_1",
+        "detail_cursor": None,
+        "detections": [
+            {
+                "detection_id": "auto-0001",
+                "source_type": "auto",
+                "class_id": 1,
+                "class_name": "ships",
+                "x_center": 0.5,
+                "y_center": 0.5,
+                "width": 0.2,
+                "height": 0.1,
+                "review_label": "ships_sts",
+                "reviewed": True,
+            }
+        ],
+    }
+
+    review_lib.update_detection_geometry(
+        review,
+        "auto-0001",
+        x_center=0.55,
+        y_center=0.45,
+        width=0.25,
+        height=0.15,
+        class_id=None,
+    )
+
+    detection = review["detections"][0]
+    assert detection["class_id"] == 1
+    assert detection["class_name"] == "ships"
+    assert detection["review_label"] == "ships_sts"
+    assert detection["x_center"] == 0.55
+
+
+def test_tab_class_save_does_not_advance_detail_cursor() -> None:
+    review_lib = load_review_lib()
+    review = {
+        "image_key": "img_abc123",
+        "review_status": "detail",
+        "detail_cursor": 0,
+        "detections": [
+            {
+                "detection_id": "auto-0001",
+                "source_type": "auto",
+                "class_id": 0,
+                "class_name": "ship",
+                "x_center": 0.5,
+                "y_center": 0.5,
+                "width": 0.2,
+                "height": 0.1,
+                "review_label": None,
+                "reviewed": False,
+            },
+            {
+                "detection_id": "auto-0002",
+                "source_type": "auto",
+                "class_id": 0,
+                "class_name": "ship",
+                "x_center": 0.7,
+                "y_center": 0.7,
+                "width": 0.2,
+                "height": 0.1,
+                "review_label": None,
+                "reviewed": False,
+            },
+        ],
+    }
+
+    review_lib.set_detection_review_label(
+        review,
+        "auto-0001",
+        "ships_sts",
+        1,
+        x_center=0.5,
+        y_center=0.5,
+        width=0.2,
+        height=0.1,
+    )
+
+    assert review["review_status"] == "detail"
+    assert review["detail_cursor"] == 0
+    assert review["detections"][0]["review_label"] == "ships_sts"
+    assert review["detections"][0]["class_id"] == 1
+
+
 def test_review_document_enumeration_skips_underscore_archive_dirs(tmp_path: Path) -> None:
     review_lib = load_review_lib()
     active = tmp_path / "reviews" / "tester" / "img_active.json"

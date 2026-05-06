@@ -807,6 +807,33 @@ def label_detection(
     return advance_detail_cursor(review)
 
 
+def set_detection_review_label(
+    review: dict[str, Any],
+    detection_id: str,
+    review_label: str,
+    class_id: int | None,
+    x_center: float,
+    y_center: float,
+    width: float,
+    height: float,
+) -> None:
+    detection = find_detection(review, detection_id)
+    reviewed_at = utcnow_iso()
+    x_center, y_center, width, height = clamp_bbox_to_unit(x_center, y_center, width, height)
+    if review_label != "neither":
+        if class_id is None:
+            class_id = REVIEW_LABEL_TO_CLASS[review_label]
+        detection["class_id"] = int(class_id)
+        detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
+    detection["review_label"] = review_label
+    detection["reviewed"] = True
+    detection["reviewed_at"] = reviewed_at
+    detection["x_center"] = clamp_norm(x_center)
+    detection["y_center"] = clamp_norm(y_center)
+    detection["width"] = clamp_norm(width)
+    detection["height"] = clamp_norm(height)
+
+
 def remove_detection(review: dict[str, Any], detection_id: str) -> tuple[str, int | None]:
     detections = review.get("detections", [])
     index = next((idx for idx, detection in enumerate(detections) if str(detection.get("detection_id")) == str(detection_id)), None)

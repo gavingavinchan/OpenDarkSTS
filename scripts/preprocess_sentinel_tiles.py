@@ -44,7 +44,7 @@ except ImportError:
     )
 
 
-DEFAULT_YOLOV8 = Path("workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt")
+DEFAULT_YOLOV8 = Path("workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/weights/best.pt")
 DEFAULT_YOLO26 = Path("workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt")
 
 

@@ -32,6 +32,10 @@ DEFAULT_ALBUMS_DIR = WORKSPACE_DIR / "albums"
 DEFAULT_IMPORT_JOBS_DIR = WORKSPACE_DIR / "reports" / "import_jobs"
 DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR = WORKSPACE_DIR / "reports" / "review_queue_prune"
 DEFAULT_IMAGE_REMOVAL_REPORTS_DIR = WORKSPACE_DIR / "reports" / "image_removals"
+DEFAULT_AUTO_DETECT_YOLOV8 = WORKSPACE_DIR / "runs" / "madhulika_manual_sts_balanced_v2_e150_img960" / "yolov8n_rectbbox_e150_img960" / "weights" / "best.pt"
+DEFAULT_AUTO_DETECT_MODEL_PATHS = {"yolov8n": DEFAULT_AUTO_DETECT_YOLOV8}
+DEFAULT_AUTO_DETECT_CONFIDENCE = 0.25
+DEFAULT_AUTO_DETECT_IOU = 0.5
 RGB_ORIGINAL_RENDER_PROFILE = {"kind": "rgb_original"}
 TRUE_COLOR_RENDER_PROFILE = {
     "kind": "true_color",
@@ -644,6 +648,115 @@ def attach_review_stub_result(
     return item
 
 
+def normalize_auto_detect_model_paths(model_paths: dict[str, str | Path] | None = None) -> dict[str, str | Path]:
+    paths = model_paths or DEFAULT_AUTO_DETECT_MODEL_PATHS
+    return {str(name): path for name, path in paths.items() if str(name).strip() and str(path).strip()}
+
+
+def load_auto_detect_models(model_paths: dict[str, str | Path] | None = None) -> dict[str, Any]:
+    resolved_paths = normalize_auto_detect_model_paths(model_paths)
+    if not resolved_paths:
+        raise ValueError("At least one YOLO model path is required for auto detection")
+    return review_lib.load_yolo_models(resolved_paths)
+
+
+def review_safe_for_auto_detect_update(review: dict[str, Any]) -> bool:
+    if review.get("review_status") not in {None, "overview_1", "overview_2"}:
+        return False
+    for detection in review.get("detections") or []:
+        if detection.get("source_type") == "manual":
+            return False
+        if detection.get("reviewed"):
+            return False
+        if detection.get("review_label") not in {None, ""}:
+            return False
+    return True
+
+
+def auto_detect_review_detections(
+    entry: dict[str, Any],
+    *,
+    reviewer: str,
+    models: dict[str, Any],
+    confidence: float = DEFAULT_AUTO_DETECT_CONFIDENCE,
+    iou: float = DEFAULT_AUTO_DETECT_IOU,
+) -> dict[str, Any]:
+    raw_detections = review_lib.run_model_predictions(entry["cache_path"], models=models, conf_threshold=confidence)
+    merged_detections = review_lib.merge_detections_class_aware(raw_detections, iou_threshold=iou)
+    review_stub = review_lib.build_review_stub(import_entry_for_review_stub(entry), reviewer, merged_detections)
+    return {
+        "detections": review_stub["detections"],
+        "raw_detection_count": len(raw_detections),
+        "merged_detection_count": len(merged_detections),
+    }
+
+
+def attach_review_stub_with_optional_auto_detect(
+    item: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    reviewer: str,
+    reviews_dir: str | Path,
+    skip: bool,
+    dry_run: bool,
+    auto_detect_models: dict[str, Any] | None,
+    auto_detect_confidence: float = DEFAULT_AUTO_DETECT_CONFIDENCE,
+    auto_detect_iou: float = DEFAULT_AUTO_DETECT_IOU,
+) -> dict[str, Any]:
+    review_path = review_lib.review_file_path(entry["image_key"], reviewer, reviews_dir)
+    item["review_stub_path"] = repo_relative(review_path)
+    item["auto_detect_status"] = "skipped"
+    item["auto_detection_count"] = 0
+    item["auto_raw_detection_count"] = 0
+    if skip or dry_run:
+        item["review_stub_status"] = "skipped"
+        return item
+
+    try:
+        existing_review = None
+        if review_path.exists():
+            item["review_stub_status"] = "existing"
+            existing_review = review_lib.load_review_document(review_path)
+            if auto_detect_models is not None and not review_safe_for_auto_detect_update(existing_review):
+                item["auto_detect_status"] = "protected_existing_review"
+                return item
+
+        detection_result = None
+        if auto_detect_models is not None:
+            detection_result = auto_detect_review_detections(
+                entry,
+                reviewer=reviewer,
+                models=auto_detect_models,
+                confidence=auto_detect_confidence,
+                iou=auto_detect_iou,
+            )
+            item["auto_detection_count"] = detection_result["merged_detection_count"]
+            item["auto_raw_detection_count"] = detection_result["raw_detection_count"]
+
+        if existing_review is not None:
+            if detection_result is None:
+                return item
+            review = existing_review
+            review["detections"] = detection_result["detections"]
+            review["detail_cursor"] = 0 if detection_result["detections"] else None
+            review["review_status"] = "overview_1"
+            review_lib.save_review_document(review, review_path)
+            item["auto_detect_status"] = "updated_existing_review"
+            return item
+
+        merged_detections = detection_result["detections"] if detection_result else []
+        review_stub = review_lib.build_review_stub(import_entry_for_review_stub(entry), reviewer, [])
+        review_stub["detections"] = merged_detections
+        review_stub["detail_cursor"] = 0 if merged_detections else None
+        review_lib.write_review_stub(review_doc=review_stub, reviewer=reviewer, reviews_dir=reviews_dir, overwrite=False)
+        item["review_stub_status"] = "created"
+        item["auto_detect_status"] = "created_review" if detection_result is not None else "skipped"
+    except Exception as exc:
+        item["review_stub_status"] = "failed"
+        item["review_stub_error"] = str(exc)
+    return item
+
+
 def review_stub_failure_item(item: dict[str, Any]) -> dict[str, Any]:
     failed_item = dict(item)
     failed_item["status"] = "failed"
@@ -1173,6 +1286,10 @@ def import_training_data(
     reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
     reviewer: str = review_lib.DEFAULT_REVIEWER,
     create_review_stubs: bool = True,
+    auto_detect: bool = False,
+    auto_detect_model_paths: dict[str, str | Path] | None = None,
+    auto_detect_confidence: float = DEFAULT_AUTO_DETECT_CONFIDENCE,
+    auto_detect_iou: float = DEFAULT_AUTO_DETECT_IOU,
     recursive: bool = False,
     force: bool = False,
     dry_run: bool = False,
@@ -1250,9 +1367,13 @@ def import_training_data(
     skipped: list[dict[str, Any]] = []
     album_images: list[dict[str, Any]] = []
     review_stub_counts = {"created": 0, "existing": 0, "skipped": 0}
+    auto_detect_counts = {"created_review": 0, "updated_existing_review": 0, "protected_existing_review": 0, "skipped": 0}
     member_counts = {"added_imported": 0, "added_existing": 0, "already_present": 0, "failed": 0}
     manifest_changed = False
     browser_roots = [repo_resolve(source).resolve() for source in sources]
+    auto_detect_models = None
+    if auto_detect and create_review_stubs and not dry_run:
+        auto_detect_models = load_auto_detect_models(auto_detect_model_paths)
 
     def emit(event: dict[str, Any]) -> None:
         if progress_callback is None:
@@ -1307,13 +1428,16 @@ def import_training_data(
             existing_complete = bool(existing and import_entry_contract_complete(existing))
             if existing and cache_exists and existing_complete and not force:
                 item = import_result_item(existing, "already_imported")
-                item = attach_review_stub_result(
+                item = attach_review_stub_with_optional_auto_detect(
                     item,
                     existing,
                     reviewer=reviewer,
                     reviews_dir=reviews_dir,
                     skip=not create_review_stubs,
                     dry_run=dry_run,
+                    auto_detect_models=auto_detect_models,
+                    auto_detect_confidence=auto_detect_confidence,
+                    auto_detect_iou=auto_detect_iou,
                 )
                 if item["review_stub_status"] == "failed":
                     failed.append(review_stub_failure_item(item))
@@ -1330,6 +1454,7 @@ def import_training_data(
                     existing["browser_relative_path"] = browser_relative_path
                     manifest_changed = True
                 review_stub_counts[item["review_stub_status"]] += 1
+                auto_detect_counts[item.get("auto_detect_status") or "skipped"] += 1
                 member_status = "already_present" if image_key in album_existing_keys else "added_existing"
                 member_counts[member_status] += 1
                 item["album_id"] = album_id
@@ -1355,13 +1480,16 @@ def import_training_data(
                 previous_entry=existing,
             )
             item = import_result_item(entry, status)
-            item = attach_review_stub_result(
+            item = attach_review_stub_with_optional_auto_detect(
                 item,
                 entry,
                 reviewer=reviewer,
                 reviews_dir=reviews_dir,
                 skip=not create_review_stubs,
                 dry_run=dry_run,
+                auto_detect_models=auto_detect_models,
+                auto_detect_confidence=auto_detect_confidence,
+                auto_detect_iou=auto_detect_iou,
             )
             if item["review_stub_status"] == "failed":
                 failed.append(review_stub_failure_item(item))
@@ -1370,6 +1498,7 @@ def import_training_data(
                 log_event({"phase": "failed", "image_key": image_key, "current": source_path.name, "reason": item.get("review_stub_error")})
                 continue
             review_stub_counts[item["review_stub_status"]] += 1
+            auto_detect_counts[item.get("auto_detect_status") or "skipped"] += 1
             member_status = "added_imported" if status == "imported" else "added_existing"
             if image_key in album_existing_keys:
                 member_status = "already_present"
@@ -1420,6 +1549,10 @@ def import_training_data(
         "review_stubs_created": review_stub_counts["created"],
         "review_stubs_existing": review_stub_counts["existing"],
         "review_stubs_skipped": review_stub_counts["skipped"],
+        "auto_detect_created_review": auto_detect_counts["created_review"],
+        "auto_detect_updated_existing_review": auto_detect_counts["updated_existing_review"],
+        "auto_detect_protected_existing_review": auto_detect_counts["protected_existing_review"],
+        "auto_detect_skipped": auto_detect_counts["skipped"],
     }
 
     album_record = {
@@ -1487,6 +1620,10 @@ def import_training_data(
         "review_stubs_created_count": review_stub_counts["created"],
         "review_stubs_existing_count": review_stub_counts["existing"],
         "review_stubs_skipped_count": review_stub_counts["skipped"],
+        "auto_detect_created_review_count": auto_detect_counts["created_review"],
+        "auto_detect_updated_existing_review_count": auto_detect_counts["updated_existing_review"],
+        "auto_detect_protected_existing_review_count": auto_detect_counts["protected_existing_review"],
+        "auto_detect_skipped_count": auto_detect_counts["skipped"],
         "imported": imported,
         "skipped": skipped,
         "failed": failed,
@@ -1494,6 +1631,85 @@ def import_training_data(
     if not dry_run:
         write_json(summary_path, {"schema_version": SCHEMA_VERSION, "job_id": import_job_id, "album": album_summary, "result": result})
     return result
+
+
+def run_auto_detect_on_imported_reviews(
+    *,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+    image_keys: list[str] | None = None,
+    limit: int = 0,
+    model_paths: dict[str, str | Path] | None = None,
+    confidence: float = DEFAULT_AUTO_DETECT_CONFIDENCE,
+    iou: float = DEFAULT_AUTO_DETECT_IOU,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    manifest_file = repo_resolve(manifest_path)
+    manifest = load_import_manifest(manifest_file)
+    images = manifest.get("images") or {}
+    requested = unique_preserving_order(image_keys or list(images.keys()))
+    if limit and limit > 0:
+        requested = requested[:limit]
+
+    counts = {
+        "created_review": 0,
+        "updated_existing_review": 0,
+        "protected_existing_review": 0,
+        "skipped": 0,
+        "missing": 0,
+        "failed": 0,
+    }
+    items: list[dict[str, Any]] = []
+    models = None if dry_run else load_auto_detect_models(model_paths)
+
+    for image_key in requested:
+        entry = images.get(image_key)
+        if not isinstance(entry, dict):
+            counts["missing"] += 1
+            items.append({"image_key": image_key, "auto_detect_status": "missing", "reason": "image key is not in import manifest"})
+            continue
+        review_path = review_lib.review_file_path(image_key, reviewer, reviews_dir)
+        if dry_run:
+            status = "created_review"
+            if review_path.exists():
+                review = review_lib.load_review_document(review_path)
+                status = "updated_existing_review" if review_safe_for_auto_detect_update(review) else "protected_existing_review"
+            counts[status] += 1
+            items.append({"image_key": image_key, "review_stub_path": repo_relative(review_path), "auto_detect_status": status})
+            continue
+
+        item = import_result_item(entry, "already_imported")
+        item = attach_review_stub_with_optional_auto_detect(
+            item,
+            entry,
+            reviewer=reviewer,
+            reviews_dir=reviews_dir,
+            skip=False,
+            dry_run=False,
+            auto_detect_models=models,
+            auto_detect_confidence=confidence,
+            auto_detect_iou=iou,
+        )
+        status = item.get("auto_detect_status") or "skipped"
+        if item.get("review_stub_status") == "failed":
+            status = "failed"
+        counts[status] += 1
+        items.append(item)
+
+    return {
+        "manifest_path": repo_relative(manifest_file),
+        "reviews_dir": repo_relative(reviews_dir),
+        "reviewer": reviewer,
+        "requested_count": len(requested),
+        "created_review_count": counts["created_review"],
+        "updated_existing_review_count": counts["updated_existing_review"],
+        "protected_existing_review_count": counts["protected_existing_review"],
+        "skipped_count": counts["skipped"],
+        "missing_count": counts["missing"],
+        "failed_count": counts["failed"],
+        "items": items,
+    }
 
 
 def yaml_defines_required_classes(data_yaml: Path) -> bool:

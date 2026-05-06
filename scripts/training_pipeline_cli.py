@@ -56,6 +56,13 @@ def print_human(payload: dict[str, Any]) -> None:
         "review_stubs_created_count",
         "review_stubs_existing_count",
         "review_stubs_skipped_count",
+        "auto_detect_created_review_count",
+        "auto_detect_updated_existing_review_count",
+        "auto_detect_protected_existing_review_count",
+        "auto_detect_skipped_count",
+        "created_review_count",
+        "updated_existing_review_count",
+        "protected_existing_review_count",
         "dataset_dir",
         "dataset_manifest",
         "data_yaml",
@@ -100,6 +107,22 @@ def add_diagnostics(result: dict[str, Any], args: argparse.Namespace, helper: st
     for key, value in paths.items():
         diagnostics[key] = str(pipeline.repo_resolve(value))
     result["diagnostics"] = diagnostics
+
+
+def parse_model_path_args(values: list[str] | None) -> dict[str, str] | None:
+    if not values:
+        return None
+    parsed: dict[str, str] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError("Model weights must be provided as name=path")
+        name, path = value.split("=", 1)
+        name = name.strip()
+        path = path.strip()
+        if not name or not path:
+            raise ValueError("Model weights must be provided as name=path")
+        parsed[name] = path
+    return parsed
 
 
 def command_export_dataset(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -161,6 +184,10 @@ def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         reviews_dir=args.reviews_dir,
         reviewer=args.reviewer,
         create_review_stubs=not bool(args.no_review_stubs),
+        auto_detect=bool(args.auto_detect),
+        auto_detect_model_paths=parse_model_path_args(args.auto_detect_weight),
+        auto_detect_confidence=float(args.auto_detect_conf),
+        auto_detect_iou=float(args.auto_detect_iou),
         recursive=bool(args.recursive),
         force=bool(args.force),
         dry_run=bool(args.dry_run),
@@ -170,6 +197,24 @@ def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if int(result.get("imported_count") or 0) + int(result.get("skipped_count") or 0) == 0:
         return 1, envelope("import-data", ok=False, result=result, warnings=warnings, errors=["No input source could be processed successfully"])
     return 0, envelope("import-data", ok=True, result=result, warnings=warnings)
+
+
+def command_run_auto_detect(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.run_auto_detect_on_imported_reviews(
+        manifest_path=args.manifest,
+        reviews_dir=args.reviews_dir,
+        reviewer=args.reviewer,
+        image_keys=list(args.image_key or []),
+        limit=int(args.limit or 0),
+        model_paths=parse_model_path_args(args.weight),
+        confidence=float(args.conf),
+        iou=float(args.iou),
+        dry_run=bool(args.dry_run),
+    )
+    add_diagnostics(result, args, "run_auto_detect_on_imported_reviews", manifest_path=args.manifest, reviews_dir=args.reviews_dir)
+    if int(result.get("failed_count") or 0) > 0:
+        return 1, envelope("run-auto-detect", ok=False, result=result, errors=["One or more images failed auto detection"])
+    return 0, envelope("run-auto-detect", ok=True, result=result)
 
 
 def command_check_training_ready(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -264,11 +309,27 @@ def build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
     import_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
     import_parser.add_argument("--render-profile", default="auto")
+    import_parser.add_argument("--auto-detect", action="store_true", help="Run YOLO and create/enrich safe review stubs with auto bboxes")
+    import_parser.add_argument("--auto-detect-weight", action="append", help="YOLO weight as name=path; repeatable. Defaults to the current YOLOv8n auto-detect weight")
+    import_parser.add_argument("--auto-detect-conf", type=float, default=pipeline.DEFAULT_AUTO_DETECT_CONFIDENCE)
+    import_parser.add_argument("--auto-detect-iou", type=float, default=pipeline.DEFAULT_AUTO_DETECT_IOU)
     import_parser.add_argument("--recursive", action="store_true")
     import_parser.add_argument("--force", action="store_true")
     import_parser.add_argument("--no-review-stubs", action="store_true")
     import_parser.add_argument("--dry-run", action="store_true")
     import_parser.set_defaults(handler=command_import_data)
+
+    auto_detect_parser = subparsers.add_parser("run-auto-detect")
+    auto_detect_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    auto_detect_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    auto_detect_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    auto_detect_parser.add_argument("--image-key", action="append")
+    auto_detect_parser.add_argument("--limit", type=int, default=0)
+    auto_detect_parser.add_argument("--weight", action="append", help="YOLO weight as name=path; repeatable. Defaults to the current YOLOv8n auto-detect weight")
+    auto_detect_parser.add_argument("--conf", type=float, default=pipeline.DEFAULT_AUTO_DETECT_CONFIDENCE)
+    auto_detect_parser.add_argument("--iou", type=float, default=pipeline.DEFAULT_AUTO_DETECT_IOU)
+    auto_detect_parser.add_argument("--dry-run", action="store_true")
+    auto_detect_parser.set_defaults(handler=command_run_auto_detect)
 
     export_parser = subparsers.add_parser("export-dataset")
     export_parser.add_argument("--selection", required=True)
