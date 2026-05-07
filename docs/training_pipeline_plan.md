@@ -4,6 +4,8 @@
 
 This document is the authoritative plan for the training side of OpenDarkSTS.
 
+The concrete implementation sequence for Step 1 album management plus GUI-backed Steps 4-7 is tracked in `docs/training_pipeline_step_4-7_gui_training_plan.md`. That plan should be used when turning the backend/CLI primitives in this document into end-user GUI workflows and CLI retraining checks.
+
 Planning hierarchy:
 
 1. `docs/grand_plan_v2.md` describes the whole project and the split between the training pipeline and the operational detection pipeline.

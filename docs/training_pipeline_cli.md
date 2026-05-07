@@ -2,6 +2,8 @@
 
 `scripts/training_pipeline_cli.py` is the machine-readable command-line interface for the training-side pipeline. It calls the same backend helpers used by the reviewer and training pipeline code, so prefer it for automation, smoke checks, and LLM/developer diagnostics instead of reimplementing pipeline logic in shell scripts.
 
+The implementation plan for album management and GUI-driven training is in `docs/training_pipeline_step_4-7_gui_training_plan.md`. That plan defines the expected CLI parity for album commands, dataset selection commands, training config creation, and pipeline-managed YOLO retraining.
+
 Selection and workspace image-removal semantics are specified in `docs/review_queue_selection_removal_plan.md`.
 
 Run commands from the repository root:
