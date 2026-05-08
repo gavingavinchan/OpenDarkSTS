@@ -2,7 +2,7 @@
 
 This document is the repository registry for YOLO `*.pt` weight files. Every YOLO weight kept in the repository must be listed here or documented by an adjacent weight-specific markdown file.
 
-Current inventory date: 2026-05-01.
+Current inventory date: 2026-05-07.
 
 ## Reproducibility Standard
 
@@ -26,8 +26,16 @@ These are upstream/base weights used as starting points for project training run
 | Weight | Source | Embedded metadata | Re-obtain or recreate notes | Known gaps |
 |---|---|---|---|---|
 | `yolov8n.pt` | Official Ultralytics YOLOv8n COCO-pretrained checkpoint | `model=yolov8n.yaml`, `data=coco.yaml`, `epochs=500`, `batch=16`, `imgsz=640`, `seed=0`, Ultralytics `8.0.0.dev0`, COCO class names | Re-obtain with Ultralytics by resolving `yolov8n.pt`, for example `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"` | Exact upstream artifact/version should be preserved if byte identity matters |
+| `yolov8s.pt` | Official Ultralytics YOLOv8s COCO-pretrained checkpoint | `model=yolov8s.yaml`, `data=coco.yaml`, `epochs=500`, `batch=16`, `imgsz=640`, `seed=0`, Ultralytics `8.0.0.dev0`, COCO class names | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters |
+| `yolov9s.pt` | Official Ultralytics YOLOv9s COCO-pretrained checkpoint | `model=yolov9s.yaml`, `data=/usr/src/ultralytics/ultralytics/cfg/datasets/coco.yaml`, `epochs=500`, `batch=128`, `imgsz=640`, `seed=0`, Ultralytics `8.2.31`, COCO class names | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov9s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters; `yolov9n.pt` was not resolvable in this environment |
+| `yolov10n.pt` | Official Ultralytics YOLOv10n COCO-pretrained checkpoint | Checkpoint metadata records Ultralytics `8.2.30`, `epochs=100`, `batch=16`, `imgsz=640`, `seed=0`; `model` and `data` fields are `None` in embedded `train_args` | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov10n.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters; embedded training metadata is incomplete |
+| `yolov10s.pt` | Official Ultralytics YOLOv10s COCO-pretrained checkpoint | Checkpoint metadata records Ultralytics `8.2.30`, `epochs=100`, `batch=16`, `imgsz=640`, `seed=0`; `model` and `data` fields are `None` in embedded `train_args` | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolov10s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters; embedded training metadata is incomplete |
+| `yolo11n.pt` | Official Ultralytics YOLO11n COCO-pretrained checkpoint | `model=yolo11n.yaml`, `data=/usr/src/ultralytics/ultralytics/cfg/datasets/coco.yaml`, `epochs=600`, `batch=128`, `imgsz=640`, `seed=0`, Ultralytics `8.2.100`, COCO class names | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters |
+| `yolo11s.pt` | Official Ultralytics YOLO11s COCO-pretrained checkpoint | `model=yolo11s.yaml`, `data=/usr/src/ultralytics/ultralytics/cfg/datasets/coco.yaml`, `epochs=600`, `batch=128`, `imgsz=640`, `seed=0`, Ultralytics `8.2.100`, COCO class names | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo11s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Exact upstream artifact/version should be preserved if byte identity matters |
 | `yolo26n.pt` | External YOLO26n COCO-pretrained checkpoint | `model=yolo26n-objv1-150.pt`, `data=/home/lq/codes/ultralytics/ultralytics/cfg/datasets/coco.yaml`, `epochs=245`, `patience=100`, `batch=128`, `imgsz=640`, `device=5`, `seed=0`, Ultralytics `8.3.222`, COCO class names | Re-obtain from the same YOLO26/Ultralytics upstream used to provide this file, then place it at repo root as `yolo26n.pt` | Upstream source URL and custom `yolo26n-objv1-150.pt` starting artifact are not recorded in this repo, so exact recreation is incomplete |
 | `yolo12n.pt` | External YOLO12n COCO-pretrained checkpoint | Checkpoint contains a `DetectionModel` with COCO class names; no `train_args`, `date`, or `version` metadata were present | Re-obtain from the same YOLO12/Ultralytics upstream used to provide this file, then place it at repo root as `yolo12n.pt` | Upstream source URL, acquisition command, training command, and package version are not recorded in this repo |
+| `yolo12s.pt` | External/Ultralytics-resolved YOLO12s COCO-pretrained checkpoint | Checkpoint contains a `DetectionModel` with COCO class names; no `train_args`, `date`, or `version` metadata were present | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo12s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Upstream source URL, training command, and package version are not recorded in the checkpoint |
+| `yolo26s.pt` | External YOLO26s COCO-pretrained checkpoint resolved by Ultralytics | `model=yolo26s-objv1-150.pt`, `data=/home/lq/codes/ultralytics/ultralytics/cfg/datasets/coco.yaml`, `epochs=70`, `patience=100`, `batch=128`, `imgsz=640`, `device=3`, `seed=0`, Ultralytics `8.3.222`, COCO class names | Re-obtain with `.venv/bin/python -c "from ultralytics import YOLO; YOLO('yolo26s.pt')"`; initially downloaded from Ultralytics assets during 2026-05-05 model-suite preflight | Upstream source URL and custom `yolo26s-objv1-150.pt` starting artifact are not recorded in this repo, so exact recreation is incomplete |
 
 ## Madhulika Roboflow Dataset Weights
 
@@ -443,6 +451,163 @@ Training durations:
 Promotion note: at user request on 2026-05-05, the YOLOv8n `best.pt` from this run became the default YOLOv8n weight for `scripts/preprocess_sentinel_tiles.py` so new visual-review preprocessing uses the expanded manual STS training. The checkpoint remains in its run-local path rather than being copied to `workspace/model_weights/`.
 
 Known gaps: further evaluation against the old v1 validation/test behavior, old Madhulika test behavior, and raw manual STS recall is still needed before treating these as fully validated current-best copies.
+
+### Expanded Manual STS Balanced v3 Fair Runs
+
+These runs repeat the v2 setup above after additional manual `ships_sts` labels were completed. The fair-comparison intent is unchanged: keep the starting weights and training parameters fixed while changing only the derived dataset version.
+
+Dataset: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v3/data.yaml`.
+
+Dataset manifest: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v3/dataset_manifest.json`.
+
+Builder command:
+
+```bash
+.venv/bin/python scripts/build_madhulika_manual_sts_balanced_dataset.py \
+  --output-dir workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v3 \
+  --dataset-version 3 \
+  --overwrite
+```
+
+Generated dataset counts: `1364 ship`, `1364 ships` overall.
+
+Manual `ships_sts` source counts: `196` raw manual `ships` labels plus `742` train-only augmented manual `ships` labels, for `938` manual `ships` labels after augmentation. The dataset also keeps the old `426` Madhulika rectbbox `ships` labels.
+
+Training command script: `workspace/reports/run_madhulika_manual_sts_balanced_v3_training.sh`.
+
+Recreate the sequence with:
+
+```bash
+bash workspace/reports/run_madhulika_manual_sts_balanced_v3_training.sh
+```
+
+Common parameters: `epochs=150`, `imgsz=960`, `batch=8`, `device=0`, `seed=42`, `patience=30`, `workers=4`.
+
+Online augmentation parameters intentionally disabled: `copy_paste=0.0`, `degrees=0.0`, `fliplr=0.0`, `flipud=0.0`, `hsv_h=0.0`, `hsv_s=0.0`, `hsv_v=0.0`, `mixup=0.0`, `mosaic=0.0`, `scale=0.0`, `translate=0.0`.
+
+Covered weights:
+
+| Weight | Starting weights | Training config | Run metadata |
+|---|---|---|---|
+| `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolov8n_rectbbox_e150_img960/weights/best.pt` | `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v3_yolov8n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolov8n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolov8n_rectbbox_e150_img960/weights/last.pt` | `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v3_yolov8n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolov8n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolo26n_rectbbox_e150_img960/weights/best.pt` | `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v3_yolo26n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolo26n_rectbbox_e150_img960/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolo26n_rectbbox_e150_img960/weights/last.pt` | `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` | `workspace/training_configs/madhulika_manual_sts_balanced_v3_yolo26n_rectbbox_e150_img960.json` | `workspace/runs/madhulika_manual_sts_balanced_v3_e150_img960/yolo26n_rectbbox_e150_img960/args.yaml` |
+
+Logs:
+
+- `workspace/reports/train_madhulika_manual_sts_balanced_v3_yolov8n_rectbbox.log`
+- `workspace/reports/train_madhulika_manual_sts_balanced_v3_yolo26n_rectbbox.log`
+- `workspace/reports/run_madhulika_manual_sts_balanced_v3_training.log`
+- `workspace/reports/test_madhulika_manual_sts_balanced_v3_yolov8n_rectbbox.log`
+- `workspace/reports/test_madhulika_manual_sts_balanced_v3_yolo26n_rectbbox.log`
+
+Run outcomes:
+
+- YOLOv8n stopped early after `66` epochs; test split `all` metrics were `P=0.855`, `R=0.697`, `mAP50=0.787`, `mAP50-95=0.485`; test `ships` metrics were `P=0.918`, `R=0.750`, `mAP50=0.841`, `mAP50-95=0.538`.
+- YOLO26n stopped early after `63` epochs; test split `all` metrics were `P=0.833`, `R=0.714`, `mAP50=0.784`, `mAP50-95=0.509`; test `ships` metrics were `P=0.936`, `R=0.767`, `mAP50=0.832`, `mAP50-95=0.535`.
+
+Training durations:
+
+| Run | Sequence wall time |
+|---|---:|
+| `yolov8n_rectbbox_e150_img960` | `5m 27s` (`2026-05-05T20:11:59-05:00` to `2026-05-05T20:17:26-05:00`) |
+| `yolo26n_rectbbox_e150_img960` | `7m 22s` (`2026-05-05T20:17:26-05:00` to `2026-05-05T20:24:48-05:00`) |
+
+Known gaps: these are run-local checkpoints, not promoted/current-best copies. Broader evaluation against v2, old Madhulika behavior, and raw manual STS recall is still needed before promotion.
+
+### Expanded Manual STS Balanced v3 YOLO Version Suite
+
+These runs use the v3 balanced dataset but intentionally are not a fair comparison to the no-augmentation fair runs above. The goal is to compare available YOLO nano and small variants using stronger satellite-appropriate online augmentation while keeping the dataset class ratio at `1:1`.
+
+Dataset: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v3/data.yaml`.
+
+Weight preflight report: `workspace/reports/yolo_version_suite_weight_preflight_v3.json`.
+
+Training suite config: `workspace/training_configs/madhulika_manual_sts_balanced_v3_yolo_version_suite_aug_e300_img960.json`.
+
+Training command script: `workspace/reports/run_madhulika_manual_sts_balanced_v3_yolo_suite_aug_training.sh`.
+
+Recreate the sequence with:
+
+```bash
+bash workspace/reports/run_madhulika_manual_sts_balanced_v3_yolo_suite_aug_training.sh
+```
+
+Common parameters: `epochs=300`, `imgsz=960`, `batch=8`, `device=0`, `seed=42`, `patience=60`, `workers=4`.
+
+Online augmentation parameters: `copy_paste=0.0`, `degrees=180.0`, `fliplr=0.5`, `flipud=0.5`, `hsv_h=0.015`, `hsv_s=0.35`, `hsv_v=0.25`, `mixup=0.05`, `mosaic=1.0`, `scale=0.4`, `translate=0.1`.
+
+Available starting weights selected by preflight: `yolov8n.pt`, `yolov8s.pt`, `yolov9s.pt`, `yolov10n.pt`, `yolov10s.pt`, `yolo11n.pt`, `yolo11s.pt`, `yolo12n.pt`, `yolo12s.pt`, `yolo26n.pt`, and `yolo26s.pt`.
+
+Unavailable in this environment during preflight: `yolov9n.pt`/`yolo9n.pt` and all tested nano/small weights for versions `13` through `25` using `yolo{version}{size}.pt` and `yolov{version}{size}.pt` naming.
+
+Covered weights, once each run completes:
+
+| Weight pattern | Starting weights | Run metadata |
+|---|---|---|
+| `workspace/runs/madhulika_manual_sts_balanced_v3_yolo_suite_aug_e300_img960/<run_name>/weights/best.pt` | one selected root base weight listed above | `workspace/runs/madhulika_manual_sts_balanced_v3_yolo_suite_aug_e300_img960/<run_name>/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v3_yolo_suite_aug_e300_img960/<run_name>/weights/last.pt` | one selected root base weight listed above | `workspace/runs/madhulika_manual_sts_balanced_v3_yolo_suite_aug_e300_img960/<run_name>/args.yaml` |
+
+Known gaps: this suite was started on 2026-05-05 and may still be running. Update this section with per-model outcomes, test metrics, and logs after all models complete.
+
+### Expanded Manual STS Balanced v4 YOLO Version Suite
+
+These runs repeat the v3 YOLO version suite after additional manual annotations were completed. The suite is intentionally not a fair comparison to the no-augmentation fair runs; it uses the same stronger satellite-appropriate online augmentation and selected available nano/small YOLO weights as the v3 suite, while keeping the dataset class ratio at `1:1`.
+
+Dataset: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v4/data.yaml`.
+
+Dataset manifest: `workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v4/dataset_manifest.json`.
+
+Builder command:
+
+```bash
+.venv/bin/python scripts/build_madhulika_manual_sts_balanced_dataset.py \
+  --output-dir workspace/datasets/derived/madhulika_rectbbox_plus_manual_sts_balanced_v4 \
+  --dataset-version 4 \
+  --overwrite
+```
+
+Generated dataset counts: `1991 ship`, `1991 ships` overall.
+
+Manual `ships_sts` source counts: `404` raw manual `ships` labels plus `1161` train-only augmented manual `ships` labels, for `1565` manual `ships` labels after augmentation. The dataset also keeps the old `426` Madhulika rectbbox `ships` labels.
+
+Weight preflight report: `workspace/reports/yolo_version_suite_weight_preflight_v4.json`.
+
+Training suite config: `workspace/training_configs/madhulika_manual_sts_balanced_v4_yolo_version_suite_aug_e300_img960.json`.
+
+Training command script: `workspace/reports/run_madhulika_manual_sts_balanced_v4_yolo_suite_aug_training.sh`.
+
+Recreate the sequence with:
+
+```bash
+bash workspace/reports/run_madhulika_manual_sts_balanced_v4_yolo_suite_aug_training.sh
+```
+
+Common parameters: `epochs=300`, `imgsz=960`, `batch=8`, `device=0`, `seed=42`, `patience=60`, `workers=4`.
+
+Online augmentation parameters: `copy_paste=0.0`, `degrees=180.0`, `fliplr=0.5`, `flipud=0.5`, `hsv_h=0.015`, `hsv_s=0.35`, `hsv_v=0.25`, `mixup=0.05`, `mosaic=1.0`, `scale=0.4`, `translate=0.1`.
+
+Available starting weights selected by preflight: `yolov8n.pt`, `yolov8s.pt`, `yolov9s.pt`, `yolov10n.pt`, `yolov10s.pt`, `yolo11n.pt`, `yolo11s.pt`, `yolo12n.pt`, `yolo12s.pt`, `yolo26n.pt`, and `yolo26s.pt`.
+
+Unavailable in this environment during preflight: `yolov9n.pt`/`yolo9n.pt` and all tested nano/small weights for versions `13` through `25` using `yolo{version}{size}.pt` and `yolov{version}{size}.pt` naming.
+
+Covered weights, once each run completes:
+
+| Weight pattern | Starting weights | Run metadata |
+|---|---|---|
+| `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/<run_name>/weights/best.pt` | one selected root base weight listed above | `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/<run_name>/args.yaml` |
+| `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/<run_name>/weights/last.pt` | one selected root base weight listed above | `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/<run_name>/args.yaml` |
+
+Logs, once each run starts or completes, follow these patterns:
+
+- `workspace/reports/run_madhulika_manual_sts_balanced_v4_yolo_suite_aug_training.log`
+- `workspace/reports/train_madhulika_manual_sts_balanced_v4_suite_<run_name>.log`
+- `workspace/reports/test_madhulika_manual_sts_balanced_v4_suite_<run_name>.log`
+
+Run duration: the full 11-model train-and-test sequence took about `8h 2m`, from `2026-05-07T21:48:06-05:00` to `2026-05-08T05:50:13-05:00`.
+
+Known gaps: update this section with per-model outcomes, test metrics, and logs after the final comparison summary is written.
 
 ## Updating This Registry
 
