@@ -192,6 +192,7 @@ def run_import_job(
     album_name: str | None,
     album_description: str | None,
     source_display_name: str | None,
+    append_to_album_id: str | None = None,
 ) -> None:
     def callback(event: dict) -> None:
         phase = event.get("phase")
@@ -223,6 +224,7 @@ def run_import_job(
             album_description=album_description,
             source_display_name=source_display_name,
             source_kind="browser_upload",
+            append_to_album_id=append_to_album_id,
             import_job_id=job_id,
             reviews_dir=REVIEWS_DIR,
             reviewer=IMPORT_REVIEWER,
@@ -266,6 +268,7 @@ def start_import_job(
     album_name: str | None,
     album_description: str | None,
     source_display_name: str | None,
+    append_to_album_id: str | None = None,
 ) -> str:
     job_id = new_job_id()
     staging_dir = IMPORT_STAGING_ROOT / job_id
@@ -303,6 +306,7 @@ def start_import_job(
             "album_name": album_name,
             "album_description": album_description,
             "source_display_name": source_display_name,
+            "append_to_album_id": append_to_album_id,
         }
     thread = threading.Thread(
         target=run_import_job,
@@ -313,6 +317,7 @@ def start_import_job(
             "album_name": album_name,
             "album_description": album_description,
             "source_display_name": source_display_name,
+            "append_to_album_id": append_to_album_id,
         },
         daemon=True,
         name=f"import-job-{job_id}",
@@ -1170,6 +1175,103 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     }
     .intake-footer code { color: var(--ink); background: rgba(17, 23, 19, 0.06); padding: 1px 5px; border-radius: 2px; }
 
+    /* ==================== albums section ==================== */
+    .albums-block {
+      margin: 22px 0 6px;
+      padding-top: 18px;
+      border-top: 1px dashed var(--rule);
+    }
+    .albums-block .albums-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 10px; margin-bottom: 10px;
+    }
+    .albums-block .albums-eyebrow {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.28em;
+      text-transform: uppercase; color: var(--muted); font-weight: 700;
+    }
+    .albums-block .albums-meta {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+    }
+    .albums-target {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      padding: 9px 12px; margin-bottom: 12px;
+      background: rgba(15, 107, 79, 0.07);
+      border: 1px solid rgba(15, 107, 79, 0.32);
+      border-radius: 2px;
+      font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+      letter-spacing: 0.04em;
+    }
+    .albums-target.new-album { background: rgba(122, 31, 18, 0.06); border-color: rgba(122, 31, 18, 0.32); color: var(--stamp-deep); }
+    .albums-target strong { color: var(--ink); font-weight: 700; letter-spacing: 0.06em; }
+    .albums-target .clear-target {
+      border: 1px solid currentColor; background: transparent; color: inherit;
+      font: inherit; padding: 4px 8px; border-radius: 2px; cursor: pointer;
+      font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    }
+    .albums-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .album-card {
+      position: relative;
+      background: var(--card-deep);
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      padding: 14px 14px 12px;
+      display: grid; gap: 6px;
+    }
+    .album-card.empty-tile {
+      background: transparent;
+      border-style: dashed;
+      cursor: pointer;
+      align-items: center;
+      justify-items: center;
+      text-align: center;
+      color: var(--muted);
+      transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+    }
+    .album-card.empty-tile:hover { border-color: var(--ink); color: var(--ink); background: rgba(255,255,255,0.4); }
+    .album-card.targeted { border-color: var(--green); box-shadow: 0 0 0 2px rgba(15,107,79,0.18); }
+    .album-card.focused { border-color: var(--stamp); box-shadow: 0 0 0 2px rgba(122,31,18,0.18); }
+    .album-card .album-name {
+      font-family: var(--serif); font-size: 17px; font-weight: 500;
+      letter-spacing: -0.015em; color: var(--ink);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .album-card .album-desc {
+      font-family: var(--sans); font-size: 12px; color: var(--ink-soft);
+      line-height: 1.35; min-height: 1em;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .album-card .album-counts {
+      display: flex; flex-wrap: wrap; gap: 8px; row-gap: 4px;
+      font-family: var(--mono); font-size: 10px; color: var(--muted);
+      letter-spacing: 0.06em; margin-top: 2px;
+    }
+    .album-card .album-counts strong { color: var(--ink); font-weight: 700; }
+    .album-card .album-actions {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
+    }
+    .album-card .album-actions button,
+    .album-card .album-actions a {
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: var(--card);
+      font-family: var(--sans); font-weight: 700;
+      font-size: 11px; letter-spacing: 0.06em;
+      padding: 7px 9px; border-radius: 2px; cursor: pointer;
+      text-decoration: none;
+    }
+    .album-card .album-actions .ghost { background: transparent; color: var(--ink); }
+    .album-card .album-actions .ghost:hover { background: rgba(17, 23, 19, 0.06); }
+    .album-card .album-actions .filter-on { background: var(--green); border-color: var(--green); }
+    .album-card .album-id {
+      font-family: var(--mono); font-size: 9px; color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+
     /* ==================== progress block ==================== */
     .progress {
       margin-top: 28px;
@@ -1475,6 +1577,198 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     }
     .kv dd.value-strong { font-family: var(--sans); font-size: 13px; color: var(--ink); font-weight: 500; }
 
+    /* sidebar — album dossier mode */
+    .album-dossier { position: relative; }
+    .album-dossier::before {
+      content: "DOSSIER";
+      position: absolute; top: -10px; right: -4px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.36em;
+      color: var(--stamp); border: 1.5px solid var(--stamp);
+      padding: 4px 8px; transform: rotate(4deg); opacity: 0.8;
+      border-radius: 3px; background: rgba(248, 244, 232, 0.95);
+    }
+    .album-dossier .clear-focus {
+      position: absolute; top: -2px; left: -2px;
+      border: 0; background: transparent; color: var(--muted);
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em;
+      cursor: pointer; padding: 4px 6px;
+    }
+    .album-dossier .clear-focus:hover { color: var(--ink); }
+    .album-dossier .detail-eyebrow { margin-top: 14px; }
+    .album-dossier h3.detail-title { padding-right: 12px; }
+    .album-meta-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px;
+      padding: 14px 0;
+      border-top: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+      margin: 14px 0 16px;
+    }
+    .album-meta-grid .cell {
+      display: grid; gap: 3px;
+    }
+    .album-meta-grid .cell .label {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .album-meta-grid .cell .value {
+      font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+      word-break: break-word;
+    }
+    .album-meta-grid .cell .value strong { color: var(--ink); }
+    .album-meta-grid .cell.span2 { grid-column: 1 / -1; }
+    .album-counts-block {
+      margin: 0 0 18px;
+      border: 1px solid var(--rule);
+      background: rgba(255, 255, 255, 0.4);
+      padding: 12px 14px;
+      border-radius: 2px;
+    }
+    .album-counts-block .header {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--muted);
+      margin-bottom: 10px;
+      display: flex; justify-content: space-between;
+    }
+    .album-counts-block .row {
+      display: grid; grid-template-columns: 1fr auto;
+      gap: 6px 10px; font-family: var(--mono); font-size: 11px;
+      padding: 3px 0; color: var(--ink-soft);
+    }
+    .album-counts-block .row.zero { color: var(--muted); }
+    .album-counts-block .row strong { color: var(--ink); font-weight: 700; }
+    .album-rename-form {
+      display: grid; gap: 10px;
+      padding: 14px;
+      border: 1px solid var(--ink);
+      background: var(--card);
+      margin: 0 0 18px;
+      border-radius: 2px;
+      box-shadow: 0 6px 18px rgba(17, 23, 19, 0.08);
+    }
+    .album-rename-form label {
+      display: grid; gap: 5px;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .album-rename-form input,
+    .album-rename-form textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 2px;
+      background: rgba(255, 255, 255, 0.7); padding: 9px 10px;
+      color: var(--ink); font: 13px var(--mono);
+    }
+    .album-rename-form textarea { min-height: 64px; resize: vertical; }
+    .album-rename-form .row {
+      display: flex; gap: 8px; justify-content: flex-end; align-items: center;
+    }
+    .album-rename-form button {
+      border: 1px solid var(--ink);
+      background: var(--ink); color: var(--card);
+      padding: 9px 12px; border-radius: 2px; cursor: pointer;
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+      text-transform: uppercase; font-weight: 700;
+    }
+    .album-rename-form button.ghost { background: transparent; color: var(--ink); }
+    .album-rename-form button.ghost:hover { background: rgba(17, 23, 19, 0.06); }
+    .album-rename-form .err {
+      font-family: var(--mono); font-size: 11px; color: var(--red);
+    }
+
+    /* inline album-naming card (replaces window.prompt) */
+    .modal-backdrop.naming-backdrop {
+      position: fixed; inset: 0; z-index: 60;
+      background: rgba(17, 23, 19, 0.34);
+      display: grid; place-items: center;
+      padding: 24px;
+      animation: fadeIn 160ms ease-out;
+    }
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    .naming-card {
+      width: min(520px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 38px 42px 32px;
+      position: relative;
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.6) inset,
+        0 28px 64px rgba(17, 23, 19, 0.32);
+      animation: rise 220ms ease-out;
+    }
+    .naming-card::before {
+      content: ""; position: absolute; inset: 12px;
+      border: 1px solid var(--rule); pointer-events: none; border-radius: 1px;
+    }
+    .naming-card::after {
+      content: "FORM 01-A.2 — NEW ALBUM";
+      position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.32em;
+      color: var(--muted);
+    }
+    .naming-card .stamp {
+      position: absolute; top: 30px; right: 26px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em;
+      color: var(--stamp); border: 1.5px solid var(--stamp);
+      padding: 5px 8px; transform: rotate(6deg); opacity: 0.78;
+      border-radius: 3px;
+    }
+    .naming-card .eyebrow {
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.32em;
+      text-transform: uppercase; color: var(--muted); margin: 22px 0 6px;
+    }
+    .naming-card h3 {
+      font-family: var(--serif); font-weight: 400; font-size: 32px;
+      letter-spacing: -0.02em; margin: 0 0 6px;
+    }
+    .naming-card h3 em { font-style: italic; color: var(--stamp); }
+    .naming-card .lede {
+      color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px;
+      max-width: 46ch;
+    }
+    .naming-card label {
+      display: grid; gap: 5px; margin: 10px 0;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.24em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .naming-card label input,
+    .naming-card label textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 2px;
+      background: rgba(255, 255, 255, 0.6); padding: 10px 12px;
+      color: var(--ink); font: 13px var(--mono);
+    }
+    .naming-card label textarea { min-height: 60px; resize: vertical; }
+    .naming-card .pick-row {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 12px; margin-top: 18px;
+    }
+    .naming-card .pick-row button {
+      border: 1.5px solid var(--ink);
+      background: var(--ink); color: var(--card);
+      padding: 14px 14px 12px; border-radius: 2px; cursor: pointer;
+      text-align: left; display: grid; gap: 4px;
+      font-family: var(--sans);
+    }
+    .naming-card .pick-row button.secondary { background: transparent; color: var(--ink); }
+    .naming-card .pick-row button .glyph {
+      font-family: var(--serif); font-style: italic; font-size: 18px; font-weight: 300; opacity: 0.9;
+    }
+    .naming-card .pick-row button .label { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+    .naming-card .pick-row button .hint { font-size: 10px; opacity: 0.7; font-family: var(--mono); letter-spacing: 0.06em; }
+    .naming-card .footer-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--rule);
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+    }
+    .naming-card .footer-row button.cancel {
+      border: 0; background: transparent; color: var(--muted);
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+      cursor: pointer; padding: 6px 8px;
+    }
+    .naming-card .footer-row button.cancel:hover { color: var(--ink); }
+    .naming-card .err {
+      font-family: var(--mono); font-size: 11px; color: var(--red);
+      margin-top: 6px;
+    }
+
     .toast {
       position: fixed; bottom: 24px; left: 50%;
       transform: translateX(-50%) translateY(20px);
@@ -1570,6 +1864,11 @@ IMPORT_HTML = r"""<!DOCTYPE html>
 
     const state = {
       manifest: null,
+      albums: [],
+      targetAlbumId: null,
+      focusedAlbumId: null,
+      albumEditing: false,
+      albumDraftError: null,
       job: null,
       pollTimer: null,
       view: 'ledger',
@@ -1600,6 +1899,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         if (typeof raw.albumName === 'string') state.albumName = raw.albumName;
         if (typeof raw.albumDescription === 'string') state.albumDescription = raw.albumDescription;
         if (typeof raw.sourceDisplayName === 'string') state.sourceDisplayName = raw.sourceDisplayName;
+        if (typeof raw.targetAlbumId === 'string') state.targetAlbumId = raw.targetAlbumId;
+        if (typeof raw.focusedAlbumId === 'string') state.focusedAlbumId = raw.focusedAlbumId;
       } catch (e) {}
     }
     function persistState() {
@@ -1610,6 +1911,8 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         selectionPersistenceDropped: !persistSelection,
         albumName: state.albumName, albumDescription: state.albumDescription,
         sourceDisplayName: state.sourceDisplayName,
+        targetAlbumId: state.targetAlbumId,
+        focusedAlbumId: state.focusedAlbumId,
       }));
     }
 
@@ -1763,7 +2066,28 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       return accepted;
     }
 
+    async function loadAlbums() {
+      try {
+        const resp = await fetch('/api/albums');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        state.albums = Array.isArray(data.albums) ? data.albums : [];
+      } catch (e) {
+        state.albums = [];
+      }
+      if (state.targetAlbumId && !state.albums.some(a => a.album_id === state.targetAlbumId)) {
+        state.targetAlbumId = null;
+        persistState();
+      }
+      if (state.focusedAlbumId && !state.albums.some(a => a.album_id === state.focusedAlbumId)) {
+        state.focusedAlbumId = null;
+        state.albumEditing = false;
+        persistState();
+      }
+    }
+
     async function loadManifest() {
+      await loadAlbums();
       const resp = await fetch('/api/import');
       state.manifest = await resp.json();
       const known = new Set((state.manifest.images || []).map(im => im.image_key));
@@ -1790,7 +2114,90 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       }
     }
 
+    function targetAlbum() {
+      if (!state.targetAlbumId) return null;
+      return state.albums.find(a => a.album_id === state.targetAlbumId) || null;
+    }
+
+    function renderTargetBar() {
+      const target = targetAlbum();
+      if (target) {
+        return `
+          <div class="albums-target">
+            <span>Target:</span>
+            <strong>${escape(target.album_name || target.album_id)}</strong>
+            <span>(append)</span>
+            <span class="album-id">${escape(target.album_id)}</span>
+            <button class="clear-target" data-action="clear-target">New album instead</button>
+          </div>
+        `;
+      }
+      const name = state.albumName.trim();
+      return `
+        <div class="albums-target new-album">
+          <span>Target:</span>
+          <strong>New album</strong>
+          <span>${name ? '→ ' + escape(name) : '(name required at upload time)'}</span>
+        </div>
+      `;
+    }
+
+    function renderAlbumCard(album) {
+      const isTarget = album.album_id === state.targetAlbumId;
+      const isFocused = album.album_id === state.focusedAlbumId;
+      const filterValue = 'album:' + album.album_id;
+      const isFilterOn = state.filter === filterValue;
+      const reviewLine = album.review_counts || {};
+      const updated = album.updated_at ? formatTime(album.updated_at).slice(0, 10) : '';
+      return `
+        <div class="album-card ${isTarget ? 'targeted' : ''} ${isFocused ? 'focused' : ''}" data-album-id="${escape(album.album_id)}">
+          <div data-action="focus-album" data-album-id="${escape(album.album_id)}" style="cursor:pointer;display:grid;gap:6px;">
+            <div class="album-name">${escape(album.album_name || album.album_id)}</div>
+            <div class="album-desc">${escape(album.album_description || '')}</div>
+            <div class="album-counts">
+              <span><strong>${album.image_count || 0}</strong> img</span>
+              <span><strong>${reviewLine.review_completed || 0}</strong>/${reviewLine.review_total || 0} reviewed</span>
+              <span>${escape(updated || '—')}</span>
+              <span class="album-id">${escape(album.album_id)}</span>
+            </div>
+          </div>
+          <div class="album-actions">
+            <button data-action="add-to-album" data-album-id="${escape(album.album_id)}">Add Photos</button>
+            <a href="/manual-review?album_id=${encodeURIComponent(album.album_id)}" data-action="review-album" data-album-id="${escape(album.album_id)}">Review</a>
+            <button class="ghost ${isFilterOn ? 'filter-on' : ''}" data-action="filter-album" data-album-id="${escape(album.album_id)}">${isFilterOn ? 'Clear filter' : 'Filter'}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAlbumsSection() {
+      const albums = state.albums || [];
+      const cards = albums.map(renderAlbumCard).join('');
+      const newTile = `
+        <div class="album-card empty-tile" data-action="create-album" role="button" tabindex="0">
+          <div class="album-name" style="color:inherit;">+ New empty album</div>
+          <div class="album-desc">Create an album you can fill later.</div>
+        </div>
+      `;
+      return `
+        <section class="albums-block">
+          <div class="albums-head">
+            <span class="albums-eyebrow">Albums</span>
+            <span class="albums-meta">${albums.length} album${albums.length === 1 ? '' : 's'}</span>
+          </div>
+          ${renderTargetBar()}
+          <div class="albums-grid">
+            ${newTile}
+            ${cards}
+          </div>
+        </section>
+      `;
+    }
+
     function renderEmptyState() {
+      const target = targetAlbum();
+      const primaryLabel = target ? 'Add Photos To Album' : 'Pick Images';
+      const primaryHint = target ? 'append to ' + (target.album_name || target.album_id) : '.png .jpg .tif — one or many';
       return `
         <div class="intake">
           <div class="intake-card">
@@ -1801,16 +2208,18 @@ IMPORT_HTML = r"""<!DOCTYPE html>
             <div class="intake-actions">
               <button class="pick-btn" id="pickFiles">
                 <span class="glyph">⌥</span>
-                <span class="label">Pick Images</span>
-                <span class="hint">.png .jpg .tif &mdash; one or many</span>
+                <span class="label">${escape(primaryLabel)}</span>
+                <span class="hint">${escape(primaryHint)}</span>
               </button>
               <button class="pick-btn secondary" id="pickFolder">
                 <span class="glyph">▢</span>
-                <span class="label">Pick Folder</span>
+                <span class="label">${target ? 'Add Folder To Album' : 'Pick Folder'}</span>
                 <span class="hint">recursive scan, hidden skipped</span>
               </button>
             </div>
-            ${renderAlbumFields()}
+            ${target ? '' : `<div class="intake-actions" style="grid-template-columns:1fr;margin-top:-12px;"><button class="pick-btn secondary" id="newAlbumImport"><span class="glyph">＋</span><span class="label">Import to a NEW album…</span><span class="hint">name it first, then choose files or folder</span></button></div>`}
+            ${target ? '' : renderAlbumFields()}
+            ${renderAlbumsSection()}
             <div class="intake-options">
               <label><input type="checkbox" id="forceRefresh" ${state.forceRefresh ? 'checked' : ''}> Force re-render existing cache</label>
             </div>
@@ -1829,6 +2238,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
           <div class="compact-toolbar">
             <button class="toolbar-btn" id="pickFiles">+ Pick Images</button>
             <button class="toolbar-btn ghost" id="pickFolder">+ Pick Folder</button>
+            <button class="toolbar-btn ghost" id="newAlbumImport" title="Name a new album, then pick files or folder">+ New Album…</button>
             <span class="pill"><strong>${m.image_count}</strong> images · ${(sc.imported || 0)}+${(sc.regenerated_cache || 0)}+${(sc.already_imported || 0)} imported · ${(sc.review_only || 0)} review-only</span>
             <span class="pill"><strong>${state.selectedKeys.length}</strong> selected · ${selectedShown} shown</span>
             <select class="sort-select filter-select" id="filter">
@@ -1840,8 +2250,9 @@ IMPORT_HTML = r"""<!DOCTYPE html>
               <option value="invert_filtered">Invert current filtered selection</option>
               <option value="clear">Clear selection</option>
             </select>
-            <button class="toolbar-btn danger" id="removeSelected" ${state.selectedKeys.length ? '' : 'disabled'}>Remove selected</button>
-            <input class="toolbar-search" id="albumName" placeholder="album name" value="${escape(state.albumName)}">
+            <button class="toolbar-btn danger" id="removeSelected" ${state.selectedKeys.length ? '' : 'disabled'}>Remove From Workspace</button>
+            <button class="toolbar-btn ghost" id="removeFromAlbum" ${state.selectedKeys.length && state.filter.startsWith('album:') ? '' : 'disabled'} title="Remove the selected images from the active album filter only">Remove From Album</button>
+            <input class="toolbar-search" id="albumNameToolbar" placeholder="new album name" value="${escape(state.albumName)}" ${targetAlbum() ? 'disabled' : ''}>
             <input class="toolbar-search" id="search" placeholder="search filename, key, status" value="${escape(state.search)}">
             <select class="sort-select" id="sort">
               <option value="imported_desc" ${state.sort === 'imported_desc' ? 'selected' : ''}>Newest first</option>
@@ -1859,6 +2270,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
           </div>
           <div class="layout">
             <section class="canvas" id="canvas">
+              <div class="albums-canvas-wrap" style="margin-bottom:18px;">${renderAlbumsSection()}</div>
               ${state.view === 'ledger' ? renderLedger() : renderGrid()}
             </section>
             <aside class="detail" id="detail">${renderDetail()}</aside>
@@ -1982,9 +2394,95 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       `).join('') + '</div>';
     }
 
+    function focusedAlbum() {
+      if (!state.focusedAlbumId) return null;
+      return state.albums.find(a => a.album_id === state.focusedAlbumId) || null;
+    }
+
+    function renderAlbumDossier(album) {
+      const counts = album.counts || {};
+      const review = album.review_counts || {};
+      if (state.albumEditing) {
+        const draftName = state.albumDraftName ?? (album.album_name || '');
+        const draftDesc = state.albumDraftDesc ?? (album.album_description || '');
+        const err = state.albumDraftError ? `<div class="err">${escape(state.albumDraftError)}</div>` : '';
+        return `
+          <section class="album-dossier">
+            <button class="clear-focus" data-action="album-focus-clear" title="Close album panel">× CLOSE</button>
+            <p class="detail-eyebrow">Edit album details</p>
+            <h3 class="detail-title">Renaming…</h3>
+            <div class="detail-key">${escape(album.album_id)}</div>
+            <form class="album-rename-form" data-action="album-rename-form" autocomplete="off">
+              <label>Album name<input id="albumDraftName" value="${escape(draftName)}" required></label>
+              <label>Description<textarea id="albumDraftDesc">${escape(draftDesc)}</textarea></label>
+              ${err}
+              <div class="row">
+                <button type="button" class="ghost" data-action="album-edit-cancel">Cancel</button>
+                <button type="submit">Save</button>
+              </div>
+            </form>
+          </section>
+        `;
+      }
+      const countRows = [
+        ['Uploaded', counts.uploaded],
+        ['Discovered', counts.discovered],
+        ['Imported', counts.imported],
+        ['Skipped', counts.skipped],
+        ['Failed', counts.failed],
+        ['Members imported', counts.members_added_imported],
+        ['Members existing', counts.members_added_existing],
+        ['Members already present', counts.members_already_present],
+        ['Members failed', counts.members_failed],
+        ['Review stubs created', counts.review_stubs_created],
+        ['Review stubs existing', counts.review_stubs_existing],
+        ['Review stubs skipped', counts.review_stubs_skipped],
+        ['Auto detect created', counts.auto_detect_created_review],
+        ['Auto detect updated', counts.auto_detect_updated_existing_review],
+        ['Auto detect protected', counts.auto_detect_protected_existing_review],
+        ['Auto detect skipped', counts.auto_detect_skipped],
+      ].map(([label, value]) => {
+        const v = value == null ? 0 : value;
+        return `<div class="row ${v ? '' : 'zero'}"><span>${escape(label)}</span><strong>${v}</strong></div>`;
+      }).join('');
+      const filterValue = 'album:' + album.album_id;
+      const isFilterOn = state.filter === filterValue;
+      const isTarget = state.targetAlbumId === album.album_id;
+      return `
+        <section class="album-dossier">
+          <button class="clear-focus" data-action="album-focus-clear" title="Close album panel">× CLOSE</button>
+          <p class="detail-eyebrow">Album dossier</p>
+          <h3 class="detail-title">${escape(album.album_name || album.album_id)}</h3>
+          <div class="detail-key">${escape(album.album_id)}</div>
+          ${album.album_description ? `<p style="font-family:var(--serif);font-style:italic;color:var(--ink-soft);font-size:14px;margin:0 0 12px;">${escape(album.album_description)}</p>` : ''}
+          <div class="album-meta-grid">
+            <div class="cell"><span class="label">Images</span><span class="value"><strong>${album.image_count || 0}</strong></span></div>
+            <div class="cell"><span class="label">Reviewed</span><span class="value"><strong>${review.review_completed || 0}</strong> / ${review.review_total || 0}</span></div>
+            <div class="cell"><span class="label">Created</span><span class="value">${escape(formatTime(album.created_at))}</span></div>
+            <div class="cell"><span class="label">Updated</span><span class="value">${escape(formatTime(album.updated_at))}</span></div>
+            <div class="cell"><span class="label">Source kind</span><span class="value">${escape(album.source_kind || '—')}</span></div>
+            <div class="cell"><span class="label">Source label</span><span class="value">${escape(album.source_display_name || '—')}</span></div>
+            <div class="cell span2"><span class="label">Latest import job</span><span class="value">${escape(album.latest_import_job_id || '—')}</span></div>
+          </div>
+          <div class="detail-actions">
+            <button class="detail-action" data-action="album-rename-open">Rename / edit details</button>
+            <button class="detail-action" data-action="add-to-album" data-album-id="${escape(album.album_id)}" style="background:var(--ink);border-color:var(--ink);">${isTarget ? 'Targeted — pick more' : 'Add Photos to Album'}</button>
+            <a class="detail-action" href="/manual-review?album_id=${encodeURIComponent(album.album_id)}" data-action="review-album" data-album-id="${escape(album.album_id)}" style="text-decoration:none;display:block;text-align:center;background:var(--blue);border-color:var(--blue);">Review This Album →</a>
+            <button class="detail-action" data-action="filter-album" data-album-id="${escape(album.album_id)}" style="background:transparent;color:var(--ink);border-color:var(--ink);">${isFilterOn ? 'Clear album filter' : 'Filter ledger to album'}</button>
+          </div>
+          <div class="album-counts-block">
+            <div class="header"><span>Counts</span><span>since first import</span></div>
+            ${countRows}
+          </div>
+        </section>
+      `;
+    }
+
     function renderDetail() {
+      const album = focusedAlbum();
+      if (album) return renderAlbumDossier(album);
       const im = (state.manifest?.images || []).find(x => x.image_key === state.selectedKey);
-      if (!im) return '<div class="detail-empty">Select an entry to inspect its manifest record, render profile, and cache path.</div>';
+      if (!im) return '<div class="detail-empty">Select an album or image to inspect its dossier, manifest record, and counts.</div>';
       const editAction = `<div class="detail-actions"><button class="detail-action" onclick="editInManualReview('${escape(im.image_key)}')">Edit in manual review</button></div>`;
       return `
         <p class="detail-eyebrow">Manifest record</p>
@@ -2049,17 +2547,330 @@ IMPORT_HTML = r"""<!DOCTYPE html>
     function wireIntakeControls() {
       const fileBtn = document.getElementById('pickFiles');
       const folderBtn = document.getElementById('pickFolder');
+      const newAlbumBtn = document.getElementById('newAlbumImport');
       const force = document.getElementById('forceRefresh');
-      if (fileBtn) fileBtn.onclick = () => { const input = document.getElementById('fileInput'); input.value = ''; logAction('pick_files_pressed'); input.click(); };
-      if (folderBtn) folderBtn.onclick = () => { const input = document.getElementById('folderInput'); input.value = ''; logAction('pick_folder_pressed'); input.click(); };
+      const launchPicker = (kind) => {
+        if (!targetAlbum() && !state.albumName.trim()) {
+          openNewAlbumImportPanel({ mode: 'name-then-import' });
+          return;
+        }
+        const input = document.getElementById(kind === 'folder' ? 'folderInput' : 'fileInput');
+        input.value = '';
+        logAction(kind === 'folder' ? 'pick_folder_pressed' : 'pick_files_pressed', { target_album_id: state.targetAlbumId });
+        input.click();
+      };
+      if (fileBtn) fileBtn.onclick = () => launchPicker('files');
+      if (folderBtn) folderBtn.onclick = () => launchPicker('folder');
+      if (newAlbumBtn) newAlbumBtn.onclick = () => openNewAlbumImportPanel({ mode: 'name-then-import' });
       if (force) force.onchange = (e) => { state.forceRefresh = e.target.checked; persistState(); logAction('force_refresh_changed', { checked: state.forceRefresh }); };
       const albumName = document.getElementById('albumName');
+      const albumNameToolbar = document.getElementById('albumNameToolbar');
       const albumDescription = document.getElementById('albumDescription');
       const sourceDisplayName = document.getElementById('sourceDisplayName');
       if (albumName) albumName.oninput = (e) => { state.albumName = e.target.value; persistState(); };
+      if (albumNameToolbar) albumNameToolbar.oninput = (e) => { state.albumName = e.target.value; persistState(); refreshAlbumsSection(); };
       if (albumDescription) albumDescription.oninput = (e) => { state.albumDescription = e.target.value; persistState(); };
       if (sourceDisplayName) sourceDisplayName.oninput = (e) => { state.sourceDisplayName = e.target.value; persistState(); };
+      wireAlbumDelegation();
     }
+
+    function refreshAlbumsSection() {
+      document.querySelectorAll('.albums-block').forEach(block => {
+        const replacement = document.createElement('div');
+        replacement.innerHTML = renderAlbumsSection();
+        block.replaceWith(replacement.firstElementChild);
+      });
+      wireAlbumDelegation();
+    }
+
+    function wireAlbumDelegation() {
+      document.querySelectorAll('.albums-block').forEach(block => {
+        if (block.dataset.wired === '1') return;
+        block.dataset.wired = '1';
+        block.addEventListener('click', onAlbumsBlockClick);
+        block.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          if (event.target instanceof HTMLElement && event.target.dataset.action === 'create-album') {
+            event.preventDefault();
+            onAlbumsBlockClick({ target: event.target });
+          }
+        });
+      });
+      const detail = document.getElementById('detail');
+      if (detail && detail.dataset.wired !== '1') {
+        detail.dataset.wired = '1';
+        detail.addEventListener('click', onDossierClick);
+        detail.addEventListener('submit', (event) => {
+          const form = event.target && event.target.closest && event.target.closest('[data-action="album-rename-form"]');
+          if (!form) return;
+          event.preventDefault();
+          submitAlbumRename(form);
+        });
+      }
+    }
+
+    function onDossierClick(event) {
+      const target = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
+      if (!target) return;
+      const action = target.dataset.action;
+      const albumId = target.dataset.albumId || state.focusedAlbumId;
+      if (action === 'album-focus-clear') {
+        event.preventDefault();
+        clearAlbumFocus();
+      } else if (action === 'album-rename-open') {
+        event.preventDefault();
+        openAlbumRename();
+      } else if (action === 'album-edit-cancel') {
+        event.preventDefault();
+        cancelAlbumRename();
+      } else if (action === 'add-to-album' && albumId) {
+        event.preventDefault();
+        setTargetAlbum(albumId);
+        const input = document.getElementById('fileInput');
+        input.value = '';
+        logAction('album_add_photos_pressed', { album_id: albumId, source: 'dossier' });
+        input.click();
+      } else if (action === 'review-album' && albumId) {
+        logAction('album_review_pressed', { album_id: albumId, source: 'dossier' });
+        // default link follows
+      } else if (action === 'filter-album' && albumId) {
+        event.preventDefault();
+        const filterValue = 'album:' + albumId;
+        state.filter = state.filter === filterValue ? 'all' : filterValue;
+        persistState();
+        logAction('album_filter_pressed', { album_id: albumId, filter: state.filter, source: 'dossier' });
+        render();
+      }
+    }
+
+    async function onAlbumsBlockClick(event) {
+      const target = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
+      if (!target) return;
+      const action = target.dataset.action;
+      const albumId = target.dataset.albumId || (target.closest('[data-album-id]')?.dataset?.albumId);
+      if (action === 'create-album') {
+        openNewAlbumImportPanel({ mode: 'create-empty' });
+      } else if (action === 'create-empty-album') {
+        openNewAlbumImportPanel({ mode: 'create-empty' });
+      } else if (action === 'focus-album' && albumId) {
+        focusAlbum(albumId);
+      } else if (action === 'add-to-album' && albumId) {
+        setTargetAlbum(albumId);
+        const input = document.getElementById('fileInput');
+        input.value = '';
+        logAction('album_add_photos_pressed', { album_id: albumId });
+        input.click();
+      } else if (action === 'review-album' && albumId) {
+        logAction('album_review_pressed', { album_id: albumId });
+        // default link follows
+      } else if (action === 'filter-album' && albumId) {
+        const filterValue = 'album:' + albumId;
+        state.filter = state.filter === filterValue ? 'all' : filterValue;
+        persistState();
+        logAction('album_filter_pressed', { album_id: albumId, filter: state.filter });
+        render();
+      } else if (action === 'clear-target') {
+        setTargetAlbum(null);
+        logAction('album_target_cleared');
+      }
+    }
+
+    function focusAlbum(albumId) {
+      state.focusedAlbumId = albumId || null;
+      state.albumEditing = false;
+      state.albumDraftName = null;
+      state.albumDraftDesc = null;
+      state.albumDraftError = null;
+      persistState();
+      logAction('album_focus_set', { album_id: state.focusedAlbumId });
+      render();
+    }
+
+    function clearAlbumFocus() {
+      state.focusedAlbumId = null;
+      state.albumEditing = false;
+      state.albumDraftName = null;
+      state.albumDraftDesc = null;
+      state.albumDraftError = null;
+      persistState();
+      logAction('album_focus_cleared');
+      render();
+    }
+
+    function openAlbumRename() {
+      const album = focusedAlbum();
+      if (!album) return;
+      state.albumEditing = true;
+      state.albumDraftName = album.album_name || '';
+      state.albumDraftDesc = album.album_description || '';
+      state.albumDraftError = null;
+      logAction('album_rename_opened', { album_id: album.album_id });
+      render();
+    }
+
+    function cancelAlbumRename() {
+      state.albumEditing = false;
+      state.albumDraftName = null;
+      state.albumDraftDesc = null;
+      state.albumDraftError = null;
+      logAction('album_rename_cancelled');
+      render();
+    }
+
+    async function submitAlbumRename(form) {
+      const album = focusedAlbum();
+      if (!album) return;
+      const name = (form.querySelector('#albumDraftName')?.value || '').trim();
+      const description = (form.querySelector('#albumDraftDesc')?.value || '').trim();
+      if (!name) {
+        state.albumDraftError = 'Album name must not be blank';
+        render();
+        return;
+      }
+      const body = { album_name: name, album_description: description };
+      logAction('album_rename_submitted', { album_id: album.album_id, name_changed: name !== (album.album_name || ''), description_changed: description !== (album.album_description || '') });
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(album.album_id)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'rename failed');
+        showToast(`Renamed → ${data.album_name}`);
+        state.albumEditing = false;
+        state.albumDraftName = null;
+        state.albumDraftDesc = null;
+        state.albumDraftError = null;
+        await loadAlbums();
+        render();
+      } catch (err) {
+        state.albumDraftError = err.message;
+        logAction('album_rename_failed', { album_id: album.album_id, message: err.message });
+        render();
+      }
+    }
+
+    function setTargetAlbum(albumId) {
+      state.targetAlbumId = albumId || null;
+      persistState();
+      logAction('album_target_set', { album_id: state.targetAlbumId });
+      render();
+    }
+
+    function openNewAlbumImportPanel(opts) {
+      const mode = (opts && opts.mode) || 'create-empty';
+      logAction('album_naming_card_opened', { mode });
+      const existing = document.querySelector('.modal-backdrop.naming-backdrop');
+      if (existing) existing.remove();
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop naming-backdrop';
+      backdrop.innerHTML = `
+        <section class="naming-card" role="dialog" aria-modal="true" aria-labelledby="namingTitle">
+          <div class="stamp">UNFILED</div>
+          <p class="eyebrow">Step 01.A — New Album</p>
+          <h3 id="namingTitle">Name <em>this album</em>.</h3>
+          <p class="lede">An album bundles a batch of images. The name shows up in the dossier and album list; the <code>album_id</code> is generated automatically and is immutable.</p>
+          <label>Album name<input id="namingAlbumName" autocomplete="off" required></label>
+          <label>Description<textarea id="namingAlbumDesc" rows="2" placeholder="optional"></textarea></label>
+          <div class="err" id="namingErr" style="display:none;"></div>
+          <div class="pick-row">
+            <button data-naming-action="pick-files">
+              <span class="glyph">⌥</span>
+              <span class="label">Pick Images &amp; Import</span>
+              <span class="hint">.png .jpg .tif</span>
+            </button>
+            <button class="secondary" data-naming-action="pick-folder">
+              <span class="glyph">▢</span>
+              <span class="label">Pick Folder &amp; Import</span>
+              <span class="hint">recursive scan, hidden skipped</span>
+            </button>
+          </div>
+          <div class="footer-row">
+            <button class="cancel" data-naming-action="cancel">× Cancel</button>
+            <button data-naming-action="save-empty" style="border:1px solid var(--ink);background:transparent;color:var(--ink);font-family:var(--mono);font-size:11px;letter-spacing:0.18em;text-transform:uppercase;padding:9px 14px;border-radius:2px;cursor:pointer;">Save Empty Album</button>
+          </div>
+        </section>
+      `;
+      document.body.appendChild(backdrop);
+      const nameInput = backdrop.querySelector('#namingAlbumName');
+      const descInput = backdrop.querySelector('#namingAlbumDesc');
+      nameInput.value = state.albumName || '';
+      descInput.value = state.albumDescription || '';
+      setTimeout(() => nameInput.focus(), 30);
+
+      function close(reason) {
+        backdrop.remove();
+        logAction('album_naming_card_closed', { reason });
+      }
+
+      function showErr(message) {
+        const err = backdrop.querySelector('#namingErr');
+        err.textContent = message;
+        err.style.display = message ? 'block' : 'none';
+      }
+
+      async function saveEmpty() {
+        const name = nameInput.value.trim();
+        const description = descInput.value.trim();
+        if (!name) { showErr('Album name must not be blank'); return; }
+        logAction('album_create_pressed', { name_length: name.length, has_description: !!description, mode: 'save_empty' });
+        try {
+          const resp = await fetch('/api/albums', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ album_name: name, album_description: description || null })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'create album failed');
+          logAction('album_create_succeeded', { album_id: data.album_id, mode: 'save_empty' });
+          showToast(`Album "${data.album_name}" created`);
+          state.albumName = '';
+          state.albumDescription = '';
+          persistState();
+          close('saved-empty');
+          await loadAlbums();
+          focusAlbum(data.album_id);
+        } catch (err) {
+          logAction('album_create_failed', { message: err.message });
+          showErr('Create failed: ' + err.message);
+        }
+      }
+
+      function pickAndImport(kind) {
+        const name = nameInput.value.trim();
+        if (!name) { showErr('Album name must not be blank'); return; }
+        const description = descInput.value.trim();
+        state.albumName = name;
+        state.albumDescription = description;
+        state.targetAlbumId = null;
+        persistState();
+        logAction('album_create_pressed', { name_length: name.length, has_description: !!description, mode: 'pick_' + kind });
+        close('pick-' + kind);
+        const inputId = kind === 'folder' ? 'folderInput' : 'fileInput';
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        input.value = '';
+        input.click();
+      }
+
+      backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) {
+          close('backdrop');
+        }
+        const btn = event.target && event.target.closest ? event.target.closest('[data-naming-action]') : null;
+        if (!btn) return;
+        const action = btn.dataset.namingAction;
+        if (action === 'cancel') close('cancel');
+        else if (action === 'save-empty') saveEmpty();
+        else if (action === 'pick-files') pickAndImport('files');
+        else if (action === 'pick-folder') pickAndImport('folder');
+      });
+      backdrop.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') close('escape');
+      });
+    }
+
+    // Backward-compatible alias for callers expecting the old name.
+    const promptCreateAlbum = () => openNewAlbumImportPanel({ mode: 'create-empty' });
 
     function wireToolbarControls() {
       wireIntakeControls();
@@ -2088,6 +2899,31 @@ IMPORT_HTML = r"""<!DOCTYPE html>
       if (vL) vL.onclick = () => { state.view = 'ledger'; persistState(); logAction('view_changed', { view: state.view }); rerenderCanvas(true); };
       if (vG) vG.onclick = () => { state.view = 'grid'; persistState(); logAction('view_changed', { view: state.view }); rerenderCanvas(true); };
       document.getElementById('removeSelected')?.addEventListener('click', removeSelectedFromReviewQueue);
+      document.getElementById('removeFromAlbum')?.addEventListener('click', removeSelectedFromAlbum);
+    }
+
+    async function removeSelectedFromAlbum() {
+      const imageKeys = state.selectedKeys.slice();
+      if (!imageKeys.length || !state.filter.startsWith('album:')) return;
+      const albumId = state.filter.slice('album:'.length);
+      const album = state.albums.find(a => a.album_id === albumId);
+      const albumLabel = album ? album.album_name || albumId : albumId;
+      logAction('remove_from_album_pressed', { album_id: albumId, selected_count: imageKeys.length });
+      const confirmed = window.confirm(`Remove ${imageKeys.length} selected image(s) from album "${albumLabel}"? This only removes album membership; the images stay in the workspace and review queue.`);
+      logAction('remove_from_album_confirmation', { album_id: albumId, confirmed, selected_count: imageKeys.length });
+      if (!confirmed) return;
+      try {
+        const resp = await fetch(`/api/albums/${encodeURIComponent(albumId)}/remove-images`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_keys: imageKeys })
+        });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || 'remove from album failed');
+        showToast(`Removed ${result.removed_count} image(s) from album`);
+        await loadManifest();
+      } catch (err) {
+        showToast('Remove from album failed: ' + err.message, 'error');
+      }
     }
 
     function rerenderCanvas(includeToggle) {
@@ -2236,23 +3072,27 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         }
         formData.append('files', f, name);
       }
+      const target = targetAlbum();
       let albumName = state.albumName.trim();
       const sourceDisplayName = state.sourceDisplayName.trim() || topLevel;
-      if (!albumName && !sourceDisplayName) {
-        albumName = window.prompt('Album name for these files?', '') || '';
-        logAction('album_name_prompt_answered', { provided: !!albumName.trim() });
-        if (!albumName.trim()) return;
-        state.albumName = albumName.trim();
-        persistState();
+      if (!target && !albumName && !sourceDisplayName) {
+        // Should not be reachable: the naming card runs before the file dialog. Guard anyway.
+        showToast('Name a new album first via + Import to new album', 'error');
+        logAction('album_name_missing_at_upload', { staged_count: resolvedFiles.length });
+        return;
       }
       const params = new URLSearchParams();
       if (state.forceRefresh) params.set('force', '1');
-      if (albumName.trim()) params.set('album_name', albumName.trim());
-      if (state.albumDescription.trim()) params.set('album_description', state.albumDescription.trim());
-      if (sourceDisplayName) params.set('source_display_name', sourceDisplayName);
+      if (target) {
+        params.set('append_to_album_id', target.album_id);
+      } else {
+        if (albumName.trim()) params.set('album_name', albumName.trim());
+        if (state.albumDescription.trim()) params.set('album_description', state.albumDescription.trim());
+        if (sourceDisplayName) params.set('source_display_name', sourceDisplayName);
+      }
       const url = '/api/import/upload' + (params.toString() ? '?' + params.toString() : '');
       try {
-        logAction('upload_started', { file_count: resolvedFiles.length, force: state.forceRefresh, album_name: !!albumName.trim(), source_display_name: sourceDisplayName || null });
+        logAction('upload_started', { file_count: resolvedFiles.length, force: state.forceRefresh, album_name: target ? null : !!albumName.trim(), append_to_album_id: target ? target.album_id : null, source_display_name: target ? null : (sourceDisplayName || null) });
         const resp = await fetch(url, { method: 'POST', body: formData });
         if (!resp.ok) {
           const text = await resp.text();
@@ -2285,6 +3125,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
             if (job.state === 'done') {
               showToast(`Imported ${job.imported_count}, skipped ${job.skipped_count}, failed ${job.failed_count}`);
               logAction('import_job_done', { job_id: jobId, imported_count: job.imported_count, skipped_count: job.skipped_count, failed_count: job.failed_count });
+              if (state.targetAlbumId) { state.targetAlbumId = null; persistState(); }
               await loadManifest();
               setTimeout(() => { state.job = null; render(); }, 4000);
             } else {
@@ -2342,9 +3183,10 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_html(render_import_html())
             return
         if path in {"/manual-review", "/manual-review/"}:
-            queue_rows = review_ui.synced_review_queue()
+            album_id = self._query_album_id(parsed)
+            queue_rows = review_ui.filter_queue_by_album(review_ui.synced_review_queue(), album_id)
             default_image_id = review_ui.pick_image_id(queue_rows, self._query_image_id(parsed))
-            self._respond_html(review_ui.render_app_html(default_image_id, self._query_detection_id(parsed)))
+            self._respond_html(review_ui.render_app_html(default_image_id, self._query_detection_id(parsed), album_id=album_id))
             return
         if path == "/api/overview":
             generate = query_bool(parsed, "generate", GENERATE_CROPS)
@@ -2358,11 +3200,19 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json(payload)
             return
         if path == "/api/state":
-            self._respond_json(review_ui.build_state(self._query_image_id(parsed)))
+            self._respond_json(review_ui.build_state(self._query_image_id(parsed), album_id=self._query_album_id(parsed)))
             return
         if path == "/api/import":
             self._respond_json(manifest_summary())
             return
+        if path == "/api/albums":
+            self._handle_list_albums()
+            return
+        if path.startswith("/api/albums/"):
+            album_id = path[len("/api/albums/"):].strip("/")
+            if album_id and "/" not in album_id:
+                self._handle_show_album(album_id)
+                return
         if path.startswith("/api/import/jobs/"):
             job_id = path[len("/api/import/jobs/"):]
             with JOBS_LOCK:
@@ -2386,6 +3236,19 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/import/upload":
             self._handle_upload(parsed)
             return
+        if parsed.path == "/api/albums":
+            self._handle_create_album()
+            return
+        if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/add-images"):
+            album_id = parsed.path[len("/api/albums/"):-len("/add-images")].strip("/")
+            if album_id and "/" not in album_id:
+                self._handle_add_album_images(album_id)
+                return
+        if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/remove-images"):
+            album_id = parsed.path[len("/api/albums/"):-len("/remove-images")].strip("/")
+            if album_id and "/" not in album_id:
+                self._handle_remove_album_images(album_id)
+                return
         if parsed.path == "/api/images/remove/preview":
             self._handle_remove_preview()
             return
@@ -2395,6 +3258,15 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if parsed.path in REVIEW_POST_PATHS:
             review_ui.ReviewHandler.do_POST(self)
             return
+        self._respond_json({"error": "not found"}, status=404)
+
+    def do_PATCH(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/albums/"):
+            album_id = parsed.path[len("/api/albums/"):].strip("/")
+            if album_id and "/" not in album_id:
+                self._handle_rename_album(album_id)
+                return
         self._respond_json({"error": "not found"}, status=404)
 
     def _handle_upload(self, parsed) -> None:
@@ -2417,6 +3289,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         album_name = query_text(parsed, "album_name")
         album_description = query_text(parsed, "album_description")
         source_display_name = query_text(parsed, "source_display_name")
+        append_to_album_id = query_text(parsed, "append_to_album_id")
         try:
             job_id = start_import_job(
                 files,
@@ -2424,6 +3297,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 album_name=album_name,
                 album_description=album_description,
                 source_display_name=source_display_name,
+                append_to_album_id=append_to_album_id,
             )
         except Exception as exc:
             self._respond_json({"error": f"could not stage upload: {exc}"}, status=500)
@@ -2473,6 +3347,146 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             review_ui.invalidate_review_queue_cache()
         except Exception as exc:
             self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_list_albums(self) -> None:
+        try:
+            summaries = pipeline.list_albums_summary(
+                pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                manifest_path=IMPORT_MANIFEST_PATH,
+                reviews_dir=REVIEWS_DIR,
+                reviewer=IMPORT_REVIEWER,
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"albums": summaries})
+
+    def _handle_show_album(self, album_id: str) -> None:
+        try:
+            detail = pipeline.load_album_detail(
+                pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                album_id,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                reviews_dir=REVIEWS_DIR,
+                reviewer=IMPORT_REVIEWER,
+            )
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json(detail)
+
+    def _handle_create_album(self) -> None:
+        try:
+            payload = self._json_body()
+            album_name = str(payload.get("album_name") or "").strip()
+            if not album_name:
+                self._respond_json({"error": "album_name is required"}, status=400)
+                return
+            record = pipeline.create_empty_album(
+                albums_dir=pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                manifest_path=IMPORT_MANIFEST_PATH,
+                cache_dir=IMPORT_CACHE_DIR,
+                reviews_dir=REVIEWS_DIR,
+                album_name=album_name,
+                album_description=payload.get("album_description"),
+                source_display_name=payload.get("source_display_name"),
+                reviewer=IMPORT_REVIEWER,
+            )
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({
+            "album_id": record["album_id"],
+            "album_name": record["album_name"],
+            "album_description": record["album_description"],
+            "source_kind": record["source_kind"],
+            "image_count": 0,
+        }, status=201)
+
+    def _handle_rename_album(self, album_id: str) -> None:
+        try:
+            payload = self._json_body()
+            has_name = "album_name" in payload
+            has_description = "album_description" in payload
+            if not has_name and not has_description:
+                self._respond_json({"error": "album_name and/or album_description is required"}, status=400)
+                return
+            record = pipeline.rename_album(
+                albums_dir=pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                manifest_path=IMPORT_MANIFEST_PATH,
+                album_id=album_id,
+                album_name=payload.get("album_name") if has_name else None,
+                album_description=payload.get("album_description") if has_description else None,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status = 404 if "not found" in message.lower() else 400
+            self._respond_json({"error": message}, status=status)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({
+            "album_id": record["album_id"],
+            "album_name": record["album_name"],
+            "album_description": record["album_description"],
+            "updated_at": record["updated_at"],
+            "created_at": record["created_at"],
+        })
+
+    def _handle_remove_album_images(self, album_id: str) -> None:
+        try:
+            payload = self._json_body()
+            keys = [str(value) for value in (payload.get("image_keys") or []) if str(value).strip()]
+            if not keys:
+                self._respond_json({"error": "image_keys is required"}, status=400)
+                return
+            result = pipeline.remove_image_keys_from_album(
+                albums_dir=pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                manifest_path=IMPORT_MANIFEST_PATH,
+                album_id=album_id,
+                image_keys=keys,
+            )
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json(result)
+
+    def _handle_add_album_images(self, album_id: str) -> None:
+        try:
+            payload = self._json_body()
+            keys = [str(value) for value in (payload.get("image_keys") or []) if str(value).strip()]
+            if not keys:
+                self._respond_json({"error": "image_keys is required"}, status=400)
+                return
+            result = pipeline.add_existing_image_keys_to_album(
+                albums_dir=pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                manifest_path=IMPORT_MANIFEST_PATH,
+                album_id=album_id,
+                image_keys=keys,
+                reviewer=IMPORT_REVIEWER,
+            )
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        if int(result.get("members_failed") or 0) == int(result.get("requested_count") or 0):
+            payload = dict(result)
+            payload["error"] = "No image_key could be added to album"
+            self._respond_json(payload, status=400)
             return
         self._respond_json(result)
 
@@ -2534,6 +3548,13 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def _query_image_id(self, parsed) -> str | None:
         values = parse_qs(parsed.query).get("image_id")
+        if not values:
+            return None
+        value = values[0].strip()
+        return value or None
+
+    def _query_album_id(self, parsed) -> str | None:
+        values = parse_qs(parsed.query).get("album_id")
         if not values:
             return None
         value = values[0].strip()

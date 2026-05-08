@@ -302,6 +302,101 @@ def test_cli_import_data_appends_to_existing_album_by_id(tmp_path: Path) -> None
     assert len(album["import_job_ids"]) == 2
 
 
+def test_cli_add_to_album_allows_partial_failures(tmp_path: Path) -> None:
+    source = write_png(tmp_path / "inputs" / "source.png")
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+    imported = run_cli(
+        "import-data",
+        "--source",
+        str(source),
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+    )
+    assert imported.returncode == 0
+    image_key = parse_envelope(imported)["result"]["imported"][0]["image_key"]
+    created = run_cli(
+        "create-album",
+        "--album-name",
+        "Partial add target",
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+    )
+    assert created.returncode == 0
+    album_id = parse_envelope(created)["result"]["album_id"]
+
+    process = run_cli(
+        "add-to-album",
+        "--album-id",
+        album_id,
+        "--image-key",
+        image_key,
+        "--image-key",
+        "img_missing",
+        "--manifest",
+        str(manifest_path),
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="add-to-album", ok=True)
+    assert envelope["warnings"] == ["1 image_key(s) could not be added; see result.failed"]
+    result = envelope["result"]
+    assert result["members_added_existing"] == 1
+    assert result["members_failed"] == 1
+    assert result["failed"] == [{"image_key": "img_missing", "reason": "not in import manifest"}]
+
+
+def test_cli_add_to_album_fails_when_every_key_fails(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    cache_dir = tmp_path / "cache" / "imported_images"
+    reviews_dir = tmp_path / "reviews"
+    created = run_cli(
+        "create-album",
+        "--album-name",
+        "All failed target",
+        "--manifest",
+        str(manifest_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--reviews-dir",
+        str(reviews_dir),
+    )
+    assert created.returncode == 0
+    album_id = parse_envelope(created)["result"]["album_id"]
+
+    process = run_cli(
+        "add-to-album",
+        "--album-id",
+        album_id,
+        "--image-key",
+        "img_missing_a",
+        "--image-key",
+        "img_missing_b",
+        "--manifest",
+        str(manifest_path),
+    )
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="add-to-album", ok=False)
+    assert envelope["errors"] == ["No image_key could be added to album"]
+    assert envelope["warnings"] == ["2 image_key(s) could not be added; see result.failed"]
+    result = envelope["result"]
+    assert result["requested_count"] == 2
+    assert result["members_added_existing"] == 0
+    assert result["members_failed"] == 2
+
+
 def test_cli_import_data_creates_missing_stub_for_already_imported_image(tmp_path: Path) -> None:
     source = write_png(tmp_path / "inputs" / "source.png")
     manifest_path = tmp_path / "manifests" / "training_import_manifest.json"

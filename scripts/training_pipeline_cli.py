@@ -273,6 +273,125 @@ def command_prune_review_queue(args: argparse.Namespace) -> tuple[int, dict[str,
     return 0, envelope("prune-review-queue", ok=True, result=result)
 
 
+def resolved_albums_dir(args: argparse.Namespace) -> str:
+    return str(args.albums_dir or pipeline.default_albums_dir_for_manifest(args.manifest))
+
+
+def command_list_albums(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    summaries = pipeline.list_albums_summary(
+        albums_dir,
+        manifest_path=args.manifest,
+        reviews_dir=args.reviews_dir,
+        reviewer=args.reviewer,
+    )
+    result = {
+        "albums_dir": pipeline.repo_relative(albums_dir),
+        "album_count": len(summaries),
+        "albums": summaries,
+    }
+    add_diagnostics(result, args, "list_albums_summary", albums_dir=albums_dir)
+    return 0, envelope("list-albums", ok=True, result=result)
+
+
+def command_show_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    detail = pipeline.load_album_detail(
+        albums_dir,
+        args.album_id,
+        manifest_path=args.manifest,
+        reviews_dir=args.reviews_dir,
+        reviewer=args.reviewer,
+    )
+    add_diagnostics(detail, args, "load_album_detail", albums_dir=albums_dir)
+    return 0, envelope("show-album", ok=True, result=detail)
+
+
+def command_create_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    record = pipeline.create_empty_album(
+        albums_dir=albums_dir,
+        manifest_path=args.manifest,
+        cache_dir=args.cache_dir,
+        reviews_dir=args.reviews_dir,
+        album_name=args.album_name,
+        album_description=args.album_description,
+        source_display_name=args.source_display_name,
+        reviewer=args.reviewer,
+    )
+    result = {
+        "album_id": record["album_id"],
+        "album_name": record["album_name"],
+        "album_description": record["album_description"],
+        "source_kind": record["source_kind"],
+        "album_path": pipeline.repo_relative(pipeline.repo_resolve(albums_dir) / f"{record['album_id']}.json"),
+        "image_count": 0,
+    }
+    add_diagnostics(result, args, "create_empty_album", albums_dir=albums_dir)
+    return 0, envelope("create-album", ok=True, result=result)
+
+
+def command_add_to_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    image_keys = list(args.image_key or [])
+    if not image_keys:
+        return 2, envelope("add-to-album", ok=False, errors=["At least one --image-key is required"])
+    result = pipeline.add_existing_image_keys_to_album(
+        albums_dir=albums_dir,
+        manifest_path=args.manifest,
+        album_id=args.album_id,
+        image_keys=image_keys,
+        reviewer=args.reviewer,
+    )
+    warnings = []
+    if result.get("members_failed"):
+        warnings.append(f"{result['members_failed']} image_key(s) could not be added; see result.failed")
+    add_diagnostics(result, args, "add_existing_image_keys_to_album", albums_dir=albums_dir, manifest_path=args.manifest)
+    if int(result.get("members_failed") or 0) == int(result.get("requested_count") or 0):
+        return 1, envelope("add-to-album", ok=False, result=result, warnings=warnings, errors=["No image_key could be added to album"])
+    return 0, envelope("add-to-album", ok=True, result=result, warnings=warnings)
+
+
+def command_rename_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    if args.album_name is None and args.album_description is None:
+        return 2, envelope("rename-album", ok=False, errors=["At least one of --album-name or --album-description is required"])
+    try:
+        record = pipeline.rename_album(
+            albums_dir=albums_dir,
+            manifest_path=args.manifest,
+            album_id=args.album_id,
+            album_name=args.album_name,
+            album_description=args.album_description,
+        )
+    except ValueError as exc:
+        return 1, envelope("rename-album", ok=False, errors=[str(exc)])
+    result = {
+        "album_id": record["album_id"],
+        "album_name": record["album_name"],
+        "album_description": record["album_description"],
+        "updated_at": record["updated_at"],
+        "created_at": record["created_at"],
+    }
+    add_diagnostics(result, args, "rename_album", albums_dir=albums_dir, manifest_path=args.manifest)
+    return 0, envelope("rename-album", ok=True, result=result)
+
+
+def command_remove_from_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    albums_dir = resolved_albums_dir(args)
+    image_keys = list(args.image_key or [])
+    if not image_keys:
+        return 2, envelope("remove-from-album", ok=False, errors=["At least one --image-key is required"])
+    result = pipeline.remove_image_keys_from_album(
+        albums_dir=albums_dir,
+        manifest_path=args.manifest,
+        album_id=args.album_id,
+        image_keys=image_keys,
+    )
+    add_diagnostics(result, args, "remove_image_keys_from_album", albums_dir=albums_dir, manifest_path=args.manifest)
+    return 0, envelope("remove-from-album", ok=True, result=result)
+
+
 def command_remove_images(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     result = pipeline.remove_images(
         reviewer=args.reviewer,
@@ -361,6 +480,55 @@ def build_parser() -> argparse.ArgumentParser:
     prune_parser.add_argument("--filter", choices=["unreviewed"])
     prune_parser.add_argument("--dry-run", action="store_true")
     prune_parser.set_defaults(handler=command_prune_review_queue)
+
+    list_albums_parser = subparsers.add_parser("list-albums")
+    list_albums_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    list_albums_parser.add_argument("--albums-dir")
+    list_albums_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    list_albums_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    list_albums_parser.set_defaults(handler=command_list_albums)
+
+    show_album_parser = subparsers.add_parser("show-album")
+    show_album_parser.add_argument("--album-id", required=True)
+    show_album_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    show_album_parser.add_argument("--albums-dir")
+    show_album_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    show_album_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    show_album_parser.set_defaults(handler=command_show_album)
+
+    create_album_parser = subparsers.add_parser("create-album")
+    create_album_parser.add_argument("--album-name", required=True)
+    create_album_parser.add_argument("--album-description")
+    create_album_parser.add_argument("--source-display-name")
+    create_album_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    create_album_parser.add_argument("--cache-dir", default=str(pipeline.DEFAULT_IMPORT_CACHE_DIR))
+    create_album_parser.add_argument("--albums-dir")
+    create_album_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    create_album_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    create_album_parser.set_defaults(handler=command_create_album)
+
+    add_to_album_parser = subparsers.add_parser("add-to-album")
+    add_to_album_parser.add_argument("--album-id", required=True)
+    add_to_album_parser.add_argument("--image-key", action="append", required=True)
+    add_to_album_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    add_to_album_parser.add_argument("--albums-dir")
+    add_to_album_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    add_to_album_parser.set_defaults(handler=command_add_to_album)
+
+    rename_album_parser = subparsers.add_parser("rename-album")
+    rename_album_parser.add_argument("--album-id", required=True)
+    rename_album_parser.add_argument("--album-name")
+    rename_album_parser.add_argument("--album-description")
+    rename_album_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    rename_album_parser.add_argument("--albums-dir")
+    rename_album_parser.set_defaults(handler=command_rename_album)
+
+    remove_from_album_parser = subparsers.add_parser("remove-from-album")
+    remove_from_album_parser.add_argument("--album-id", required=True)
+    remove_from_album_parser.add_argument("--image-key", action="append", required=True)
+    remove_from_album_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    remove_from_album_parser.add_argument("--albums-dir")
+    remove_from_album_parser.set_defaults(handler=command_remove_from_album)
 
     remove_parser = subparsers.add_parser("remove-images")
     remove_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)

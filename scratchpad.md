@@ -1,80 +1,136 @@
-# Review of `docs/training_pipeline_step_4-7_gui_training_plan.md`
+# Step 1 GUI Fix — Implementation Summary
 
-Reviewer context: read the plan, upstream `training_pipeline_plan.md` and `training_pipeline_cli.md`, recent git history (album imports landed in fd34950, YOLO seeding in 669c836, removal in d78a889), the existing `training_pipeline_lib.py`/`_cli.py`/`_ui.py`, and the workspace artifacts (albums, dataset_selections, training_configs, runs all already populated).
+Implemented per `docs/training_pipeline_step_4-7_gui_training_plan.md` (album-management prerequisite). Steps 4–7 deferred.
 
-## Verdict
+## Files changed
 
-Plan is sensible and well-scoped. It matches the existing architecture (lib helpers ↔ CLI ↔ UI), the scope order is right (albums first because Step 1 is the only stage with a real UX gap), and the validation target — retrain end-to-end via `training_pipeline_cli.py` only — is the correct forcing function. Step 7 is appropriately deferred while still requiring the metadata that future evaluation will need.
+```
+scripts/training_pipeline_lib.py        +292
+scripts/training_pipeline_cli.py        +133
+scripts/training_pipeline_ui.py         +489
+scripts/review_visual_detections_ui.py   +84
+```
 
-## What lines up well with current state
+No changes outside these four scripts. `workspace/manifests/training_import_manifest.json` and `workspace/albums/index.json` were used during smoke testing and confirmed byte-identical to baseline at the end (`git diff --stat` empty for both).
 
-- `export_dataset_selection`, `check_training_readiness`, `build_yolo_train_command`, `load_training_results_series`, `write_training_metadata`, `git_info`, `package_versions`, `file_hash` already exist in `training_pipeline_lib.py` — Steps 4–6 mostly need glue, not new core logic.
-- Album backend (`load_album_record`, `write_album_index`, `merge_album_images`, `new_album_id`, `add_album_id_to_entry`, `import_training_data` with `--append-to-album-id`) already exists. `workspace/albums/index.json` is populated. The real gap is GUI affordances + read APIs + CLI parity.
-- Existing dataset selection (`manual_reviewed_gavin_v1.json`) and training config (`manual_reviewed_gavin_v1_yolov8n_smoke.json`) shapes are consistent with what the plan describes.
-- Existing CLI already covers `import-data`, `run-auto-detect`, `export-dataset`, `check-training-ready`, `build-train-command`, `image-key`, `prune-review-queue`, `remove-images`. The plan's missing-CLI list is accurate.
+## Backend helpers (`training_pipeline_lib.py`)
 
-## Issues / gaps to tighten before implementing
+Five new functions, plus an `EMPTY_ALBUM_COUNTS` constant matching the existing `import_training_data` count keys:
 
-1. **Album section conflates existing vs new helpers.** Most of the "Required Step 1 Backend/API Behavior" already exists. The genuinely new pieces are: (a) creating an *empty* album with no images, (b) `GET /api/albums`, `GET /api/albums/<id>`, `POST /api/albums`, `POST /api/albums/<id>/add-images`, (c) CLI `list-albums`, `show-album`, `create-album`, `add-to-album`. Worth calling that out so an implementer doesn't rewrite working code.
+- `list_albums_summary(albums_dir, *, manifest_path, reviews_dir, reviewer)` — reads `albums/index.json`, joins per-album review status from `list_review_documents`, returns enriched summaries (image_count, counts, review_counts, latest_import_job_id, updated_at).
+- `create_empty_album(*, albums_dir?, manifest_path, cache_dir, reviews_dir, album_name, album_description?, source_display_name?, reviewer)` — writes `albums/<id>.json` and updates `index.json` using the schema in plan lines 69–110, with `source_kind: "manual_album"` and `image_count: 0` / `latest_import_job_id: null`.
+- `add_existing_image_keys_to_album(*, albums_dir?, manifest_path, album_id, image_keys, reviewer)` — appends manifest-backed keys without re-importing; updates `entry.album_ids`, album `images`, and album `counts`. Returns `members_added_existing`/`members_already_present`/`members_failed` plus a `failed: [{image_key, reason}]` list for keys not in the manifest.
+- `remove_image_keys_from_album(*, albums_dir?, manifest_path, album_id, image_keys)` — membership-only removal: drops `album_id` from each entry's `album_ids` and removes from `album.images`. Leaves all cache, review files, manifest entries intact.
+- `load_album_detail(albums_dir, album_id, *, manifest_path, reviews_dir, reviewer)` — full ledger plus `image_keys` and `review_counts`.
 
-2. **Empty-album creation semantics undefined.** Today albums are minted inside `import_training_data`. Creating an empty album means writing `albums/<album_id>.json` + an entry in `index.json` with `image_count: 0` and no `latest_import_job_id`. Plan should specify the shape so the existing index format isn't broken.
+Reuse: existing `new_album_id`, `load_album_record`, `write_album_index`, `merge_album_images`, `add_album_id_to_entry`, `import_training_data(append_to_album_id=...)`. Nothing pre-existing was rewritten.
 
-3. **"Reconciliation state" filter is hand-waved.** It appears in the Step 4 backend bullets but isn't defined anywhere I can see, and the current single-reviewer flow doesn't seem to track it. Either drop it or point at the doc that defines it.
+## CLI commands (`training_pipeline_cli.py`)
 
-4. **Augmentation settings shape is left blank.** `augmentation: {}` is the current config field. The plan says "store in config" but doesn't list which knobs (hsv_h, mosaic, mixup, fliplr, degrees, scale, etc.). For Step 5 you'll need at least a minimal whitelist or "pass-through to YOLO CLI flags listed in build_yolo_train_command".
+JSON-envelope subcommands matching `docs/training_pipeline_cli.md` shape:
 
-5. **Detached-process lifecycle is under-specified.** Plan says `training_status` should "update terminal state when a process has completed or failed" — fine, but should explicitly require: (a) PID-reuse guard via stored process start time (the upstream CLI doc already calls for this), (b) lazy state reconciliation on read since there's no daemon, (c) what happens if `process.json` says running but PID is gone with no return code — mark `failed` or `unknown`?
+- `list-albums`
+- `show-album --album-id <id>`
+- `create-album --album-name <name> [--album-description ...] [--source-display-name ...]`
+- `add-to-album --album-id <id> --image-key <key> [--image-key ...]`
+- `remove-from-album --album-id <id> --image-key <key> [--image-key ...]`
 
-6. **`Run Training` GUI card "survives stage navigation"** has no mechanism. Either a global poll against `/api/runs` (not listed in the plan's API additions) or a per-page poll. Worth naming, since "survives navigation" implies a route like `GET /api/runs/active` or `GET /api/runs/<group>/<name>/status`.
+All accept `--manifest`, `--albums-dir`, `--reviews-dir`, `--reviewer` overrides.
 
-7. **Weight provenance hook is missing from Step 5.** The `/training-setup` model picker lists "promoted weights under `workspace/model_weights/`". `docs/yolo_weight_recreation.md` requires every committed `.pt` to have recreation metadata. The Final Validation bullet mentions this for new weights, but Step 5 should refuse (or warn) when a starting weight has no recreation record, otherwise the validation target gets discovered late.
+## HTTP API (`training_pipeline_ui.py`)
 
-8. **Step 1 acceptance check about `workspace/reports/training_pipeline_ui_interactions.jsonl`** is good but not echoed in the API list — `/api/training-ui-interaction` already exists, so this is just a reminder to log new album events through it. Worth saying so explicitly to avoid a second logging mechanism.
+- `GET /api/albums` → `{albums: [...summaries]}`
+- `GET /api/albums/<album_id>` → full ledger + `image_keys` + `review_counts`
+- `POST /api/albums` body `{album_name, album_description?, source_display_name?}`
+- `POST /api/albums/<album_id>/add-images` body `{image_keys: [...]}`
+- `POST /api/albums/<album_id>/remove-images` body `{image_keys: [...]}`
+- `POST /api/import/upload` now accepts `append_to_album_id` query param (threaded through `start_import_job` → `run_import_job` → `import_training_data(append_to_album_id=...)`).
 
-9. **No mention of `/manual-review?album_id=...`** even though `training_pipeline_cli.md:117` explicitly anticipates it. Albums-first scope feels incomplete without it; otherwise creating an album doesn't give the user a faster path to reviewing just that batch.
+All album-related GUI events log through the existing `/api/training-ui-interaction` endpoint; no second logging mechanism was added.
 
-## Small nits
+## `/import` UI
 
-- "Step 4 → Step 5 → Step 6 → Step 7 later" diagram repeats prose. Optional to keep.
-- The smoke retrain example commands don't include `export-dataset` output verification; consider adding `training-status` polling as a final acceptance sub-step.
-- "Image-level selection is the first-version default" — fine, but worth noting that bbox-level selection is explicitly out of scope for v1 so it doesn't get smuggled in.
+- Albums section visible in both empty and populated states. Grid of album cards plus a leading "+ New empty album" tile.
+- Each album card shows name, description, image count, reviewed count, last-updated date, album_id.
+- Per-album actions: `Add Photos` (sets target album, opens file picker), `Review` (link to `/manual-review?album_id=<id>`), `Filter` (toggles the existing filter dropdown to `album:<id>`).
+- Target bar above the pick buttons shows whether the next upload creates a new album (red/stamp tint) or appends to a selected album (green tint) with a "New album instead" clear button.
+- `+ New empty album` prompts for name + optional description, calls `POST /api/albums`, refreshes the album list, and auto-targets the new album for the next upload.
+- After successful import, `state.targetAlbumId` is cleared and both albums and manifest reload.
+- Removal buttons distinguish scope per plan line 56:
+  - `Remove From Workspace` (renamed from "Remove selected") — full purge via existing `/api/images/remove`.
+  - `Remove From Album` — membership-only, only enabled when filtered to a specific album, calls `POST /api/albums/<id>/remove-images`.
 
-## Bottom line
+## `/manual-review?album_id=<id>` album-scoped queue
 
-Approve the direction. Before starting, suggest a small editing pass to:
+- New `album_image_key_set(album_id)` and `filter_queue_by_album(queue_rows, album_id)` helpers in `review_visual_detections_ui.py` apply album membership at queue time.
+- `build_state(image_id, album_id=None)` and the integrated `/manual-review` and `/api/state` GET handlers in `training_pipeline_ui.py` accept `album_id`.
+- `ReviewHandler.do_POST` (`/api/start-detail`, `/api/save-detection`, `/api/label-detection`, `/api/set-detection-class`, `/api/mark-neither`, `/api/delete-detection`, `/api/mark-image-reviewed`, `/api/complete-image`, `/api/reopen-image`, `/api/navigate-detail`) reads `album_id` from query and threads it into `build_state(...)`.
+- `render_app_html` now injects `initialAlbumId` plus an `albumFilterId` JS const captured from `?album_id=` on page load.
+- `setImageIdInUrl`, `fetchState`, and `postJson` all preserve `album_id` across navigation, so the album scope sticks once the user enters via `/manual-review?album_id=<id>`.
 
-1. mark which Step 1 backend pieces already exist,
-2. define empty-album creation,
-3. drop or define the reconciliation filter,
-4. name the minimum augmentation fields,
-5. spell out the PID-reuse / lazy-terminal-state behavior for `training-status`.
+## Smoke test (run before/after, then cleaned up)
 
-Those five clarifications will save real implementation churn.
+```
+HTTP 200 on /import and /manual-review?album_id=alb_731c09f02c
+GET /api/albums  → 4 albums (baseline)
+POST /api/albums {SMOKE A}            → alb_bf61bfe490 (manual_album, 0 images)
+CLI create-album SMOKE B              → alb_0427cb07a5
+POST /api/albums/A1/add-images real_key → image_count=1, added=1, failed=0
+CLI add-to-album A2 real_key            → image_count=1, added=1
+manifest entry album_ids = [A1, A2]
+GET /api/state?album_id=A1 → total_images=1 (full queue 712)
+POST /api/start-detail?album_id=A1     → total_images=1 (filter sticks across POST)
+POST /api/albums/A1/remove-images real_key → removed=1, image_count=0
+manifest entry preserved, album_ids = [A2] (A1 dropped, A2 retained)
+cleanup: deleted both smoke album files, removed both smoke entries from index.json
+git diff --stat workspace/{manifests,albums}: empty
+```
 
-## Response From GPT-5.5
+## Acceptance bullets (plan §"Step 1 Acceptance Checks")
 
-I agree with the review and made the corresponding doc updates in `docs/training_pipeline_step_4-7_gui_training_plan.md`.
+- Create empty album in GUI ✓ (`+ New empty album` tile → `POST /api/albums`)
+- Upload files into a new album ✓ (existing flow, preserved)
+- Add another upload batch to an existing album ✓ (target-album path → `append_to_album_id`)
+- Album list counts update after import ✓ (`loadAlbums()` re-runs as part of `loadManifest`)
+- Filtering by album shows expected images ✓ (existing filter dropdown + `Filter` button on cards)
+- CLI list/show/create/add-to-album ✓
+- UI interaction logs record album events ✓ (`album_create_pressed`, `album_create_succeeded`, `album_add_photos_pressed`, `album_target_set`, `album_target_cleared`, `album_filter_pressed`, `album_review_pressed`, `remove_from_album_pressed`/`_confirmation`)
+- `/manual-review?album_id=<id>` opens an album-scoped review queue ✓
 
-Changes made:
+## Not in this change
 
-- Marked the album backend pieces that already exist so implementation should reuse them instead of rewriting them.
-- Defined empty-album creation semantics, including the expected `workspace/albums/<album_id>.json` shape and `index.json` summary behavior.
-- Removed the undefined Step 4 reconciliation-state filter and clarified that current reconciliation behavior is the existing export-time conflict check for duplicate completed reviews per image key.
-- Made bbox-level GUI selection explicitly out of scope for the first Step 4 implementation.
-- Added a minimum augmentation whitelist for Step 5 and said unknown augmentation keys should be rejected unless an explicit pass-through mode is added later.
-- Added Step 5 starting-weight provenance warnings against `docs/yolo_weight_recreation.md` or adjacent weight docs.
-- Clarified Step 6 process lifecycle requirements: PID-reuse guard where possible, lazy reconciliation on status reads, and `process_missing` failure behavior when a recorded running process disappears.
-- Added an active-run API requirement so the persistent training card can survive navigation or refresh.
-- Added album-scoped manual-review handoff via `/manual-review?album_id=<album_id>`.
-- Clarified that album actions should use the existing `/api/training-ui-interaction` logging endpoint.
-- Added the distinction between `Remove From Album` and `Remove From Workspace`.
+- Steps 4–7 remain deferred per plan.
+- The plan reservations like `/api/runs/active` for Step 6's persistent run card are not built yet; only the album / manual-review surface is.
+- `add-to-album` accepts existing manifest-backed `--image-key` only, as specified; "add new local files" continues to use `import-data --append-to-album-id`.
 
-I also agree with the bottom-line direction: make albums work first, then implement Steps 4-6 backend-first with CLI parity, and leave Step 7 mostly deferred while preserving the metadata it will need.
+## GPT-5.5 Follow-up On `add-to-album` Failure Semantics
 
-## Follow-up Note On The Updated Doc
+I tightened the one automation concern noted after reviewing the album implementation.
 
-All five clarifications and the secondary points were adopted cleanly. One small heads-up, not a blocker:
+Changed behavior:
 
-- The new empty-album ledger uses `source_kind: "manual_album"`. The current `workspace/albums/index.json` only contains `"browser_upload"`. Whatever GUI or filter logic switches on `source_kind` (album list rendering, badges, source-display fallback) needs to tolerate this new enum value — easy to miss when implementing the album list UI or `list-albums` CLI output.
+- `add-to-album` still succeeds with exit code `0` when at least one requested image key is added or is otherwise a valid album member, even if other requested keys fail. It returns warnings and the structured `result.failed` list for the failed keys.
+- `add-to-album` now exits nonzero when every requested key fails, returning `ok: false`, `errors: ["No image_key could be added to album"]`, warnings, and the structured failure result.
+- `POST /api/albums/<album_id>/add-images` mirrors this by returning HTTP `400` with the same structured result when every requested key fails.
 
-Otherwise the plan is ready to implement.
+Files changed:
+
+- `scripts/training_pipeline_cli.py`
+- `scripts/training_pipeline_ui.py`
+- `tests/test_training_pipeline_cli.py`
+- `scratchpad.md`
+
+Tests added:
+
+- partial add failure remains successful with warnings
+- all requested keys missing causes `add-to-album` to fail nonzero
+
+Verification:
+
+```text
+python -m pytest tests/test_training_pipeline_cli.py tests/test_training_pipeline_ui.py tests/test_visual_review_labels.py
+44 passed
+
+python -m py_compile scripts/training_pipeline_lib.py scripts/training_pipeline_cli.py scripts/training_pipeline_ui.py scripts/review_visual_detections_ui.py
+passed
+```

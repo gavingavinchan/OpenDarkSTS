@@ -52,6 +52,9 @@ Add explicit album controls to `/import`:
 - Album detail view/filter: clicking an album shows only images in that album.
 - Add-to-album flow: importing additional photos into an existing album must call the same backend path as CLI `import-data --append-to-album-id`.
 - Manual-review handoff: album detail actions should include `Review This Album`, routing to `/manual-review?album_id=<album_id>` so the user can review only the newly imported batch when desired.
+- Album sidebar: clicking the body of an album card opens an album detail panel in the right sidebar. The panel shows `album_id`, `album_name`, `album_description`, `source_kind`, `source_display_name`, `created_at`, `updated_at`, `latest_import_job_id`, `image_count`, review completed/total, and the album `counts` breakdown. The same panel hosts the rename form and per-album actions (`Add Photos`, `Review`, `Filter`, `Remove From Album`). Image-detail mode in the sidebar still works for a selected image; album-detail mode takes priority when both are set, and the panel includes a clear-selection control.
+- Rename action: each album supports renaming the human `album_name` and editing `album_description`. The rename UI lives inside the album sidebar as an inline form (no `window.prompt`). `album_id` remains immutable; `created_at` is preserved; `updated_at` advances on rename.
+- Immediate album naming on import: starting a new album from the import page must accept the album name inline before any OS file dialog opens. A styled in-page naming card replaces `window.prompt` whenever the user invokes Pick Images / Pick Folder without a target album and without a name already set, and the card is also the explicit `+ Import to new album` entry point in both the empty and populated states.
 - No source modification: importing or adding to albums never modifies source folders or source files.
 - Preserve existing image selection/removal behavior, but make destructive scope explicit. `Remove From Album` only removes album membership. `Remove From Workspace` removes import records, active review files, archived review files, cache/staging copies, and album membership, while leaving original external source files untouched.
 
@@ -63,6 +66,7 @@ Reuse or add helpers in `scripts/training_pipeline_lib.py`:
 - Add list helpers that read `workspace/albums/index.json` and enrich summaries with review counts.
 - Add a helper to create a new empty album without requiring immediate image upload.
 - Add a helper to append existing manifest-backed image keys to an album without re-importing image bytes.
+- Add a rename helper `rename_album(albums_dir, album_id, *, album_name=None, album_description=None)` that updates the album record and `index.json` summary, refreshes `updated_at`, preserves the immutable `album_id` and `created_at`, and supports updating either field independently.
 - Return album summaries with image counts, reviewed counts, imported counts, source metadata, and latest import job.
 - Preserve immutable `album_id`; allow mutable album name/description.
 
@@ -117,6 +121,8 @@ Add GUI API routes in `scripts/training_pipeline_ui.py`:
 - `GET /api/albums/<album_id>`
 - `POST /api/albums`
 - `POST /api/albums/<album_id>/add-images`
+- `POST /api/albums/<album_id>/remove-images`
+- `PATCH /api/albums/<album_id>` body `{album_name?, album_description?}` for rename / description edits.
 - Existing upload route should accept either `album_name` for new album or `append_to_album_id` for existing album.
 - `GET /api/runs/active` is not needed for albums, but later Step 6 should use an equivalent active-run API for persistent run cards.
 
@@ -128,8 +134,10 @@ Add CLI parity if missing:
 - `show-album`
 - `create-album`
 - `add-to-album`
+- `remove-from-album`
+- `rename-album --album-id <id> [--album-name <name>] [--album-description <desc>]`
 
-`add-to-album` should support adding existing manifest-backed `--image-key` values. Adding new local files to an album should continue to use `import-data --append-to-album-id`.
+`add-to-album` should support adding existing manifest-backed `--image-key` values. Adding new local files to an album should continue to use `import-data --append-to-album-id`. `rename-album` accepts either `--album-name` or `--album-description` independently and rejects calls that touch neither.
 
 These commands should use JSON envelopes consistent with `docs/training_pipeline_cli.md`.
 

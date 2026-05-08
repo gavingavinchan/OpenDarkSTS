@@ -360,6 +360,328 @@ def write_album_index(albums_dir: str | Path, album: dict[str, Any]) -> None:
     write_json(index_path, index)
 
 
+EMPTY_ALBUM_COUNTS = {
+    "uploaded": 0,
+    "discovered": 0,
+    "imported": 0,
+    "skipped": 0,
+    "failed": 0,
+    "members_added_imported": 0,
+    "members_added_existing": 0,
+    "members_already_present": 0,
+    "members_failed": 0,
+    "review_stubs_created": 0,
+    "review_stubs_existing": 0,
+    "review_stubs_skipped": 0,
+    "auto_detect_created_review": 0,
+    "auto_detect_updated_existing_review": 0,
+    "auto_detect_protected_existing_review": 0,
+    "auto_detect_skipped": 0,
+}
+
+
+def review_completion_map(reviewer: str, reviews_dir: str | Path) -> dict[str, str]:
+    completion: dict[str, str] = {}
+    try:
+        reviews = review_lib.list_review_documents(reviewer, reviews_dir)
+    except Exception:
+        return completion
+    for review in reviews:
+        key = str(review.get("image_key") or "")
+        if not key:
+            continue
+        completion[key] = str(review.get("review_status") or "overview_1")
+    return completion
+
+
+def album_review_counts(album_images: list[dict[str, Any]], completion: dict[str, str]) -> dict[str, int]:
+    completed = 0
+    pending = 0
+    total_with_review = 0
+    for image in album_images or []:
+        key = str((image or {}).get("image_key") or "")
+        if not key:
+            continue
+        status = completion.get(key)
+        if status is None:
+            continue
+        total_with_review += 1
+        if status == "completed":
+            completed += 1
+        else:
+            pending += 1
+    return {
+        "review_completed": completed,
+        "review_pending": pending,
+        "review_total": total_with_review,
+    }
+
+
+def list_albums_summary(
+    albums_dir: str | Path,
+    *,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> list[dict[str, Any]]:
+    album_root = repo_resolve(albums_dir)
+    completion = review_completion_map(reviewer, reviews_dir)
+    summaries: list[dict[str, Any]] = []
+    index_path = album_root / "index.json"
+    if index_path.is_file():
+        try:
+            index = load_json(index_path)
+            index_albums = [album for album in index.get("albums") or [] if isinstance(album, dict) and album.get("album_id")]
+        except Exception:
+            index_albums = []
+    else:
+        index_albums = []
+    index_by_id = {str(album.get("album_id")): album for album in index_albums}
+    seen: set[str] = set()
+    for album_path in sorted(album_root.glob("alb_*.json")):
+        try:
+            album = load_json(album_path)
+        except Exception:
+            continue
+        album_id = str(album.get("album_id") or album_path.stem)
+        if album_id in seen:
+            continue
+        seen.add(album_id)
+        review_counts = album_review_counts(album.get("images") or [], completion)
+        summary_from_index = index_by_id.get(album_id) or {}
+        counts = album.get("counts") or summary_from_index.get("counts") or {}
+        latest_job_id = None
+        job_ids = album.get("import_job_ids") or []
+        if job_ids:
+            latest_job_id = job_ids[-1]
+        elif "latest_import_job_id" in summary_from_index:
+            latest_job_id = summary_from_index.get("latest_import_job_id")
+        summaries.append({
+            "album_id": album_id,
+            "album_name": album.get("album_name") or album_id,
+            "album_description": album.get("album_description"),
+            "source_display_name": album.get("source_display_name"),
+            "source_kind": album.get("source_kind"),
+            "image_count": len([image for image in album.get("images") or [] if image.get("image_key")]),
+            "counts": counts,
+            "review_counts": review_counts,
+            "created_at": album.get("created_at"),
+            "updated_at": album.get("updated_at"),
+            "latest_import_job_id": latest_job_id,
+        })
+    summaries.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return summaries
+
+
+def create_empty_album(
+    *,
+    albums_dir: str | Path | None = None,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    cache_dir: str | Path = DEFAULT_IMPORT_CACHE_DIR,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    album_name: str,
+    album_description: str | None = None,
+    source_display_name: str | None = None,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> dict[str, Any]:
+    if not album_name or not str(album_name).strip():
+        raise ValueError("album_name is required")
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    album_root.mkdir(parents=True, exist_ok=True)
+    album_id = new_album_id(album_root)
+    now = utcnow_iso_for_training()
+    album_record = {
+        "schema_version": SCHEMA_VERSION,
+        "album_id": album_id,
+        "album_name": str(album_name).strip(),
+        "album_description": (album_description or None),
+        "source_display_name": source_display_name,
+        "source_kind": "manual_album",
+        "import_job_ids": [],
+        "created_at": now,
+        "updated_at": now,
+        "created_by": reviewer,
+        "reviewer": reviewer,
+        "manifest_path": repo_relative(manifest_file),
+        "cache_dir": repo_relative(cache_dir),
+        "reviews_dir": repo_relative(reviews_dir),
+        "options": {},
+        "counts": dict(EMPTY_ALBUM_COUNTS),
+        "images": [],
+    }
+    album_path = album_root / f"{album_id}.json"
+    write_json(album_path, album_record)
+    write_album_index(album_root, album_record)
+    return album_record
+
+
+def add_existing_image_keys_to_album(
+    *,
+    albums_dir: str | Path | None = None,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    album_id: str,
+    image_keys: list[str],
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> dict[str, Any]:
+    if not album_id:
+        raise ValueError("album_id is required")
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    album = load_album_record(album_root, album_id)
+    manifest = load_import_manifest(manifest_file)
+    images_map = manifest.get("images", {}) or {}
+    existing_album_images = album.get("images") or []
+    existing_keys = {image.get("image_key") for image in existing_album_images if image.get("image_key")}
+    new_album_images: list[dict[str, Any]] = []
+    added_existing = 0
+    already_present = 0
+    failed: list[dict[str, Any]] = []
+    requested = [str(key) for key in (image_keys or []) if str(key).strip()]
+    manifest_changed = False
+    for image_key in requested:
+        entry = images_map.get(image_key)
+        if not entry:
+            failed.append({"image_key": image_key, "reason": "not in import manifest"})
+            continue
+        if image_key in existing_keys:
+            already_present += 1
+            new_album_images.append(album_image_record(entry, {"image_key": image_key}, import_status=entry.get("import_status") or "imported", member_status="already_present"))
+            continue
+        if add_album_id_to_entry(entry, album_id):
+            manifest_changed = True
+        new_album_images.append(album_image_record(entry, {"image_key": image_key}, import_status=entry.get("import_status") or "imported", member_status="added_existing"))
+        existing_keys.add(image_key)
+        added_existing += 1
+    counts = album.setdefault("counts", dict(EMPTY_ALBUM_COUNTS))
+    for key, default in EMPTY_ALBUM_COUNTS.items():
+        counts.setdefault(key, default)
+    counts["members_added_existing"] = int(counts.get("members_added_existing") or 0) + added_existing
+    counts["members_already_present"] = int(counts.get("members_already_present") or 0) + already_present
+    counts["members_failed"] = int(counts.get("members_failed") or 0) + len(failed)
+    album["images"] = merge_album_images(existing_album_images, new_album_images)
+    album["updated_at"] = utcnow_iso_for_training()
+    album_path = album_root / f"{album_id}.json"
+    write_json(album_path, album)
+    write_album_index(album_root, album)
+    if manifest_changed:
+        save_import_manifest(manifest_file, manifest)
+    return {
+        "album_id": album_id,
+        "album_path": repo_relative(album_path),
+        "manifest_path": repo_relative(manifest_file),
+        "requested_count": len(requested),
+        "members_added_existing": added_existing,
+        "members_already_present": already_present,
+        "members_failed": len(failed),
+        "failed": failed,
+        "image_count": len([image for image in album["images"] if image.get("image_key")]),
+    }
+
+
+def rename_album(
+    *,
+    albums_dir: str | Path | None = None,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    album_id: str,
+    album_name: str | None = None,
+    album_description: str | None = None,
+) -> dict[str, Any]:
+    if not album_id:
+        raise ValueError("album_id is required")
+    if album_name is None and album_description is None:
+        raise ValueError("rename_album requires album_name and/or album_description")
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    album = load_album_record(album_root, album_id)
+    if album_name is not None:
+        cleaned = str(album_name).strip()
+        if not cleaned:
+            raise ValueError("album_name must not be blank")
+        album["album_name"] = cleaned
+    if album_description is not None:
+        cleaned_description = str(album_description).strip()
+        album["album_description"] = cleaned_description or None
+    album["updated_at"] = utcnow_iso_for_training()
+    album_path = album_root / f"{album_id}.json"
+    write_json(album_path, album)
+    write_album_index(album_root, album)
+    return album
+
+
+def remove_image_keys_from_album(
+    *,
+    albums_dir: str | Path | None = None,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    album_id: str,
+    image_keys: list[str],
+) -> dict[str, Any]:
+    if not album_id:
+        raise ValueError("album_id is required")
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    album = load_album_record(album_root, album_id)
+    requested = [str(key) for key in (image_keys or []) if str(key).strip()]
+    requested_set = set(requested)
+    existing_album_images = album.get("images") or []
+    existing_keys = {image.get("image_key") for image in existing_album_images if image.get("image_key")}
+    not_in_album = sorted(requested_set - existing_keys)
+    removed_keys = sorted(requested_set & existing_keys)
+    album["images"] = [image for image in existing_album_images if image.get("image_key") not in requested_set]
+    album["updated_at"] = utcnow_iso_for_training()
+    counts = album.setdefault("counts", dict(EMPTY_ALBUM_COUNTS))
+    for key, default in EMPTY_ALBUM_COUNTS.items():
+        counts.setdefault(key, default)
+    manifest = load_import_manifest(manifest_file)
+    manifest_changed = False
+    for image_key in removed_keys:
+        entry = manifest.get("images", {}).get(image_key)
+        if not entry:
+            continue
+        ids = entry.get("album_ids") or []
+        if album_id in ids:
+            entry["album_ids"] = [value for value in ids if value != album_id]
+            manifest_changed = True
+    album_path = album_root / f"{album_id}.json"
+    write_json(album_path, album)
+    write_album_index(album_root, album)
+    if manifest_changed:
+        save_import_manifest(manifest_file, manifest)
+    return {
+        "album_id": album_id,
+        "album_path": repo_relative(album_path),
+        "manifest_path": repo_relative(manifest_file),
+        "requested_count": len(requested),
+        "removed_count": len(removed_keys),
+        "not_in_album_count": len(not_in_album),
+        "removed_image_keys": removed_keys,
+        "not_in_album_image_keys": not_in_album,
+        "image_count": len([image for image in album["images"] if image.get("image_key")]),
+    }
+
+
+def load_album_detail(
+    albums_dir: str | Path,
+    album_id: str,
+    *,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> dict[str, Any]:
+    album_root = repo_resolve(albums_dir)
+    album = load_album_record(album_root, album_id)
+    completion = review_completion_map(reviewer, reviews_dir)
+    review_counts = album_review_counts(album.get("images") or [], completion)
+    image_keys = [str(image.get("image_key")) for image in album.get("images") or [] if image.get("image_key")]
+    return {
+        "album": album,
+        "album_path": repo_relative(album_root / f"{album_id}.json"),
+        "image_keys": image_keys,
+        "image_count": len(image_keys),
+        "review_counts": review_counts,
+    }
+
+
 def default_render_profile(kind: str) -> dict[str, Any]:
     profiles = {
         "rgb_original": RGB_ORIGINAL_RENDER_PROFILE,

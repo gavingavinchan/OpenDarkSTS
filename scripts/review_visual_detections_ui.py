@@ -148,6 +148,27 @@ def pick_image_id(queue_rows, requested_image_id: str | None) -> str | None:
     return str(queue_rows[0]["image_key"])
 
 
+def album_image_key_set(album_id: str | None) -> set | None:
+    if not album_id:
+        return None
+    try:
+        from . import training_pipeline_lib as pipeline
+    except ImportError:
+        import training_pipeline_lib as pipeline
+    try:
+        album = pipeline.load_album_record(pipeline.default_albums_dir_for_manifest(MANIFEST_PATH), album_id)
+    except ValueError:
+        return set()
+    return {str(image.get("image_key")) for image in album.get("images") or [] if image.get("image_key")}
+
+
+def filter_queue_by_album(queue_rows: list[dict], album_id: str | None) -> list[dict]:
+    keys = album_image_key_set(album_id)
+    if keys is None:
+        return queue_rows
+    return [row for row in queue_rows if str(row.get("image_key")) in keys]
+
+
 def load_review_by_image_id(image_id: str) -> tuple[dict, Path]:
     path = review_file_path(image_id, REVIEWER, REVIEWS_DIR)
     if not path.exists():
@@ -218,8 +239,9 @@ def cache_path_for_review(review: dict) -> Path:
     return ensure_cache_for_image_key(review["image_key"], MANIFEST_PATH)
 
 
-def build_state(image_id: str | None) -> dict:
+def build_state(image_id: str | None, album_id: str | None = None) -> dict:
     queue_rows = synced_review_queue()
+    queue_rows = filter_queue_by_album(queue_rows, album_id)
     manifest_images = load_manifest(MANIFEST_PATH).get("images", {})
     progress = queue_progress(queue_rows)
     selected_image_id = pick_image_id(queue_rows, image_id)
@@ -254,7 +276,7 @@ def build_state(image_id: str | None) -> dict:
     after = (review.get("review_status"), review.get("detail_cursor"))
     if before != after:
         save_review(review, review_path)
-        queue_rows = synced_review_queue()
+        queue_rows = filter_queue_by_album(synced_review_queue(), album_id)
     image = next((row for row in queue_rows if row["image_key"] == selected_image_id), None)
     if image is None:
         raise KeyError(f"Image {selected_image_id} not found")
@@ -331,9 +353,10 @@ def reopen_if_completed(review: dict) -> None:
         set_review_status(review, "overview_2", None)
 
 
-def render_app_html(default_image_id: str | None, default_detection_id: str | None = None) -> str:
+def render_app_html(default_image_id: str | None, default_detection_id: str | None = None, album_id: str | None = None) -> str:
     initial_image = json.dumps(default_image_id)
     initial_detection = json.dumps(default_detection_id)
+    initial_album = json.dumps(album_id)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -791,6 +814,19 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
   <script>
     const initialImageId = {initial_image};
     const initialDetectionId = {initial_detection};
+    const initialAlbumId = {initial_album};
+    const albumFilterId = (() => {{
+      try {{
+        const params = new URLSearchParams(window.location.search);
+        const raw = params.get('album_id');
+        if (raw && raw.trim()) return raw.trim();
+      }} catch (e) {{}}
+      return initialAlbumId || null;
+    }})();
+    function albumQuerySuffix(joiner) {{
+      if (!albumFilterId) return '';
+      return (joiner || '?') + 'album_id=' + encodeURIComponent(albumFilterId);
+    }}
     const statusLabels = {{ pending: 'Pending', overview_1: 'Overview 1', detail: 'Detail', overview_2: 'Overview 2', completed: 'Completed' }};
     const defaultClassOptions = [{{value: 0, label: 'Ship'}}, {{value: 1, label: 'Ships'}}];
 
@@ -837,12 +873,14 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       if (imageId === null || imageId === undefined) params.delete('image_id');
       else params.set('image_id', imageId);
       params.delete('detection_id');
+      if (albumFilterId) params.set('album_id', albumFilterId);
       const next = `${{window.location.pathname}}?${{params.toString()}}`;
       window.history.replaceState({{}}, '', next);
     }}
 
     async function fetchState(imageId) {{
-      const query = imageId ? `?image_id=${{encodeURIComponent(imageId)}}` : '';
+      let query = imageId ? `?image_id=${{encodeURIComponent(imageId)}}` : '';
+      if (albumFilterId) query += (query ? '&' : '?') + 'album_id=' + encodeURIComponent(albumFilterId);
       const response = await fetch('/api/state' + query);
       state = await response.json();
       syncReviewCursorFromState();
@@ -1677,7 +1715,9 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     async function postJson(url, payload) {{
-      const response = await fetch(url, {{
+      const sep = url.includes('?') ? '&' : '?';
+      const finalUrl = albumFilterId ? url + sep + 'album_id=' + encodeURIComponent(albumFilterId) : url;
+      const response = await fetch(finalUrl, {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
         body: JSON.stringify(payload),
@@ -1904,9 +1944,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path in {"/", "", "/manual-review", "/manual-review/"}:
-            queue_rows = synced_review_queue()
+            queue_rows = filter_queue_by_album(synced_review_queue(), self._query_album_id(parsed))
             default_image_id = pick_image_id(queue_rows, self._query_image_id(parsed))
-            self._respond_html(render_app_html(default_image_id, self._query_detection_id(parsed)))
+            self._respond_html(render_app_html(default_image_id, self._query_detection_id(parsed), album_id=self._query_album_id(parsed)))
             return
 
         if path == "/bbox-overview":
@@ -1924,7 +1964,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/state":
-            payload = build_state(self._query_image_id(parsed))
+            payload = build_state(self._query_image_id(parsed), album_id=self._query_album_id(parsed))
             self._respond_json(payload)
             return
 
@@ -1937,6 +1977,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         payload = json_body(self)
+        album_id = self._query_album_id(parsed)
 
         if parsed.path == "/api/debug-interaction":
             # DELETE BEFORE SHIP: temporary diagnostic endpoint for click/key logging.
@@ -1950,12 +1991,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/start-detail":
                 start_detail_mode(review)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/navigate-detail":
                 direction = payload.get("direction", "next")
                 navigate_detail_cursor(review, direction)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/save-detection":
                 reopen_if_completed(review)
                 x_center, y_center, width, height = parse_detection_geometry(payload)
@@ -1977,7 +2018,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     update_detection_geometry(review, str(detection_id), x_center, y_center, width, height, class_id=class_id)
                 refresh_detection_crop(review, review_path, str(detection_id))
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/label-detection":
                 reopen_if_completed(review)
                 detection_id = str(payload["detection_id"])
@@ -1987,7 +2028,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 label_detection(review, detection_id, review_label, class_id, x_center, y_center, width, height)
                 refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/set-detection-class":
                 reopen_if_completed(review)
                 detection_id = str(payload["detection_id"])
@@ -1997,37 +2038,37 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 set_detection_review_label(review, detection_id, review_label, class_id, x_center, y_center, width, height)
                 refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/mark-neither":
                 reopen_if_completed(review)
                 detection_id = str(payload["detection_id"])
                 mark_detection_neither(review, detection_id)
                 refresh_detection_crop(review, review_path, detection_id)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/delete-detection":
                 reopen_if_completed(review)
                 detection_id = str(payload["detection_id"])
                 delete_detection(review, detection_id)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/mark-image-reviewed":
                 changed = mark_all_active_detections_reviewed(review)
                 for detection in review.get("detections", []):
                     if detection.get("reviewed") and detection.get("review_label") != "neither":
                         refresh_detection_crop(review, review_path, str(detection.get("detection_id")))
                 save_review(review, review_path)
-                response = build_state(image_id)
+                response = build_state(image_id, album_id=album_id)
                 response["marked_reviewed_count"] = changed
                 self._respond_json(response)
             elif parsed.path == "/api/complete-image":
                 complete_image_review(review)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             elif parsed.path == "/api/reopen-image":
                 set_review_status(review, "overview_2", None)
                 save_review(review, review_path)
-                self._respond_json(build_state(image_id))
+                self._respond_json(build_state(image_id, album_id=album_id))
             else:
                 self._respond_json({"error": "not found"}, status=404)
         except Exception as exc:
@@ -2035,6 +2076,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _query_image_id(self, parsed) -> str | None:
         values = parse_qs(parsed.query).get("image_id")
+        if not values:
+            return None
+        value = values[0].strip()
+        return value or None
+
+    def _query_album_id(self, parsed) -> str | None:
+        values = parse_qs(parsed.query).get("album_id")
         if not values:
             return None
         value = values[0].strip()
