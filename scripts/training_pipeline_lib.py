@@ -6,6 +6,8 @@ import copy
 import json
 import math
 import platform
+import random
+import re
 import secrets
 import shutil
 import subprocess
@@ -32,6 +34,8 @@ DEFAULT_ALBUMS_DIR = WORKSPACE_DIR / "albums"
 DEFAULT_IMPORT_JOBS_DIR = WORKSPACE_DIR / "reports" / "import_jobs"
 DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR = WORKSPACE_DIR / "reports" / "review_queue_prune"
 DEFAULT_IMAGE_REMOVAL_REPORTS_DIR = WORKSPACE_DIR / "reports" / "image_removals"
+DEFAULT_DATASET_SELECTIONS_DIR = WORKSPACE_DIR / "dataset_selections"
+DEFAULT_DATASETS_DIR = WORKSPACE_DIR / "datasets"
 DEFAULT_AUTO_DETECT_YOLOV8 = WORKSPACE_DIR / "runs" / "madhulika_manual_sts_balanced_v2_e150_img960" / "yolov8n_rectbbox_e150_img960" / "weights" / "best.pt"
 DEFAULT_AUTO_DETECT_MODEL_PATHS = {"yolov8n": DEFAULT_AUTO_DETECT_YOLOV8}
 DEFAULT_AUTO_DETECT_CONFIDENCE = 0.25
@@ -114,6 +118,11 @@ def repo_relative(path: str | Path) -> str:
         return str(candidate.relative_to(ROOT_DIR))
     except ValueError:
         return str(candidate)
+
+
+def slugify(value: str, fallback: str = "untitled") -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(value or "").strip()).strip("._-").lower()
+    return slug or fallback
 
 
 def path_is_relative_to(path: Path, parent: Path) -> bool:
@@ -2032,6 +2041,233 @@ def run_auto_detect_on_imported_reviews(
         "failed_count": counts["failed"],
         "items": items,
     }
+
+
+def album_name_map(albums_dir: str | Path) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for album in list_albums_summary(albums_dir):
+        album_id = str(album.get("album_id") or "")
+        if album_id:
+            names[album_id] = str(album.get("album_name") or album_id)
+    return names
+
+
+def review_label_counts(review: dict[str, Any]) -> dict[str, int]:
+    counts = {"ship": 0, "ships": 0, "neither": 0, "exportable": 0, "total": 0}
+    for detection in review.get("detections") or []:
+        if not isinstance(detection, dict):
+            continue
+        counts["total"] += 1
+        label = detection.get("review_label")
+        if label == "ship_non_sts":
+            counts["ship"] += 1
+            counts["exportable"] += 1
+        elif label == "ships_sts":
+            counts["ships"] += 1
+            counts["exportable"] += 1
+        elif label == "neither":
+            counts["neither"] += 1
+    return counts
+
+
+def list_dataset_candidates(
+    *,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    albums_dir: str | Path | None = None,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+    album_ids: list[str] | None = None,
+    required_labels: list[str] | None = None,
+    completed_only: bool = True,
+) -> dict[str, Any]:
+    """List review-backed image candidates; album filters match manifest album_ids only."""
+    manifest_file = repo_resolve(manifest_path)
+    album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
+    manifest_images = load_import_manifest(manifest_file).get("images", {}) if manifest_file.exists() else {}
+    names_by_album = album_name_map(album_root) if album_root.exists() else {}
+    album_filter = {str(value) for value in (album_ids or []) if str(value).strip()}
+    label_filter = {str(value) for value in (required_labels or []) if str(value).strip()}
+    candidates: list[dict[str, Any]] = []
+    split_counts = {"ship": 0, "ships": 0, "neither": 0, "exportable": 0, "total": 0}
+
+    for review in review_lib.list_review_documents(reviewer, reviews_dir):
+        image_key = str(review.get("image_key") or "")
+        if not image_key:
+            continue
+        if completed_only and review.get("review_status") != "completed":
+            continue
+        entry = manifest_images.get(image_key) or {}
+        candidate_album_ids = [str(value) for value in (entry.get("album_ids") or []) if str(value).strip()]
+        if album_filter and not album_filter.intersection(candidate_album_ids):
+            continue
+        counts = review_label_counts(review)
+        if label_filter:
+            matched = False
+            if "ship" in label_filter and counts["ship"] > 0:
+                matched = True
+            if "ships" in label_filter and counts["ships"] > 0:
+                matched = True
+            if "neither" in label_filter and counts["neither"] > 0:
+                matched = True
+            if "exportable" in label_filter and counts["exportable"] > 0:
+                matched = True
+            if not matched:
+                continue
+        for key, value in counts.items():
+            split_counts[key] += int(value)
+        review_path = Path(review.get("_path")) if review.get("_path") else review_lib.review_file_path(image_key, reviewer, reviews_dir)
+        candidates.append({
+            "image_key": image_key,
+            "image_filename": review.get("image_filename") or entry.get("original_filename") or f"{image_key}.png",
+            "review_status": review.get("review_status"),
+            "review_path": repo_relative(review_path),
+            "cache_path": review.get("cache_path") or entry.get("cache_path"),
+            "album_ids": candidate_album_ids,
+            "album_names": [names_by_album.get(album_id, album_id) for album_id in candidate_album_ids],
+            "source_display_name": entry.get("source_display_name"),
+            "counts": counts,
+        })
+
+    candidates.sort(key=lambda item: (str(item.get("image_filename") or ""), str(item.get("image_key") or "")))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "reviews_dir": repo_relative(reviews_dir),
+        "manifest_path": repo_relative(manifest_file),
+        "reviewer": reviewer,
+        "candidate_count": len(candidates),
+        "bbox_counts": split_counts,
+        "candidates": candidates,
+    }
+
+
+def auto_split_items(image_keys: list[str], *, seed: int = 42, ratios: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    ratios = ratios or {"train": 0.8, "val": 0.1, "test": 0.1}
+    unique_keys = list(dict.fromkeys(str(key) for key in image_keys if str(key).strip()))
+    rng = random.Random(seed)
+    rng.shuffle(unique_keys)
+    total = len(unique_keys)
+    if total == 0:
+        return []
+    train_count = int(round(total * float(ratios.get("train", 0.8))))
+    val_count = int(round(total * float(ratios.get("val", 0.1))))
+    if total >= 2 and val_count == 0:
+        val_count = 1
+    if train_count + val_count > total:
+        train_count = max(0, total - val_count)
+    split_by_key: dict[str, str] = {}
+    for index, image_key in enumerate(unique_keys):
+        if index < train_count:
+            split = "train"
+        elif index < train_count + val_count:
+            split = "val"
+        else:
+            split = "test"
+        split_by_key[image_key] = split
+    return [
+        {
+            "image_key": image_key,
+            "split": split_by_key[image_key],
+            "include_labels": "all_exportable",
+            "selected_detection_ids": None,
+        }
+        for image_key in sorted(unique_keys)
+    ]
+
+
+def selection_filename(dataset_name: str, dataset_version: str | int) -> str:
+    name_slug = slugify(dataset_name, "dataset")
+    version_slug = slugify(str(dataset_version), "v1")
+    return f"{name_slug}_{version_slug}.json"
+
+
+def save_dataset_selection(
+    *,
+    dataset_name: str,
+    dataset_version: str | int = "v1",
+    description: str | None = None,
+    image_keys: list[str],
+    selections_dir: str | Path = DEFAULT_DATASET_SELECTIONS_DIR,
+    datasets_dir: str | Path = DEFAULT_DATASETS_DIR,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+    album_ids: list[str] | None = None,
+    seed: int = 42,
+    split_ratios: dict[str, float] | None = None,
+    created_by: str | None = None,
+) -> dict[str, Any]:
+    clean_name = str(dataset_name or "").strip()
+    if not clean_name:
+        raise ValueError("dataset_name is required")
+    keys = list(dict.fromkeys(str(key) for key in image_keys if str(key).strip()))
+    if not keys:
+        raise ValueError("At least one image_key is required")
+    version = str(dataset_version or "v1").strip() or "v1"
+    ratios = split_ratios or {"train": 0.8, "val": 0.1, "test": 0.1}
+    output_name = slugify(f"{clean_name}_{version}", "dataset_v1")
+    now = utcnow_iso_for_training()
+    selection = {
+        "schema_version": SCHEMA_VERSION,
+        "dataset_name": clean_name,
+        "dataset_version": version,
+        "description": description or None,
+        "created_at": now,
+        "updated_at": now,
+        "created_by": created_by or reviewer,
+        "selection_mode": "image",
+        "classes": {str(class_id): class_name for class_id, class_name in CLASS_ID_TO_NAME.items()},
+        "sources": {
+            "reviews_dir": repo_relative(reviews_dir),
+            "manifest": repo_relative(manifest_path),
+            "reviewer": reviewer,
+            "album_ids": [str(value) for value in (album_ids or []) if str(value).strip()],
+        },
+        "split_policy": {
+            "mode": "auto_with_manual_override",
+            "default_ratios": ratios,
+            "seed": int(seed),
+        },
+        "items": auto_split_items(keys, seed=int(seed), ratios=ratios),
+        "background_negatives": {"enabled": False},
+        "export": {
+            "output_dir": repo_relative(repo_resolve(datasets_dir) / output_name),
+            "include_incomplete_reviews": False,
+        },
+    }
+    target = repo_resolve(selections_dir) / selection_filename(clean_name, version)
+    write_json(target, selection)
+    return {"selection_path": repo_relative(target), "selection": selection}
+
+
+def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTIONS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(selections_dir)
+    selections: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            selection = load_json(path)
+        except Exception:
+            continue
+        items = selection.get("items") or []
+        split_counts = {split: 0 for split in SPLITS}
+        for item in items:
+            split = str((item or {}).get("split") or "train")
+            if split in split_counts:
+                split_counts[split] += 1
+        export_dir = selection.get("export", {}).get("output_dir")
+        export_path = repo_resolve(export_dir) if export_dir else None
+        selections.append({
+            "selection_path": repo_relative(path),
+            "dataset_name": selection.get("dataset_name"),
+            "dataset_version": selection.get("dataset_version"),
+            "description": selection.get("description"),
+            "item_count": len(items),
+            "split_counts": split_counts,
+            "export_output_dir": export_dir,
+            "exported": bool(export_path and (export_path / "dataset_manifest.json").is_file()),
+            "updated_at": selection.get("updated_at") or selection.get("created_at"),
+        })
+    selections.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return selections
 
 
 def yaml_defines_required_classes(data_yaml: Path) -> bool:

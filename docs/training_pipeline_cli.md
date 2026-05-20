@@ -149,6 +149,60 @@ Example dry run:
   --dry-run
 ```
 
+### `list-dataset-candidates`
+
+Lists completed review images that can be saved into a Step 4 dataset selection. Candidates can be filtered by album and reviewed label class.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-dataset-candidates \
+  --reviewer gavin \
+  --album-id alb_abc123 \
+  --label exportable
+```
+
+Options:
+
+- `--manifest <path>`: import manifest. Defaults to `workspace/manifests/training_import_manifest.json`.
+- `--albums-dir <path>`: album ledger root. Defaults from the manifest path.
+- `--reviews-dir <path>`: review root. Defaults to `workspace/reviews`.
+- `--reviewer <name>`: reviewer folder. Defaults to `$USER`, or `default` when unset.
+- `--album-id <id>`: restrict to album membership, repeatable.
+- `--label ship|ships|neither|exportable`: restrict to candidates containing that reviewed label, repeatable.
+- `--include-incomplete`: include non-completed reviews. The default is completed reviews only.
+
+### `save-dataset-selection`
+
+Saves an image-level Step 4 dataset selection manifest with deterministic train/val/test splits.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py save-dataset-selection \
+  --dataset-name manual_reviewed_gavin \
+  --dataset-version v1 \
+  --image-key img_abc \
+  --image-key img_def
+```
+
+Options:
+
+- `--dataset-name <name>`: required human dataset name.
+- `--dataset-version <version>`: defaults to `v1`.
+- `--description <text>`: optional description stored in the selection.
+- `--image-key <key>`: selected whole image, repeatable and required.
+- `--album-id <id>`: source album metadata, repeatable.
+- `--seed <int>`: deterministic split seed. Defaults to `42`.
+- `--split-ratios train=0.8,val=0.1,test=0.1`: optional split ratios.
+- `--selections-dir <path>`: defaults to `workspace/dataset_selections`.
+- `--datasets-dir <path>`: default export root is `workspace/datasets`.
+- `--manifest`, `--reviews-dir`, `--reviewer`: source metadata stored in the selection.
+
+### `list-dataset-selections`
+
+Lists saved Step 4 dataset selection manifests and reports item and split counts.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-dataset-selections
+```
+
 ### `check-training-ready`
 
 Checks whether an exported dataset and training config are sufficient for YOLO training.

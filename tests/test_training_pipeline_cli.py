@@ -836,6 +836,139 @@ def test_cli_export_dataset_writes_yolo_layout_and_returns_paths_json(tmp_path: 
     assert (output_dir / "labels" / "train" / "img_train.txt").is_file()
 
 
+def test_cli_list_dataset_candidates_filters_by_album_and_label(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    write_review(
+        reviews_dir,
+        cache_dir,
+        reviewer="tester",
+        image_key="img_completed",
+        detections=[detection("auto-0001", "ship_non_sts"), detection("auto-0002", "ships_sts")],
+    )
+    write_review(
+        reviews_dir,
+        cache_dir,
+        reviewer="tester",
+        image_key="img_incomplete",
+        detections=[detection("auto-0003", "ships_sts")],
+        review_status="overview_1",
+    )
+    write_json(
+        manifest_path,
+        {
+            "schema_version": 1,
+            "manifest_type": "training_import",
+            "created_at": "2026-05-19T00:00:00Z",
+            "updated_at": "2026-05-19T00:00:00Z",
+            "cache_dir": str(cache_dir),
+            "images": {
+                "img_completed": {"image_key": "img_completed", "original_filename": "completed.png", "cache_path": str(cache_dir / "img_completed.png"), "album_ids": ["alb_a"]},
+                "img_incomplete": {"image_key": "img_incomplete", "original_filename": "incomplete.png", "cache_path": str(cache_dir / "img_incomplete.png"), "album_ids": ["alb_a"]},
+            },
+        },
+    )
+    write_json(
+        tmp_path / "albums" / "alb_a.json",
+        {
+            "schema_version": 1,
+            "album_id": "alb_a",
+            "album_name": "Album A",
+            "updated_at": "2026-05-19T00:00:00Z",
+            "images": [{"image_key": "img_completed"}, {"image_key": "img_incomplete"}],
+        },
+    )
+
+    process = run_cli(
+        "list-dataset-candidates",
+        "--manifest",
+        str(manifest_path),
+        "--reviews-dir",
+        str(reviews_dir),
+        "--reviewer",
+        "tester",
+        "--album-id",
+        "alb_a",
+        "--label",
+        "ships",
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="list-dataset-candidates", ok=True)
+    result = envelope["result"]
+    assert result["candidate_count"] == 1
+    assert result["bbox_counts"]["ships"] == 1
+    assert result["candidates"][0]["image_key"] == "img_completed"
+    assert result["candidates"][0]["album_names"] == ["Album A"]
+
+
+def test_cli_save_dataset_selection_writes_step4_manifest(tmp_path: Path) -> None:
+    selection_dir = tmp_path / "dataset_selections"
+    datasets_dir = tmp_path / "datasets"
+    process = run_cli(
+        "save-dataset-selection",
+        "--dataset-name",
+        "Fixture Data",
+        "--dataset-version",
+        "v2",
+        "--description",
+        "pytest selection",
+        "--image-key",
+        "img_b",
+        "--image-key",
+        "img_a",
+        "--seed",
+        "7",
+        "--selections-dir",
+        str(selection_dir),
+        "--datasets-dir",
+        str(datasets_dir),
+        "--reviews-dir",
+        str(tmp_path / "reviews"),
+        "--manifest",
+        str(tmp_path / "manifests" / "training_import_manifest.json"),
+        "--reviewer",
+        "tester",
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="save-dataset-selection", ok=True)
+    selection_path = Path(envelope["result"]["selection_path"])
+    assert selection_path.is_file()
+    selection = json.loads(selection_path.read_text())
+    assert selection["dataset_name"] == "Fixture Data"
+    assert selection["dataset_version"] == "v2"
+    assert selection["selection_mode"] == "image"
+    assert selection["export"]["output_dir"] == str(datasets_dir / "fixture_data_v2")
+    assert [item["image_key"] for item in selection["items"]] == ["img_a", "img_b"]
+
+
+def test_cli_list_dataset_selections_reports_saved_selection(tmp_path: Path) -> None:
+    selection_dir = tmp_path / "dataset_selections"
+    write_selection(
+        selection_dir / "fixture_dataset.json",
+        reviews_dir=tmp_path / "reviews",
+        output_dir=tmp_path / "datasets" / "fixture_dataset",
+        items=[
+            {"image_key": "img_train", "split": "train", "include_labels": "all_exportable", "selected_detection_ids": None},
+            {"image_key": "img_val", "split": "val", "include_labels": "all_exportable", "selected_detection_ids": None},
+        ],
+    )
+
+    process = run_cli("list-dataset-selections", "--selections-dir", str(selection_dir))
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="list-dataset-selections", ok=True)
+    selections = envelope["result"]["selections"]
+    assert len(selections) == 1
+    assert selections[0]["item_count"] == 2
+    assert selections[0]["split_counts"] == {"train": 1, "val": 1, "test": 0}
+
+
 def test_cli_build_train_command_prints_command_list_json(tmp_path: Path) -> None:
     reviews_dir = tmp_path / "reviews"
     cache_dir = tmp_path / "cache"

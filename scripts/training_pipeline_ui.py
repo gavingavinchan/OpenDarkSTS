@@ -3208,6 +3208,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/albums":
             self._handle_list_albums()
             return
+        if path == "/api/dataset-candidates":
+            self._handle_dataset_candidates(parsed)
+            return
+        if path == "/api/dataset-selections":
+            self._handle_list_dataset_selections()
+            return
         if path.startswith("/api/albums/"):
             album_id = path[len("/api/albums/"):].strip("/")
             if album_id and "/" not in album_id:
@@ -3238,6 +3244,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/albums":
             self._handle_create_album()
+            return
+        if parsed.path == "/api/dataset-selections":
+            self._handle_save_dataset_selection()
+            return
+        if parsed.path == "/api/dataset-selections/export":
+            self._handle_export_dataset_selection()
             return
         if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/add-images"):
             album_id = parsed.path[len("/api/albums/"):-len("/add-images")].strip("/")
@@ -3362,6 +3374,82 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json({"error": str(exc)}, status=500)
             return
         self._respond_json({"albums": summaries})
+
+    def _handle_dataset_candidates(self, parsed) -> None:
+        query = parse_qs(parsed.query)
+        try:
+            result = pipeline.list_dataset_candidates(
+                reviews_dir=REVIEWS_DIR,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                albums_dir=pipeline.default_albums_dir_for_manifest(IMPORT_MANIFEST_PATH),
+                reviewer=IMPORT_REVIEWER,
+                album_ids=[str(value) for value in query.get("album_id") or [] if str(value).strip()],
+                required_labels=[str(value) for value in query.get("label") or [] if str(value).strip()],
+                completed_only=not query_bool(parsed, "include_incomplete", False),
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_list_dataset_selections(self) -> None:
+        try:
+            selections = pipeline.list_dataset_selections(pipeline.DEFAULT_DATASET_SELECTIONS_DIR)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"selections": selections})
+
+    def _handle_save_dataset_selection(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.save_dataset_selection(
+                dataset_name=str(payload.get("dataset_name") or "").strip(),
+                dataset_version=str(payload.get("dataset_version") or "v1").strip() or "v1",
+                description=payload.get("description"),
+                image_keys=[str(value) for value in (payload.get("image_keys") or []) if str(value).strip()],
+                selections_dir=pipeline.DEFAULT_DATASET_SELECTIONS_DIR,
+                datasets_dir=pipeline.DEFAULT_DATASETS_DIR,
+                reviews_dir=REVIEWS_DIR,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                reviewer=IMPORT_REVIEWER,
+                album_ids=[str(value) for value in (payload.get("album_ids") or []) if str(value).strip()],
+                seed=int(payload.get("seed") or 42),
+                split_ratios=payload.get("split_ratios"),
+                created_by=IMPORT_REVIEWER,
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json({
+            "selection_path": result["selection_path"],
+            "selection": result["selection"],
+        }, status=201)
+
+    def _handle_export_dataset_selection(self) -> None:
+        try:
+            payload = self._json_body()
+            selection_path = payload.get("selection_path")
+            if not selection_path:
+                self._respond_json({"error": "selection_path is required"}, status=400)
+                return
+            manifest = pipeline.export_dataset_selection(
+                selection_path,
+                output_dir_override=payload.get("output_dir"),
+                include_incomplete_override=payload.get("include_incomplete_reviews"),
+            )
+            selection = pipeline.load_json(selection_path)
+            dataset_dir = pipeline.repo_resolve(payload.get("output_dir") or selection.get("export", {}).get("output_dir"))
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json({
+            "dataset_dir": str(dataset_dir),
+            "dataset_manifest": str(dataset_dir / "dataset_manifest.json"),
+            "data_yaml": str(dataset_dir / "data.yaml"),
+            "exported_image_count": len(manifest.get("exported_image_keys") or []),
+            "warnings": list(manifest.get("warnings") or []),
+        })
 
     def _handle_show_album(self, album_id: str) -> None:
         try:

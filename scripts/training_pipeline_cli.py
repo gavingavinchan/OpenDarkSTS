@@ -125,6 +125,21 @@ def parse_model_path_args(values: list[str] | None) -> dict[str, str] | None:
     return parsed
 
 
+def parse_split_ratios(value: str | None) -> dict[str, float] | None:
+    if not value:
+        return None
+    ratios: dict[str, float] = {}
+    for item in value.split(","):
+        if "=" not in item:
+            raise ValueError("split ratios must be comma-separated key=value pairs")
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if key not in {"train", "val", "test"}:
+            raise ValueError(f"Unknown split ratio key: {key}")
+        ratios[key] = float(raw_value.strip())
+    return ratios
+
+
 def command_export_dataset(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     selection = pipeline.load_json(args.selection)
     if args.output_dir:
@@ -166,6 +181,53 @@ def command_export_dataset(args: argparse.Namespace) -> tuple[int, dict[str, Any
     }
     add_diagnostics(result, args, "export_dataset_selection", selection_path=args.selection, dataset_dir=dataset_dir)
     return 0, envelope("export-dataset", ok=True, result=result, warnings=list(manifest.get("warnings") or []))
+
+
+def command_list_dataset_candidates(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.list_dataset_candidates(
+        reviews_dir=args.reviews_dir,
+        manifest_path=args.manifest,
+        albums_dir=args.albums_dir,
+        reviewer=args.reviewer,
+        album_ids=list(args.album_id or []),
+        required_labels=list(args.label or []),
+        completed_only=not bool(args.include_incomplete),
+    )
+    add_diagnostics(result, args, "list_dataset_candidates", reviews_dir=args.reviews_dir, manifest_path=args.manifest)
+    return 0, envelope("list-dataset-candidates", ok=True, result=result)
+
+
+def command_save_dataset_selection(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.save_dataset_selection(
+        dataset_name=args.dataset_name,
+        dataset_version=args.dataset_version,
+        description=args.description,
+        image_keys=list(args.image_key or []),
+        selections_dir=args.selections_dir,
+        datasets_dir=args.datasets_dir,
+        reviews_dir=args.reviews_dir,
+        manifest_path=args.manifest,
+        reviewer=args.reviewer,
+        album_ids=list(args.album_id or []),
+        seed=int(args.seed),
+        split_ratios=parse_split_ratios(args.split_ratios),
+        created_by=args.created_by,
+    )
+    payload = {
+        "selection_path": result["selection_path"],
+        "dataset_name": result["selection"]["dataset_name"],
+        "dataset_version": result["selection"]["dataset_version"],
+        "item_count": len(result["selection"].get("items") or []),
+        "export_output_dir": result["selection"].get("export", {}).get("output_dir"),
+    }
+    add_diagnostics(payload, args, "save_dataset_selection", selections_dir=args.selections_dir)
+    return 0, envelope("save-dataset-selection", ok=True, result=payload)
+
+
+def command_list_dataset_selections(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = {"selections": pipeline.list_dataset_selections(args.selections_dir)}
+    add_diagnostics(result, args, "list_dataset_selections", selections_dir=args.selections_dir)
+    return 0, envelope("list-dataset-selections", ok=True, result=result)
 
 
 def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -456,6 +518,36 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--include-incomplete", action="store_true")
     export_parser.add_argument("--dry-run", action="store_true")
     export_parser.set_defaults(handler=command_export_dataset)
+
+    candidates_parser = subparsers.add_parser("list-dataset-candidates")
+    candidates_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    candidates_parser.add_argument("--albums-dir")
+    candidates_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    candidates_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    candidates_parser.add_argument("--album-id", action="append")
+    candidates_parser.add_argument("--label", action="append", choices=["ship", "ships", "neither", "exportable"])
+    candidates_parser.add_argument("--include-incomplete", action="store_true")
+    candidates_parser.set_defaults(handler=command_list_dataset_candidates)
+
+    save_selection_parser = subparsers.add_parser("save-dataset-selection")
+    save_selection_parser.add_argument("--dataset-name", required=True)
+    save_selection_parser.add_argument("--dataset-version", default="v1")
+    save_selection_parser.add_argument("--description")
+    save_selection_parser.add_argument("--image-key", action="append", required=True)
+    save_selection_parser.add_argument("--album-id", action="append")
+    save_selection_parser.add_argument("--seed", type=int, default=42)
+    save_selection_parser.add_argument("--split-ratios", help="Comma-separated train=0.8,val=0.1,test=0.1")
+    save_selection_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))
+    save_selection_parser.add_argument("--datasets-dir", default=str(pipeline.DEFAULT_DATASETS_DIR))
+    save_selection_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    save_selection_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    save_selection_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    save_selection_parser.add_argument("--created-by")
+    save_selection_parser.set_defaults(handler=command_save_dataset_selection)
+
+    list_selections_parser = subparsers.add_parser("list-dataset-selections")
+    list_selections_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))
+    list_selections_parser.set_defaults(handler=command_list_dataset_selections)
 
     ready_parser = subparsers.add_parser("check-training-ready")
     ready_parser.add_argument("--selection", required=True)
