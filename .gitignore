@@ -73,3 +73,16 @@ workspace/
 *.jpg
 *.jpeg
 *.mp4
+
+# Two-CLI council coordination (peer notes, signal server config, runtime)
+council/
+
+# Per-CLI / per-tool local state and skill caches
+.agents/
+.claude/
+.opencode/
+.mcp.json
+opencode.jsonc
+SKILL.md
+skills-lock.json
+
