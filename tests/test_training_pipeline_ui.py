@@ -154,6 +154,7 @@ def test_step4_api_lists_and_saves_dataset_selection(tmp_path: Path, monkeypatch
     monkeypatch.setattr(ui, "IMPORT_REVIEWER", "tester")
     monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASET_SELECTIONS_DIR", tmp_path / "dataset_selections")
     monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASETS_DIR", tmp_path / "datasets")
+    monkeypatch.setattr(ui, "cache_url_for", lambda path: f"/cache/{Path(path).name}" if path else None)
 
     with UiServer(ui.TrainingPipelineHandler) as server:
         candidates = get_json(server.base_url + "/api/dataset-candidates")
@@ -165,9 +166,24 @@ def test_step4_api_lists_and_saves_dataset_selection(tmp_path: Path, monkeypatch
 
     assert candidates["candidate_count"] == 1
     assert candidates["candidates"][0]["image_key"] == "img_api"
+    assert candidates["candidates"][0]["cache_url"] == "/cache/img_api.png"
     assert saved["selection"]["dataset_name"] == "API Fixture"
     assert Path(saved["selection_path"]).is_file()
     assert listed["selections"][0]["dataset_name"] == "API Fixture"
+
+
+def test_step4_dataset_selection_page_route() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        with urllib.request.urlopen(server.base_url + "/dataset-selection", timeout=5) as response:
+            html = response.read().decode("utf-8")
+
+    assert response.status == 200
+    assert "Dataset Selection" in html
+    assert "/api/dataset-candidates" in html
+    assert "/api/dataset-selections" in html
+    assert "training-ui-interaction" in html
 
 
 def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> None:

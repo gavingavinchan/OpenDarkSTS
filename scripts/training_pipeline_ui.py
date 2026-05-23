@@ -508,6 +508,716 @@ def render_import_html() -> str:
     return IMPORT_HTML.replace("__MANUAL_REVIEW_HREF__", MANUAL_REVIEW_URL.rstrip("/") + "/")
 
 
+def render_dataset_selection_html() -> str:
+    return DATASET_SELECTION_HTML.replace("__MANUAL_REVIEW_HREF__", MANUAL_REVIEW_URL.rstrip("/") + "/")
+
+
+DATASET_SELECTION_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Dataset Selection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #111713;
+      --ink-soft: #2a3530;
+      --muted: #6f7a6e;
+      --paper: #ece7da;
+      --paper-warm: #e6dfca;
+      --paper-cool: #d9e1d7;
+      --card: #f8f4e8;
+      --card-deep: #efe7d2;
+      --line: rgba(17, 23, 19, 0.18);
+      --line-strong: rgba(17, 23, 19, 0.42);
+      --green: #0f6b4f;
+      --red: #a83226;
+      --blue: #2458a6;
+      --amber: #b7791f;
+      --stamp: #7a1f12;
+      --stamp-deep: #4d1109;
+      --rule: rgba(17, 23, 19, 0.12);
+      --shadow: 0 18px 48px rgba(17, 23, 19, 0.16);
+      --serif: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", "Cascadia Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 12% -10%, rgba(122, 31, 18, 0.06), transparent 60%),
+        radial-gradient(900px 700px at 110% 110%, rgba(15, 107, 79, 0.07), transparent 60%),
+        linear-gradient(90deg, rgba(17, 23, 19, 0.045) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(180deg, #ded7c5 0%, #f2eddf 48%, #d9e1d7 100%);
+      font-family: var(--sans);
+      font-feature-settings: "ss01", "cv11";
+    }
+    body::before {
+      content: "";
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+      mix-blend-mode: multiply;
+      opacity: 0.55;
+    }
+    .shell { position: relative; z-index: 1; min-height: 100vh; display: grid; grid-template-rows: auto auto 1fr; }
+    header {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) auto;
+      gap: 28px;
+      align-items: end;
+      padding: 22px 36px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 244, 232, 0.72);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 6;
+    }
+    .titleblock { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; }
+    .filenum {
+      font-family: var(--serif);
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(56px, 6vw, 96px);
+      line-height: 0.85;
+      color: var(--stamp);
+      letter-spacing: -0.04em;
+      transform: translateY(4px);
+    }
+    .filenum sup { font-size: 0.42em; vertical-align: super; color: var(--muted); font-style: normal; letter-spacing: 0.18em; font-family: var(--sans); font-weight: 700; padding-left: 4px; }
+    h1 {
+      margin: 0;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(30px, 3.4vw, 50px);
+      letter-spacing: -0.035em;
+      line-height: 1.0;
+    }
+    h1 em { font-style: italic; font-weight: 400; color: var(--ink-soft); }
+    .subtitle { margin: 8px 0 0; color: var(--muted); font-size: 13px; max-width: 56ch; letter-spacing: 0.01em; }
+    .rail { display: flex; gap: 7px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+    .stage {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 11px;
+      background: rgba(255, 255, 255, 0.36);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }
+    .stage.active { background: var(--ink); color: var(--card); border-color: var(--ink); }
+    .stage:hover:not(.active):not(span) { background: rgba(255, 255, 255, 0.8); color: var(--ink); }
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 14px 36px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(239, 231, 210, 0.72);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 92px;
+      z-index: 4;
+    }
+    input, select, textarea, button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 12px;
+      font: inherit;
+      font-size: 13px;
+      background: rgba(248, 244, 232, 0.92);
+      color: var(--ink);
+    }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--green); outline-offset: -1px; border-color: var(--green); }
+    textarea { min-height: 72px; resize: vertical; }
+    button { cursor: pointer; font-weight: 700; letter-spacing: 0.02em; border-radius: 6px; transition: background 120ms ease, border-color 120ms ease; }
+    button:hover:not(:disabled) { background: rgba(248, 244, 232, 1); }
+    button.primary { background: var(--ink); border-color: var(--ink); color: var(--card); }
+    button.primary:hover:not(:disabled) { background: var(--ink-soft); }
+    button.secondary { background: rgba(36, 88, 166, 0.10); border-color: rgba(36, 88, 166, 0.24); color: var(--blue); }
+    button.secondary:hover:not(:disabled) { background: rgba(36, 88, 166, 0.18); }
+    button:disabled { cursor: not-allowed; opacity: 0.38; }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr) 360px;
+      min-height: 0;
+    }
+    .panel, aside {
+      border-right: 1px solid var(--line);
+      background: rgba(248, 244, 232, 0.60);
+      padding: 22px;
+    }
+    aside { border-right: 0; border-left: 1px solid var(--line); }
+    .sticky { position: sticky; top: 154px; max-height: calc(100vh - 154px); overflow: auto; }
+    .panel h2, aside h2 {
+      margin: 0 0 14px;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+    .section { display: grid; gap: 12px; margin-bottom: 24px; }
+    .checkrow { display: flex; gap: 9px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+    .album-list { display: grid; gap: 6px; }
+    .album-choice {
+      display: flex; gap: 9px; align-items: flex-start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.28);
+      padding: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--muted);
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .album-choice:hover { background: rgba(255, 255, 255, 0.56); border-color: var(--line-strong); }
+    .album-choice:has(input:checked) { background: rgba(15, 107, 79, 0.08); border-color: rgba(15, 107, 79, 0.36); }
+    .album-choice strong { display: block; color: var(--ink); }
+    .album-choice small { display: block; margin-top: 2px; }
+    .contact-sheet { padding: 22px 36px 40px; min-width: 0; }
+    .stats { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: rgba(248, 244, 232, 0.82);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .stat strong { color: var(--ink); font-weight: 700; font-family: var(--mono); font-size: 12px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(17, 23, 19, 0.06);
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    }
+    .tile:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(17, 23, 19, 0.12); }
+    .tile.selected { border-color: var(--green); box-shadow: 0 0 0 2px rgba(15, 107, 79, 0.22), 0 6px 20px rgba(17, 23, 19, 0.12); }
+    .thumb { aspect-ratio: 1.35 / 1; display: grid; place-items: center; background: #14201a; color: rgba(255, 250, 240, 0.5); font-size: 12px; overflow: hidden; }
+    .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .tile-meta { padding: 10px 12px; display: grid; gap: 6px; }
+    .tile-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .tile-title { font-weight: 700; font-size: 12px; overflow-wrap: anywhere; line-height: 1.3; }
+    .tile-sub { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge-row { display: flex; gap: 4px; flex-wrap: wrap; }
+    .badge { border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; }
+    .badge.ship { background: rgba(36, 88, 166, 0.12); color: var(--blue); }
+    .badge.ships { background: rgba(168, 50, 38, 0.12); color: var(--red); }
+    .badge.neither { background: rgba(17, 23, 19, 0.07); color: var(--muted); }
+    .badge.album { background: rgba(15, 107, 79, 0.10); color: var(--green); }
+    .composer { display: grid; gap: 16px; }
+    .field { display: grid; gap: 5px; }
+    .field label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .split-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .saved-list { display: grid; gap: 6px; }
+    .saved-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.28);
+      padding: 10px 12px;
+      display: grid;
+      gap: 6px;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .saved-item:hover { background: rgba(255, 255, 255, 0.48); }
+    .saved-item.active { border-color: var(--green); background: rgba(15, 107, 79, 0.06); }
+    .saved-title { font-weight: 700; font-size: 13px; }
+    .saved-meta { color: var(--muted); font-size: 12px; }
+    .hint { color: var(--muted); font-size: 12px; font-style: italic; }
+    .empty { color: var(--muted); font-size: 13px; }
+    .mono { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; color: var(--muted); }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(18px);
+      opacity: 0;
+      pointer-events: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--ink);
+      color: var(--card);
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 20;
+      max-width: 420px;
+      text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+    .toast.error { background: var(--red); }
+    @media (max-width: 1120px) {
+      header, .toolbar { position: static; grid-template-columns: 1fr; }
+      .rail { justify-content: flex-start; }
+      .layout { grid-template-columns: 1fr; }
+      .panel, aside { border: 0; border-bottom: 1px solid var(--line); }
+      .sticky { position: static; max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">04<sup>/07</sup></div>
+        <div>
+          <h1>Dataset <em>Selection</em></h1>
+          <p class="subtitle">Assemble a reproducible image-level YOLO dataset from completed reviews. Filter by album, inspect class balance, save a manifest, then export.</p>
+        </div>
+      </div>
+      <nav class="rail" aria-label="Training pipeline stages">
+        <a class="stage" href="/import">Import Data</a>
+        <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
+        <a class="stage" href="/bbox-overview">BBox Overview</a>
+        <a class="stage active" href="/dataset-selection">Dataset Selection</a>
+        <span class="stage">Training Setup</span>
+        <span class="stage">Train YOLO</span>
+        <span class="stage">Evaluate</span>
+      </nav>
+    </header>
+
+    <section class="toolbar">
+      <input id="search" placeholder="Search image, album, source" autocomplete="off">
+      <select id="labelFilter">
+        <option value="all">All labels</option>
+        <option value="exportable">Exportable only</option>
+        <option value="ship">Ship only</option>
+        <option value="ships">Ships only</option>
+        <option value="neither">Neither only</option>
+      </select>
+      <label class="checkrow"><input id="includeIncomplete" type="checkbox"> Include incomplete</label>
+      <button class="secondary" id="reloadBtn">Refresh</button>
+    </section>
+
+    <main class="layout">
+      <section class="panel"><div class="sticky">
+        <div class="section">
+          <h2>Albums</h2>
+          <p class="hint">Select one or more albums. Leave blank to use every completed review.</p>
+          <div class="album-list" id="albumList"></div>
+        </div>
+      </div></section>
+
+      <section class="contact-sheet">
+        <div class="stats" id="stats"></div>
+        <div class="actions">
+          <button id="selectVisibleBtn">Select Visible</button>
+          <button id="clearBtn">Clear</button>
+        </div>
+        <div class="grid" id="grid"></div>
+      </section>
+
+      <aside><div class="sticky composer">
+        <section class="section">
+          <h2>Selection Manifest</h2>
+          <div class="stats" id="selectionStats"></div>
+          <div class="field"><label for="datasetName">Dataset name</label><input id="datasetName" value="manual_reviewed"></div>
+          <div class="field"><label for="datasetVersion">Version</label><input id="datasetVersion" value="v1"></div>
+          <div class="field"><label for="description">Description</label><textarea id="description" placeholder="Optional notes for future retraining"></textarea></div>
+          <div class="split-row">
+            <div class="field"><label for="trainRatio">Train</label><input id="trainRatio" type="number" min="0" max="1" step="0.05" value="0.8"></div>
+            <div class="field"><label for="valRatio">Val</label><input id="valRatio" type="number" min="0" max="1" step="0.05" value="0.1"></div>
+            <div class="field"><label for="testRatio">Test</label><input id="testRatio" type="number" min="0" max="1" step="0.05" value="0.1"></div>
+          </div>
+          <button class="primary" id="saveBtn">Save Selection</button>
+          <button id="exportBtn" disabled>Export YOLO Dataset</button>
+          <button id="continueBtn" disabled>Continue To Training Setup</button>
+          <p class="hint" id="selectionPathHint">Save a selection to enable export.</p>
+        </section>
+        <section class="section">
+          <h2>Saved</h2>
+          <div class="saved-list" id="savedList"></div>
+        </section>
+      </div></aside>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const stateKey = 'opendarksts.datasetSelection.state.v1';
+    const state = {
+      albums: [],
+      candidates: [],
+      saved: [],
+      selectedKeys: [],
+      selectedAlbumIds: [],
+      search: '',
+      label: 'all',
+      includeIncomplete: false,
+      currentSelectionPath: null,
+    };
+
+    function escape(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[ch]);
+    }
+    function showToast(message, kind) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.toggle('error', kind === 'error');
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+    function logAction(action, details) {
+      const payload = {
+        action,
+        timestamp: new Date().toISOString(),
+        page: 'dataset-selection',
+        filter: { album_ids: state.selectedAlbumIds, label: state.label, include_incomplete: state.includeIncomplete, search: state.search },
+        selected_count: state.selectedKeys.length,
+        details: details || {},
+      };
+      const body = JSON.stringify(payload);
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/training-ui-interaction', new Blob([body], { type: 'application/json' }));
+          return;
+        }
+      } catch (e) {}
+      fetch('/api/training-ui-interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
+    }
+    function persistState() {
+      localStorage.setItem(stateKey, JSON.stringify({
+        selectedKeys: state.selectedKeys,
+        selectedAlbumIds: state.selectedAlbumIds,
+        search: state.search,
+        label: state.label,
+        includeIncomplete: state.includeIncomplete,
+        currentSelectionPath: state.currentSelectionPath,
+      }));
+    }
+    function restoreState() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(stateKey) || '{}');
+        if (Array.isArray(raw.selectedKeys)) state.selectedKeys = raw.selectedKeys.filter(x => typeof x === 'string');
+        if (Array.isArray(raw.selectedAlbumIds)) state.selectedAlbumIds = raw.selectedAlbumIds.filter(x => typeof x === 'string');
+        if (typeof raw.search === 'string') state.search = raw.search;
+        if (typeof raw.label === 'string') state.label = raw.label;
+        if (typeof raw.includeIncomplete === 'boolean') state.includeIncomplete = raw.includeIncomplete;
+        if (typeof raw.currentSelectionPath === 'string') state.currentSelectionPath = raw.currentSelectionPath;
+      } catch (e) {}
+    }
+    function candidateCacheUrl(candidate) {
+      if (candidate.cache_url) return candidate.cache_url;
+      const raw = candidate.cache_path || '';
+      if (!raw || raw.startsWith('/')) return '';
+      return '/cache/' + raw.replace(/^[/]+/, '');
+    }
+    function filteredCandidates() {
+      const q = state.search.trim().toLowerCase();
+      if (!q) return state.candidates;
+      return state.candidates.filter(candidate => [
+        candidate.image_key,
+        candidate.image_filename,
+        candidate.source_display_name,
+        ...(candidate.album_names || []),
+      ].join(' ').toLowerCase().includes(q));
+    }
+    function selectedCandidates() {
+      const selected = new Set(state.selectedKeys);
+      return state.candidates.filter(candidate => selected.has(candidate.image_key));
+    }
+    function countBboxes(candidates) {
+      return candidates.reduce((acc, candidate) => {
+        const counts = candidate.counts || {};
+        acc.ship += Number(counts.ship || 0);
+        acc.ships += Number(counts.ships || 0);
+        acc.neither += Number(counts.neither || 0);
+        acc.total += Number(counts.total || 0);
+        return acc;
+      }, { ship: 0, ships: 0, neither: 0, total: 0 });
+    }
+    function stat(label, value) {
+      return `<span class="stat"><strong>${escape(value)}</strong> ${escape(label)}</span>`;
+    }
+    function renderAlbums() {
+      const host = document.getElementById('albumList');
+      if (!state.albums.length) {
+        host.innerHTML = '<p class="empty">No albums yet.</p>';
+        return;
+      }
+      host.innerHTML = state.albums.map(album => {
+        const checked = state.selectedAlbumIds.includes(album.album_id) ? 'checked' : '';
+        const reviewed = album.reviewed_count == null ? '-' : album.reviewed_count;
+        return `<label class="album-choice">
+          <input type="checkbox" data-album-id="${escape(album.album_id)}" ${checked}>
+          <span><strong>${escape(album.album_name || album.album_id)}</strong><small>${escape(album.image_count || 0)} images, ${escape(reviewed)} reviewed</small></span>
+        </label>`;
+      }).join('');
+      host.querySelectorAll('input[data-album-id]').forEach(input => {
+        input.onchange = () => {
+          const albumId = input.getAttribute('data-album-id');
+          const set = new Set(state.selectedAlbumIds);
+          if (input.checked) set.add(albumId); else set.delete(albumId);
+          state.selectedAlbumIds = Array.from(set);
+          logAction('album_filter_changed', { album_ids: state.selectedAlbumIds });
+          persistState();
+          loadCandidates();
+        };
+      });
+    }
+    function renderStats() {
+      const visible = filteredCandidates();
+      const selected = selectedCandidates();
+      const visibleCounts = countBboxes(visible);
+      const selectedCounts = countBboxes(selected);
+      document.getElementById('stats').innerHTML = [
+        stat('visible images', visible.length),
+        stat('ship boxes', visibleCounts.ship),
+        stat('ships boxes', visibleCounts.ships),
+        stat('neither boxes', visibleCounts.neither),
+      ].join('');
+      document.getElementById('selectionStats').innerHTML = [
+        stat('selected images', selected.length),
+        stat('ship', selectedCounts.ship),
+        stat('ships', selectedCounts.ships),
+        stat('total boxes', selectedCounts.total),
+      ].join('');
+      document.getElementById('saveBtn').disabled = selected.length === 0;
+      document.getElementById('exportBtn').disabled = !state.currentSelectionPath;
+      document.getElementById('continueBtn').disabled = !state.currentSelectionPath;
+      document.getElementById('selectionPathHint').textContent = state.currentSelectionPath ? state.currentSelectionPath : 'Save a selection to enable export.';
+    }
+    function renderGrid() {
+      const visible = filteredCandidates();
+      const selected = new Set(state.selectedKeys);
+      const host = document.getElementById('grid');
+      if (!visible.length) {
+        host.innerHTML = '<p class="empty">No dataset candidates match these filters.</p>';
+        renderStats();
+        return;
+      }
+      host.innerHTML = visible.map(candidate => {
+        const counts = candidate.counts || {};
+        const checked = selected.has(candidate.image_key) ? 'checked' : '';
+        const selectedClass = checked ? ' selected' : '';
+        const imageUrl = candidateCacheUrl(candidate);
+        const albums = (candidate.album_names || []).slice(0, 3).map(name => `<span class="badge album">${escape(name)}</span>`).join('');
+        return `<article class="tile${selectedClass}" data-image-key="${escape(candidate.image_key)}">
+          <div class="thumb">${imageUrl ? `<img src="${escape(imageUrl)}" alt="">` : 'No preview'}</div>
+          <div class="tile-meta">
+            <div class="tile-head"><div class="tile-title">${escape(candidate.image_filename || candidate.image_key)}</div><input type="checkbox" ${checked} aria-label="Select ${escape(candidate.image_key)}"></div>
+            <div class="tile-sub mono">${escape(candidate.image_key)}</div>
+            <div class="badge-row">
+              <span class="badge ship">ship ${escape(counts.ship || 0)}</span>
+              <span class="badge ships">ships ${escape(counts.ships || 0)}</span>
+              <span class="badge neither">neither ${escape(counts.neither || 0)}</span>
+              ${albums}
+            </div>
+          </div>
+        </article>`;
+      }).join('');
+      host.querySelectorAll('.tile').forEach(tile => {
+        tile.onclick = event => {
+          if (event.target && event.target.tagName === 'INPUT') event.stopPropagation();
+          const key = tile.getAttribute('data-image-key');
+          toggleSelection(key);
+        };
+        const box = tile.querySelector('input[type="checkbox"]');
+        box.onclick = event => { event.stopPropagation(); toggleSelection(tile.getAttribute('data-image-key')); };
+      });
+      renderStats();
+    }
+    function renderSaved() {
+      const host = document.getElementById('savedList');
+      if (!state.saved.length) {
+        host.innerHTML = '<p class="empty">No saved selections yet.</p>';
+        return;
+      }
+      host.innerHTML = state.saved.map(item => {
+        const active = item.selection_path === state.currentSelectionPath ? ' active' : '';
+        return `<article class="saved-item${active}" data-selection-path="${escape(item.selection_path)}">
+          <div class="saved-title">${escape(item.dataset_name || item.name || 'Dataset')}</div>
+          <div class="saved-meta">${escape(item.dataset_version || '')} · ${escape(item.item_count || 0)} images</div>
+          <div class="mono">${escape(item.selection_path || '')}</div>
+          <button>Select</button>
+        </article>`;
+      }).join('');
+      host.querySelectorAll('.saved-item button').forEach(button => {
+        button.onclick = () => {
+          state.currentSelectionPath = button.closest('.saved-item').getAttribute('data-selection-path');
+          logAction('saved_selection_selected', { selection_path: state.currentSelectionPath });
+          persistState();
+          renderSaved();
+          renderStats();
+        };
+      });
+    }
+    function render() {
+      document.getElementById('search').value = state.search;
+      document.getElementById('labelFilter').value = state.label;
+      document.getElementById('includeIncomplete').checked = state.includeIncomplete;
+      renderAlbums();
+      renderGrid();
+      renderSaved();
+    }
+    function toggleSelection(key) {
+      const set = new Set(state.selectedKeys);
+      if (set.has(key)) set.delete(key); else set.add(key);
+      state.selectedKeys = Array.from(set);
+      logAction('candidate_selection_toggled', { image_key: key, selected: set.has(key) });
+      persistState();
+      renderGrid();
+    }
+    function selectVisible() {
+      const set = new Set(state.selectedKeys);
+      for (const candidate of filteredCandidates()) set.add(candidate.image_key);
+      state.selectedKeys = Array.from(set);
+      logAction('select_visible', { visible_count: filteredCandidates().length });
+      persistState();
+      renderGrid();
+    }
+    function clearSelection() {
+      state.selectedKeys = [];
+      state.currentSelectionPath = null;
+      logAction('clear_selection');
+      persistState();
+      renderGrid();
+      renderSaved();
+    }
+    function queryForCandidates() {
+      const params = new URLSearchParams();
+      for (const albumId of state.selectedAlbumIds) params.append('album_id', albumId);
+      if (state.label && state.label !== 'all') params.append('label', state.label);
+      if (state.includeIncomplete) params.set('include_incomplete', '1');
+      return params.toString() ? '?' + params.toString() : '';
+    }
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || response.statusText);
+      return payload;
+    }
+    async function loadAlbums() {
+      const payload = await fetchJson('/api/albums');
+      state.albums = payload.albums || [];
+    }
+    async function loadSelections() {
+      const payload = await fetchJson('/api/dataset-selections');
+      state.saved = payload.selections || [];
+    }
+    async function loadCandidates() {
+      try {
+        const payload = await fetchJson('/api/dataset-candidates' + queryForCandidates());
+        state.candidates = payload.candidates || [];
+        const known = new Set(state.candidates.map(candidate => candidate.image_key));
+        state.selectedKeys = state.selectedKeys.filter(key => known.has(key));
+        persistState();
+        render();
+        logAction('candidates_loaded', { candidate_count: state.candidates.length });
+      } catch (error) {
+        showToast('Could not load candidates: ' + error.message, 'error');
+        logAction('candidates_load_error', { message: error.message });
+      }
+    }
+    function splitRatios() {
+      return {
+        train: Number(document.getElementById('trainRatio').value || 0),
+        val: Number(document.getElementById('valRatio').value || 0),
+        test: Number(document.getElementById('testRatio').value || 0),
+      };
+    }
+    async function saveSelection() {
+      const imageKeys = selectedCandidates().map(candidate => candidate.image_key);
+      const payload = {
+        dataset_name: document.getElementById('datasetName').value.trim(),
+        dataset_version: document.getElementById('datasetVersion').value.trim() || 'v1',
+        description: document.getElementById('description').value.trim() || null,
+        image_keys: imageKeys,
+        album_ids: state.selectedAlbumIds,
+        split_ratios: splitRatios(),
+      };
+      if (!payload.dataset_name) {
+        showToast('Dataset name is required', 'error');
+        return;
+      }
+      try {
+        logAction('save_selection_started', { image_count: imageKeys.length, dataset_name: payload.dataset_name, dataset_version: payload.dataset_version });
+        const result = await fetchJson('/api/dataset-selections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        state.currentSelectionPath = result.selection_path;
+        await loadSelections();
+        persistState();
+        renderSaved();
+        renderStats();
+        showToast('Selection saved');
+        logAction('save_selection_done', { selection_path: result.selection_path, image_count: imageKeys.length });
+      } catch (error) {
+        showToast('Save failed: ' + error.message, 'error');
+        logAction('save_selection_error', { message: error.message });
+      }
+    }
+    async function exportSelection() {
+      if (!state.currentSelectionPath) return;
+      try {
+        logAction('export_selection_started', { selection_path: state.currentSelectionPath });
+        const result = await fetchJson('/api/dataset-selections/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selection_path: state.currentSelectionPath }) });
+        showToast(`Exported ${result.exported_image_count || 0} images`);
+        logAction('export_selection_done', result);
+      } catch (error) {
+        showToast('Export failed: ' + error.message, 'error');
+        logAction('export_selection_error', { message: error.message });
+      }
+    }
+    async function boot() {
+      restoreState();
+      document.getElementById('search').value = state.search;
+      document.getElementById('labelFilter').value = state.label;
+      document.getElementById('includeIncomplete').checked = state.includeIncomplete;
+      document.getElementById('search').oninput = event => { state.search = event.target.value; persistState(); renderGrid(); logAction('search_changed', { length: state.search.length }); };
+      document.getElementById('labelFilter').onchange = event => { state.label = event.target.value; persistState(); logAction('label_filter_changed', { label: state.label }); loadCandidates(); };
+      document.getElementById('includeIncomplete').onchange = event => { state.includeIncomplete = event.target.checked; persistState(); logAction('include_incomplete_changed', { include_incomplete: state.includeIncomplete }); loadCandidates(); };
+      document.getElementById('reloadBtn').onclick = () => { logAction('reload_pressed'); loadCandidates(); };
+      document.getElementById('selectVisibleBtn').onclick = selectVisible;
+      document.getElementById('clearBtn').onclick = clearSelection;
+      document.getElementById('saveBtn').onclick = saveSelection;
+      document.getElementById('exportBtn').onclick = exportSelection;
+      document.getElementById('continueBtn').onclick = () => {
+        logAction('continue_to_training_setup_stub', { selection_path: state.currentSelectionPath });
+        showToast('Training setup is the next stage and is not implemented yet.');
+      };
+      try {
+        await Promise.all([loadAlbums(), loadSelections()]);
+        await loadCandidates();
+      } catch (error) {
+        showToast('Dataset selection failed to initialize: ' + error.message, 'error');
+        logAction('boot_error', { message: error.message });
+      }
+    }
+    boot();
+  </script>
+</body>
+</html>"""
+
+
 BBOX_OVERVIEW_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -681,7 +1391,7 @@ BBOX_OVERVIEW_HTML = """<!DOCTYPE html>
         <a class="stage" href="/import">Import Data</a>
         <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
         <a class="stage active" href="/bbox-overview">BBox Overview</a>
-        <span class="stage">Dataset Selection</span>
+        <a class="stage" href="/dataset-selection">Dataset Selection</a>
         <span class="stage">Training Setup</span>
         <span class="stage">Train YOLO</span>
         <span class="stage">Evaluate</span>
@@ -1846,7 +2556,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         <a class="stage active" href="/import">Import Data</a>
         <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
-        <span class="stage">Dataset Selection</span>
+        <a class="stage" href="/dataset-selection">Dataset Selection</a>
         <span class="stage">Training Setup</span>
         <span class="stage">Train YOLO</span>
         <span class="stage">Evaluate</span>
@@ -3179,6 +3889,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/bbox-overview":
             self._respond_html(render_bbox_overview_html())
             return
+        if path == "/dataset-selection":
+            self._respond_html(render_dataset_selection_html())
+            return
         if path == "/import":
             self._respond_html(render_import_html())
             return
@@ -3387,6 +4100,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 required_labels=[str(value) for value in query.get("label") or [] if str(value).strip()],
                 completed_only=not query_bool(parsed, "include_incomplete", False),
             )
+            for candidate in result.get("candidates") or []:
+                if isinstance(candidate, dict):
+                    candidate["cache_url"] = cache_url_for(candidate.get("cache_path"))
         except Exception as exc:
             self._respond_json({"error": str(exc)}, status=400)
             return
