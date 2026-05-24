@@ -229,11 +229,12 @@ Add `/training-setup`:
 - Select exported dataset.
 - Select model/start weights, including existing repo root weights and promoted weights under `workspace/model_weights/`.
 - Surface starting-weight provenance. For weights inside the repository, show whether `docs/yolo_weight_recreation.md` or an adjacent weight-specific doc documents the weight. Missing provenance should warn in the GUI and CLI config save/check output. Promoting or adding weights without documentation remains forbidden.
-- Expose explicit fields for image size, epochs, batch, patience, seed, device, workers, run group, and run name.
+- Expose explicit fields for image size, epochs, batch, patience, seed, device, workers, and run group. Run names are derived from the selected weight stem plus the run group and shown read-only beside the run-group input; see `docs/training_pipeline_step_5_plan.md` for the derivation rule and legacy-config handling.
 - Store augmentation settings in config, not as pre-rendered images.
 - Show readiness checklist.
-- Show exact command preview.
 - Keep `Run Training` disabled until backend readiness is true.
+
+The raw `yolo detect train ...` command is available through the CLI's `build-train-command` for inspection and is not surfaced in the GUI. See `docs/training_pipeline_step_5_plan.md` for the per-step rationale.
 
 ### CLI
 
