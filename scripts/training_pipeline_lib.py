@@ -36,6 +36,9 @@ DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR = WORKSPACE_DIR / "reports" / "review_que
 DEFAULT_IMAGE_REMOVAL_REPORTS_DIR = WORKSPACE_DIR / "reports" / "image_removals"
 DEFAULT_DATASET_SELECTIONS_DIR = WORKSPACE_DIR / "dataset_selections"
 DEFAULT_DATASETS_DIR = WORKSPACE_DIR / "datasets"
+DEFAULT_TRAINING_CONFIGS_DIR = WORKSPACE_DIR / "training_configs"
+DEFAULT_MODEL_WEIGHTS_DIR = WORKSPACE_DIR / "model_weights"
+DEFAULT_WEIGHT_DOCS = [ROOT_DIR / "docs" / "yolo_weight_recreation.md"]
 DEFAULT_AUTO_DETECT_YOLOV8 = WORKSPACE_DIR / "runs" / "madhulika_manual_sts_balanced_v2_e150_img960" / "yolov8n_rectbbox_e150_img960" / "weights" / "best.pt"
 DEFAULT_AUTO_DETECT_MODEL_PATHS = {"yolov8n": DEFAULT_AUTO_DETECT_YOLOV8}
 DEFAULT_AUTO_DETECT_CONFIDENCE = 0.25
@@ -94,14 +97,29 @@ RECOGNIZED_RESULTS_COLUMNS = {
 REQUIRED_TRAINING_CONFIG_FIELDS = {
     "dataset_name": "dataset name/version",
     "dataset_version": "dataset name/version",
-    "model": "model or starting weights",
     "image_size": "image size",
     "epochs": "epochs",
     "batch": "batch",
     "device": "device",
     "seed": "seed",
-    "run_name": "output run name",
     "augmentation": "augmentation settings",
+}
+ALLOWED_AUGMENTATION_KEYS = {
+    "hsv_h",
+    "hsv_s",
+    "hsv_v",
+    "degrees",
+    "translate",
+    "scale",
+    "shear",
+    "perspective",
+    "flipud",
+    "fliplr",
+    "mosaic",
+    "mixup",
+    "copy_paste",
+    "erasing",
+    "crop_fraction",
 }
 
 
@@ -2270,6 +2288,165 @@ def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTI
     return selections
 
 
+def docs_markdown_paths(docs_roots: list[str | Path] | str | Path | None = None) -> list[Path]:
+    if docs_roots is None:
+        roots: list[str | Path] = []
+        paths = []
+        for candidate in [ROOT_DIR / "docs" / "yolo_weight_recreation.md", *sorted((ROOT_DIR / "docs").glob("yolo_weight_*.md"))]:
+            if candidate.is_file() and candidate not in paths:
+                paths.append(candidate)
+        return paths
+    elif isinstance(docs_roots, (str, Path)):
+        roots = [docs_roots]
+    else:
+        roots = list(docs_roots)
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for root_value in roots:
+        root = repo_resolve(root_value)
+        candidates = sorted(root.glob("*.md")) if root.is_dir() else [root]
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            paths.append(candidate)
+    return paths
+
+
+def weight_provenance(basename: str, docs_roots: list[str | Path] | str | Path | None = None) -> dict[str, Any]:
+    needle = Path(str(basename)).name
+    for path in docs_markdown_paths(docs_roots):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = path.read_text(errors="ignore")
+        if needle in content:
+            return {"documented": True, "source_doc": repo_relative(path), "notes": None}
+    return {"documented": False, "source_doc": None, "notes": f"No recreation documentation found for {needle}"}
+
+
+def parse_roots(value: list[str | Path] | str | Path | None, default_roots: list[Path]) -> list[Path]:
+    if value is None:
+        return default_roots
+    values: list[str | Path]
+    if isinstance(value, (str, Path)):
+        values = [part for part in str(value).split(",") if part.strip()]
+    else:
+        values = value
+    return [repo_resolve(item) for item in values]
+
+
+def list_starting_weights(
+    weights_roots: list[str | Path] | str | Path | None = None,
+    docs_roots: list[str | Path] | str | Path | None = None,
+) -> list[dict[str, Any]]:
+    roots = parse_roots(weights_roots, [ROOT_DIR, DEFAULT_MODEL_WEIGHTS_DIR])
+    weights: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if root.is_file() and root.suffix == ".pt":
+            candidates = [root]
+        elif root.is_dir():
+            candidates = sorted(root.glob("*.pt"))
+        else:
+            candidates = []
+        for path in candidates:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            stat = path.stat()
+            basename = path.name
+            weights.append({
+                "path": repo_relative(path),
+                "basename": basename,
+                "size_bytes": stat.st_size,
+                "mtime": stat.st_mtime,
+                "provenance": weight_provenance(basename, docs_roots=docs_roots),
+            })
+    weights.sort(key=lambda item: (str(item.get("basename") or ""), str(item.get("path") or "")))
+    return weights
+
+
+def count_dataset_split_images(dataset_dir: Path) -> dict[str, int]:
+    counts: dict[str, int] = {split: 0 for split in SPLITS}
+    for split in SPLITS:
+        image_dir = dataset_dir / "images" / split
+        if image_dir.is_dir():
+            counts[split] = sum(1 for path in image_dir.iterdir() if path.is_file())
+    return counts
+
+
+def count_dataset_labels(dataset_dir: Path) -> dict[str, int]:
+    counts = {"ship": 0, "ships": 0}
+    for split in SPLITS:
+        label_dir = dataset_dir / "labels" / split
+        if not label_dir.is_dir():
+            continue
+        for path in label_dir.glob("*.txt"):
+            for line in path.read_text().splitlines():
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                if parts[0] == "0":
+                    counts["ship"] += 1
+                elif parts[0] == "1":
+                    counts["ships"] += 1
+    return counts
+
+
+def dataset_unavailable_reason(dataset_dir: Path | None) -> str | None:
+    if dataset_dir is None:
+        return "Selection is missing export.output_dir"
+    if not (dataset_dir / "dataset_manifest.json").is_file():
+        return "Exported dataset is missing dataset_manifest.json"
+    data_yaml = dataset_dir / "data.yaml"
+    if not data_yaml.is_file():
+        return "Exported dataset is missing data.yaml"
+    if not yaml_defines_required_classes(data_yaml):
+        return "data.yaml must define class 0: ship and class 1: ships"
+    for split in ("train", "val"):
+        if not (dataset_dir / "images" / split).is_dir():
+            return f"Exported dataset is missing images/{split}"
+        if not (dataset_dir / "labels" / split).is_dir():
+            return f"Exported dataset is missing labels/{split}"
+        if not split_has_images(dataset_dir, split):
+            return f"{split} split must contain at least one image"
+    return None
+
+
+def list_exported_datasets(selections_dir: str | Path = DEFAULT_DATASET_SELECTIONS_DIR) -> list[dict[str, Any]]:
+    datasets: list[dict[str, Any]] = []
+    root = repo_resolve(selections_dir)
+    for path in sorted(root.glob("*.json")):
+        try:
+            selection = load_json(path)
+        except Exception as exc:
+            datasets.append({"selection_path": repo_relative(path), "available": False, "unavailable_reason": str(exc)})
+            continue
+        output_dir = selection.get("export", {}).get("output_dir")
+        dataset_dir = repo_resolve(output_dir) if output_dir else None
+        reason = dataset_unavailable_reason(dataset_dir)
+        item = {
+            "selection_path": repo_relative(path),
+            "dataset_name": selection.get("dataset_name"),
+            "dataset_version": selection.get("dataset_version"),
+            "description": selection.get("description"),
+            "dataset_dir": repo_relative(dataset_dir) if dataset_dir else None,
+            "available": reason is None,
+            "unavailable_reason": reason,
+            "split_counts": count_dataset_split_images(dataset_dir) if dataset_dir else {split: 0 for split in SPLITS},
+            "bbox_counts": count_dataset_labels(dataset_dir) if dataset_dir else {"ship": 0, "ships": 0},
+            "updated_at": selection.get("updated_at") or selection.get("created_at"),
+        }
+        datasets.append(item)
+    datasets.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return datasets
+
+
 def yaml_defines_required_classes(data_yaml: Path) -> bool:
     if not data_yaml.exists():
         return False
@@ -2293,11 +2470,168 @@ def config_missing_items(config: dict[str, Any]) -> list[str]:
         if label not in emitted:
             missing.append(f"Missing required training config field: {label}")
             emitted.add(label)
-    return missing
+    models = config.get("models")
+    has_models = isinstance(models, list) and any(str(model).strip() for model in models)
+    has_model = bool(str(config.get("model") or "").strip())
+    if not has_models and not has_model:
+        missing.append("Missing required training config field: model or starting weights")
+    if not str(config.get("run_group") or config.get("run_name") or "").strip():
+        missing.append("Missing required training config field: output run name")
+    if has_model and not has_models and not str(config.get("run_name") or "").strip():
+        missing.append("Missing required training config field: output run name")
+    if has_models and not str(config.get("run_group") or "").strip():
+        missing.append("Missing required training config field: output run name")
+    return list(dict.fromkeys(missing))
 
 
-def check_training_readiness(selection_path: str | Path, training_config: str | Path | dict[str, Any]) -> dict[str, Any]:
-    selection = load_json(selection_path)
+def validate_augmentation_keys(config: dict[str, Any], *, allow_unknown_augmentation: bool = False) -> None:
+    augmentation = config.get("augmentation") or {}
+    if not isinstance(augmentation, dict):
+        raise ValueError("augmentation must be a JSON object")
+    if allow_unknown_augmentation:
+        return
+    unknown = sorted(str(key) for key in augmentation if str(key) not in ALLOWED_AUGMENTATION_KEYS)
+    if unknown:
+        raise ValueError("Unknown augmentation key(s): " + ", ".join(unknown))
+
+
+def expand_training_config_runs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    validate_augmentation_keys(config)
+    raw_models = config.get("models")
+    run_group = str(config_value(config, "run_group", "default"))
+    output_dir = config_value(config, "output_dir", WORKSPACE_DIR / "runs")
+    common = {
+        "run_group": run_group,
+        "image_size": config.get("image_size"),
+        "epochs": config.get("epochs"),
+        "batch": config.get("batch"),
+        "patience": config.get("patience"),
+        "seed": config.get("seed"),
+        "device": config.get("device"),
+        "workers": config.get("workers"),
+        "augmentation": dict(config.get("augmentation") or {}),
+        "output_dir": output_dir,
+        "overwrite": bool(config.get("overwrite")),
+    }
+    runs: list[dict[str, Any]] = []
+    if isinstance(raw_models, list) and raw_models:
+        for model in raw_models:
+            model_value = str(model).strip()
+            if not model_value:
+                continue
+            run_name = f"{Path(model_value).stem}_{run_group}"
+            runs.append({**common, "model": model_value, "run_name": run_name})
+    elif str(config.get("model") or "").strip():
+        run_name = str(config.get("run_name") or "").strip()
+        if not run_name:
+            raise ValueError("Missing required training config field: output run name")
+        runs.append({**common, "model": str(config["model"]).strip(), "run_name": run_name})
+    else:
+        raise ValueError("Missing required training config field: model or starting weights")
+    if not runs:
+        raise ValueError("Missing required training config field: model or starting weights")
+    by_name: dict[str, list[str]] = {}
+    for run in runs:
+        by_name.setdefault(str(run["run_name"]), []).append(str(run["model"]))
+    collisions = {name: models for name, models in by_name.items() if len(models) > 1}
+    if collisions:
+        details = "; ".join(f"{name}: {', '.join(models)}" for name, models in sorted(collisions.items()))
+        raise ValueError("Duplicate derived run name(s): " + details)
+    return runs
+
+
+def training_config_path(configs_dir: str | Path, run_group: str) -> Path:
+    return repo_resolve(configs_dir) / f"{slugify(run_group, 'training_config')}.json"
+
+
+def save_training_config(
+    config: dict[str, Any],
+    *,
+    configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR,
+    weights_roots: list[str | Path] | str | Path | None = None,
+    docs_roots: list[str | Path] | str | Path | None = None,
+    allow_unknown_augmentation: bool = False,
+) -> dict[str, Any]:
+    source = dict(config)
+    validate_augmentation_keys(source, allow_unknown_augmentation=allow_unknown_augmentation)
+    missing = config_missing_items(source)
+    if missing:
+        raise ValueError("; ".join(missing))
+    runs = expand_training_config_runs(source)
+    run_group = str(config_value(source, "run_group", runs[0]["run_group"]))
+    models = [run["model"] for run in runs]
+    provenance_warnings: list[str] = []
+    for model in models:
+        provenance = weight_provenance(Path(model).name, docs_roots=docs_roots)
+        if not provenance.get("documented"):
+            provenance_warnings.append(str(provenance.get("notes") or f"No recreation documentation found for {Path(model).name}"))
+    saved = {
+        "schema_version": SCHEMA_VERSION,
+        "created_at": source.get("created_at") or utcnow_iso_for_training(),
+        "dataset_name": source.get("dataset_name"),
+        "dataset_version": source.get("dataset_version"),
+        "models": models,
+        "image_size": source.get("image_size"),
+        "epochs": source.get("epochs"),
+        "batch": source.get("batch"),
+        "patience": source.get("patience"),
+        "seed": source.get("seed"),
+        "device": source.get("device"),
+        "workers": source.get("workers"),
+        "augmentation": dict(source.get("augmentation") or {}),
+        "output_dir": repo_relative(source.get("output_dir") or WORKSPACE_DIR / "runs"),
+        "run_group": run_group,
+        "overwrite": bool(source.get("overwrite")),
+        "provenance_warnings": provenance_warnings,
+    }
+    if source.get("selection_path"):
+        saved["selection_path"] = repo_relative(source["selection_path"])
+    target = training_config_path(configs_dir, run_group)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(saved, indent=2, sort_keys=True) + "\n")
+    tmp.replace(target)
+    return {"config_path": repo_relative(target), "config": saved, "provenance_warnings": provenance_warnings}
+
+
+def list_training_configs(configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(configs_dir)
+    configs: list[dict[str, Any]] = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            config = load_json(path)
+            runs = expand_training_config_runs(config)
+        except Exception as exc:
+            configs.append({"config_path": repo_relative(path), "valid": False, "error": str(exc)})
+            continue
+        configs.append({
+            "config_path": repo_relative(path),
+            "valid": True,
+            "run_group": config.get("run_group") or (runs[0].get("run_group") if runs else None),
+            "dataset_name": config.get("dataset_name"),
+            "dataset_version": config.get("dataset_version"),
+            "selection_path": config.get("selection_path"),
+            "model_count": len(runs),
+            "models": [run["model"] for run in runs],
+            "created_at": config.get("created_at"),
+        })
+    configs.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return configs
+
+
+def resolve_training_selection_path(selection_path: str | Path | None, training_config: str | Path | dict[str, Any]) -> Path:
+    if selection_path:
+        return repo_resolve(selection_path)
+    config = load_json_or_dict(training_config)
+    embedded = config.get("selection_path")
+    if embedded:
+        return repo_resolve(embedded)
+    raise ValueError("Dataset selection is required; pass --selection or include selection_path in the training config")
+
+
+def check_training_readiness(selection_path: str | Path | None, training_config: str | Path | dict[str, Any]) -> dict[str, Any]:
+    resolved_selection = resolve_training_selection_path(selection_path, training_config)
+    selection = load_json(resolved_selection)
     config = load_json_or_dict(training_config)
     output_dir = selection.get("export", {}).get("output_dir")
     dataset_dir = repo_resolve(output_dir) if output_dir else None
@@ -2323,16 +2657,26 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
         warnings.append("test split has no images; final test metrics will be unavailable")
 
     missing.extend(config_missing_items(config))
+    runs: list[dict[str, Any]] = []
+    if not any(item.startswith("Missing required training config field: model") for item in missing):
+        try:
+            expanded = expand_training_config_runs(config)
+        except ValueError as exc:
+            missing.append(str(exc))
+            expanded = []
+        for run in expanded:
+            run_missing: list[str] = []
+            run_warnings: list[str] = []
+            run_dir = repo_resolve(run.get("output_dir") or WORKSPACE_DIR / "runs") / str(run["run_group"]) / str(run["run_name"])
+            if run_dir.exists() and not bool(run.get("overwrite")):
+                run_missing.append("output run name would overwrite an existing run; enable overwrite to proceed")
+            if not weight_provenance(Path(str(run["model"])).name).get("documented"):
+                run_warnings.append(f"No recreation documentation found for {Path(str(run['model'])).name}")
+            runs.append({"model": run["model"], "run_name": run["run_name"], "ready": not run_missing, "missing": run_missing, "warnings": run_warnings})
+            missing.extend(f"[{run['run_name']}] {item}" for item in run_missing)
+            warnings.extend(f"[{run['run_name']}] {item}" for item in run_warnings)
 
-    run_name = config.get("run_name")
-    run_group = config.get("run_group") or "default"
-    output_root = config.get("output_dir") or ROOT_DIR / "workspace" / "runs"
-    if run_name:
-        run_dir = repo_resolve(output_root) / str(run_group) / str(run_name)
-        if run_dir.exists() and not bool(config.get("overwrite")):
-            missing.append("output run name would overwrite an existing run; enable overwrite to proceed")
-
-    return {"ready": not missing, "missing": missing, "warnings": warnings}
+    return {"ready": not missing, "missing": list(dict.fromkeys(missing)), "warnings": list(dict.fromkeys(warnings)), "runs": runs}
 
 
 def config_value(config: dict[str, Any], key: str, fallback: Any = None) -> Any:
@@ -2342,37 +2686,72 @@ def config_value(config: dict[str, Any], key: str, fallback: Any = None) -> Any:
     return value
 
 
-def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str | Path) -> list[str]:
+def build_single_yolo_train_command(run: dict[str, Any], dataset_dir: str | Path) -> list[str]:
     dataset_path = repo_resolve(dataset_dir)
     data_yaml = dataset_path / "data.yaml"
     if not data_yaml.exists():
         raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
 
-    run_group = str(config_value(training_config, "run_group", "default"))
-    run_name = str(training_config["run_name"])
-    output_root = repo_resolve(config_value(training_config, "output_dir", WORKSPACE_DIR / "runs"))
+    run_group = str(run["run_group"])
+    run_name = str(run["run_name"])
+    output_root = repo_resolve(config_value(run, "output_dir", WORKSPACE_DIR / "runs"))
     command = [
         "yolo",
         "detect",
         "train",
-        f"model={training_config['model']}",
+        f"model={run['model']}",
         f"data={data_yaml}",
-        f"imgsz={training_config['image_size']}",
-        f"epochs={training_config['epochs']}",
-        f"batch={training_config['batch']}",
-        f"device={training_config['device']}",
-        f"seed={training_config['seed']}",
+        f"imgsz={run['image_size']}",
+        f"epochs={run['epochs']}",
+        f"batch={run['batch']}",
+        f"device={run['device']}",
+        f"seed={run['seed']}",
         f"project={output_root / run_group}",
         f"name={run_name}",
     ]
     for optional_key in ("patience", "workers"):
-        if optional_key in training_config and training_config[optional_key] is not None:
-            command.append(f"{optional_key}={training_config[optional_key]}")
-    for key, value in sorted((training_config.get("augmentation") or {}).items()):
+        if optional_key in run and run[optional_key] is not None:
+            command.append(f"{optional_key}={run[optional_key]}")
+    for key, value in sorted((run.get("augmentation") or {}).items()):
         command.append(f"{key}={value}")
-    if bool(training_config.get("overwrite")):
+    if bool(run.get("overwrite")):
         command.append("exist_ok=True")
     return command
+
+
+def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str | Path) -> list[str] | list[list[str]]:
+    validate_augmentation_keys(training_config)
+    runs = expand_training_config_runs(training_config)
+    commands = [build_single_yolo_train_command(run, dataset_dir) for run in runs]
+    return commands[0] if len(commands) == 1 else commands
+
+
+def probe_training_devices() -> dict[str, Any]:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return {"cuda_available": False, "gpus": [], "recommended_device": "cpu"}
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_available = False
+    if not cuda_available:
+        return {"cuda_available": False, "gpus": [], "recommended_device": "cpu"}
+    gpus: list[dict[str, Any]] = []
+    try:
+        count = int(torch.cuda.device_count())
+    except Exception:
+        count = 0
+    for index in range(count):
+        try:
+            props = torch.cuda.get_device_properties(index)
+            name = str(getattr(props, "name", f"cuda:{index}"))
+            memory_gb = round(float(getattr(props, "total_memory", 0)) / (1024 ** 3), 2)
+        except Exception:
+            name = f"cuda:{index}"
+            memory_gb = None
+        gpus.append({"index": index, "name": name, "memory_gb": memory_gb})
+    return {"cuda_available": bool(gpus), "gpus": gpus, "recommended_device": "0" if gpus else "cpu"}
 
 
 def parse_float(value: Any) -> float | None:

@@ -969,6 +969,151 @@ def test_cli_list_dataset_selections_reports_saved_selection(tmp_path: Path) -> 
     assert selections[0]["split_counts"] == {"train": 1, "val": 1, "test": 0}
 
 
+def make_exported_dataset(dataset_dir: Path) -> None:
+    for split in ("train", "val"):
+        (dataset_dir / "images" / split).mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "images" / split / f"{split}.png").write_bytes(b"image")
+        (dataset_dir / "labels" / split / f"{split}.txt").write_text("0 0.5 0.5 0.1 0.1\n")
+    (dataset_dir / "data.yaml").write_text("names:\n  0: ship\n  1: ships\n")
+    write_json(dataset_dir / "dataset_manifest.json", {"schema_version": 1})
+
+
+def test_cli_list_exported_datasets_reports_availability(tmp_path: Path) -> None:
+    selections_dir = tmp_path / "dataset_selections"
+    ready_dir = tmp_path / "datasets" / "ready"
+    missing_dir = tmp_path / "datasets" / "missing"
+    make_exported_dataset(ready_dir)
+    write_selection(selections_dir / "ready.json", reviews_dir=tmp_path / "reviews", output_dir=ready_dir, items=[])
+    write_selection(selections_dir / "missing.json", reviews_dir=tmp_path / "reviews", output_dir=missing_dir, items=[])
+
+    process = run_cli("list-exported-datasets", "--selections-dir", str(selections_dir))
+
+    assert process.returncode == 0
+    datasets = {Path(item["selection_path"]).name: item for item in parse_envelope(process)["result"]["datasets"]}
+    assert datasets["ready.json"]["available"] is True
+    assert datasets["missing.json"]["available"] is False
+    assert datasets["missing.json"]["unavailable_reason"]
+
+
+def test_cli_starting_weights_and_save_training_config_use_fixture_roots(tmp_path: Path) -> None:
+    weights_dir = tmp_path / "weights"
+    docs_dir = tmp_path / "docs"
+    configs_dir = tmp_path / "training_configs"
+    (weights_dir / "alpha.pt").parent.mkdir(parents=True)
+    (weights_dir / "alpha.pt").write_bytes(b"alpha")
+    (weights_dir / "beta.pt").write_bytes(b"beta")
+    write_json(docs_dir / "placeholder.json", {})
+    (docs_dir / "weights.md").write_text("Documented weight: alpha.pt\n")
+
+    weights = run_cli("list-starting-weights", "--weights-roots", str(weights_dir), "--docs-roots", str(docs_dir))
+    assert weights.returncode == 0
+    weight_rows = {item["basename"]: item for item in parse_envelope(weights)["result"]["weights"]}
+    assert weight_rows["alpha.pt"]["provenance"]["documented"] is True
+    assert weight_rows["beta.pt"]["provenance"]["documented"] is False
+
+    config = {
+        "schema_version": 1,
+        "created_at": "2026-05-24T00:00:00Z",
+        "selection_path": str(tmp_path / "dataset_selections" / "fixture.json"),
+        "dataset_name": "fixture",
+        "dataset_version": 1,
+        "models": [str(weights_dir / "alpha.pt"), str(weights_dir / "beta.pt")],
+        "image_size": 960,
+        "epochs": 2,
+        "batch": 1,
+        "patience": 1,
+        "seed": 42,
+        "device": "cpu",
+        "workers": 0,
+        "augmentation": {"fliplr": 0.5},
+        "output_dir": str(tmp_path / "runs"),
+        "run_group": "fixture_suite",
+        "overwrite": False,
+    }
+    saved = run_cli(
+        "save-training-config",
+        "--config",
+        json.dumps(config),
+        "--configs-dir",
+        str(configs_dir),
+        "--weights-roots",
+        str(weights_dir),
+        "--docs-roots",
+        str(docs_dir),
+    )
+    assert saved.returncode == 0
+    envelope = parse_envelope(saved)
+    assert_envelope(envelope, command="save-training-config", ok=True)
+    assert envelope["result"]["config"]["models"] == config["models"]
+    assert envelope["result"]["provenance_warnings"]
+    assert (configs_dir / "fixture_suite.json").is_file()
+
+
+def test_cli_save_training_config_rejects_unknown_augmentation(tmp_path: Path) -> None:
+    config = {
+        "dataset_name": "fixture",
+        "dataset_version": 1,
+        "models": ["yolov8n.pt"],
+        "image_size": 960,
+        "epochs": 2,
+        "batch": 1,
+        "seed": 42,
+        "device": "cpu",
+        "run_group": "bad_aug",
+        "augmentation": {"not_real": 1.0},
+    }
+
+    process = run_cli("save-training-config", "--config", json.dumps(config), "--configs-dir", str(tmp_path / "configs"))
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="save-training-config", ok=False)
+    assert "Unknown augmentation" in envelope["errors"][0]
+
+
+def test_cli_suite_readiness_and_command_shapes(tmp_path: Path) -> None:
+    dataset_dir = tmp_path / "datasets" / "fixture"
+    selection_path = tmp_path / "dataset_selections" / "fixture.json"
+    make_exported_dataset(dataset_dir)
+    write_selection(selection_path, reviews_dir=tmp_path / "reviews", output_dir=dataset_dir, items=[])
+    config_path = tmp_path / "training_configs" / "suite.json"
+    write_json(
+        config_path,
+        {
+            "schema_version": 1,
+            "selection_path": str(selection_path),
+            "dataset_name": "fixture",
+            "dataset_version": 1,
+            "models": ["alpha.pt", "beta.pt"],
+            "image_size": 960,
+            "epochs": 2,
+            "batch": 1,
+            "patience": 1,
+            "seed": 42,
+            "device": "cpu",
+            "workers": 0,
+            "augmentation": {},
+            "output_dir": str(tmp_path / "runs"),
+            "run_group": "suite",
+            "overwrite": False,
+        },
+    )
+
+    ready = run_cli("check-training-ready", "--config", str(config_path))
+    assert ready.returncode == 0
+    ready_result = parse_envelope(ready)["result"]
+    assert ready_result["ready"] is True
+    assert [run["run_name"] for run in ready_result["runs"]] == ["alpha_suite", "beta_suite"]
+
+    command = run_cli("build-train-command", "--config", str(config_path))
+    assert command.returncode == 0
+    command_result = parse_envelope(command)["result"]
+    assert "command_line" not in command_result
+    assert len(command_result["commands"]) == 2
+    assert command_result["commands"][0][0:3] == ["yolo", "detect", "train"]
+
+
 def test_cli_build_train_command_prints_command_list_json(tmp_path: Path) -> None:
     reviews_dir = tmp_path / "reviews"
     cache_dir = tmp_path / "cache"

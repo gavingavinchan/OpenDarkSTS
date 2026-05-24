@@ -186,6 +186,28 @@ def test_step4_dataset_selection_page_route() -> None:
     assert "training-ui-interaction" in html
 
 
+def test_step5_training_setup_page_route() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        with urllib.request.urlopen(server.base_url + "/training-setup", timeout=5) as response:
+            html = response.read().decode("utf-8")
+
+    assert response.status == 200
+    assert "Training" in html and "Setup" in html
+    assert 'id="weightList"' in html
+    assert 'id="runGroup"' in html
+    assert 'id="datasetPick"' in html
+    assert 'id="readinessList"' in html
+    assert "/api/exported-datasets" in html
+    assert "/api/starting-weights" in html
+    assert "/api/training-configs" in html
+    assert "/api/training-config/check-ready" in html
+    assert "/api/system/device-info" in html
+    assert "training-ui-interaction" in html
+    assert 'href="/training-setup"' in html  # stage rail self-link
+
+
 def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> None:
     from scripts import training_pipeline_ui as ui
 
@@ -225,3 +247,114 @@ def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> Non
     assert (output_dir / "dataset_manifest.json").is_file()
     assert (output_dir / "images" / "train" / "img_export.png").is_file()
     assert (output_dir / "labels" / "train" / "img_export.txt").is_file()
+
+
+def make_step5_exported_dataset(dataset_dir: Path) -> None:
+    for split in ("train", "val"):
+        (dataset_dir / "images" / split).mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "images" / split / f"{split}.png").write_bytes(b"image")
+        (dataset_dir / "labels" / split / f"{split}.txt").write_text("0 0.5 0.5 0.1 0.1\n")
+    (dataset_dir / "data.yaml").write_text("names:\n  0: ship\n  1: ships\n")
+    write_json(dataset_dir / "dataset_manifest.json", {"schema_version": 1})
+
+
+def test_step5_api_lists_datasets_configs_and_device(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    selections_dir = tmp_path / "dataset_selections"
+    configs_dir = tmp_path / "training_configs"
+    dataset_dir = tmp_path / "datasets" / "fixture"
+    make_step5_exported_dataset(dataset_dir)
+    write_json(
+        selections_dir / "fixture.json",
+        {
+            "schema_version": 1,
+            "dataset_name": "fixture",
+            "dataset_version": 1,
+            "items": [],
+            "export": {"output_dir": str(dataset_dir)},
+        },
+    )
+    write_json(
+        configs_dir / "fixture_group.json",
+        {
+            "schema_version": 1,
+            "dataset_name": "fixture",
+            "dataset_version": 1,
+            "models": ["alpha.pt"],
+            "image_size": 960,
+            "epochs": 2,
+            "batch": 1,
+            "seed": 42,
+            "device": "cpu",
+            "run_group": "fixture_group",
+            "augmentation": {},
+        },
+    )
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASET_SELECTIONS_DIR", selections_dir)
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_TRAINING_CONFIGS_DIR", configs_dir)
+    monkeypatch.setattr(ui.pipeline, "probe_training_devices", lambda: {"cuda_available": False, "gpus": [], "recommended_device": "cpu"})
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        datasets = get_json(server.base_url + "/api/exported-datasets")
+        configs = get_json(server.base_url + "/api/training-configs")
+        config = get_json(server.base_url + "/api/training-configs/fixture_group")
+        device = get_json(server.base_url + "/api/system/device-info")
+
+    assert datasets["ok"] is True
+    assert datasets["datasets"][0]["available"] is True
+    assert configs["ok"] is True
+    assert configs["configs"][0]["run_group"] == "fixture_group"
+    assert config["config"]["run_group"] == "fixture_group"
+    assert device["recommended_device"] == "cpu"
+
+
+def test_step5_api_saves_and_checks_training_config(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    selections_dir = tmp_path / "dataset_selections"
+    configs_dir = tmp_path / "training_configs"
+    dataset_dir = tmp_path / "datasets" / "fixture"
+    dataset_path = selections_dir / "fixture.json"
+    make_step5_exported_dataset(dataset_dir)
+    write_json(
+        dataset_path,
+        {
+            "schema_version": 1,
+            "dataset_name": "fixture",
+            "dataset_version": 1,
+            "items": [],
+            "export": {"output_dir": str(dataset_dir)},
+        },
+    )
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_TRAINING_CONFIGS_DIR", configs_dir)
+    monkeypatch.setattr(ui.pipeline, "weight_provenance", lambda basename, docs_roots=None: {"documented": True, "source_doc": "fixture.md", "notes": None})
+    config = {
+        "schema_version": 1,
+        "selection_path": str(dataset_path),
+        "dataset_name": "fixture",
+        "dataset_version": 1,
+        "models": ["alpha.pt"],
+        "image_size": 960,
+        "epochs": 2,
+        "batch": 1,
+        "patience": 1,
+        "seed": 42,
+        "device": "cpu",
+        "workers": 0,
+        "augmentation": {},
+        "output_dir": str(tmp_path / "runs"),
+        "run_group": "fixture_group",
+        "overwrite": False,
+    }
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        saved = post_json(server.base_url + "/api/training-configs", {"config": config})
+        ready = post_json(server.base_url + "/api/training-config/check-ready", {"config": config})
+
+    assert saved["ok"] is True
+    assert (configs_dir / "fixture_group.json").is_file()
+    assert ready["ok"] is True
+    assert ready["ready"] is True
+    assert ready["runs"][0]["run_name"] == "alpha_fixture_group"

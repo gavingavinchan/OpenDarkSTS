@@ -797,7 +797,7 @@ DATASET_SELECTION_HTML = """<!DOCTYPE html>
         <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
         <a class="stage active" href="/dataset-selection">Dataset Selection</a>
-        <span class="stage">Training Setup</span>
+        <a class="stage" href="/training-setup">Training Setup</a>
         <span class="stage">Train YOLO</span>
         <span class="stage">Evaluate</span>
       </nav>
@@ -1201,14 +1201,1081 @@ DATASET_SELECTION_HTML = """<!DOCTYPE html>
       document.getElementById('saveBtn').onclick = saveSelection;
       document.getElementById('exportBtn').onclick = exportSelection;
       document.getElementById('continueBtn').onclick = () => {
-        logAction('continue_to_training_setup_stub', { selection_path: state.currentSelectionPath });
-        showToast('Training setup is the next stage and is not implemented yet.');
+        logAction('continue_to_training_setup', { selection_path: state.currentSelectionPath });
+        const target = '/training-setup?selection_path=' + encodeURIComponent(state.currentSelectionPath || '');
+        window.location.href = target;
       };
       try {
         await Promise.all([loadAlbums(), loadSelections()]);
         await loadCandidates();
       } catch (error) {
         showToast('Dataset selection failed to initialize: ' + error.message, 'error');
+        logAction('boot_error', { message: error.message });
+      }
+    }
+    boot();
+  </script>
+</body>
+</html>"""
+
+
+def render_training_setup_html() -> str:
+    return TRAINING_SETUP_HTML.replace("__MANUAL_REVIEW_HREF__", MANUAL_REVIEW_URL.rstrip("/") + "/")
+
+
+TRAINING_SETUP_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Training Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #111713;
+      --ink-soft: #2a3530;
+      --muted: #6f7a6e;
+      --paper: #ece7da;
+      --paper-warm: #e6dfca;
+      --paper-cool: #d9e1d7;
+      --card: #f8f4e8;
+      --card-deep: #efe7d2;
+      --line: rgba(17, 23, 19, 0.18);
+      --line-strong: rgba(17, 23, 19, 0.42);
+      --green: #0f6b4f;
+      --red: #a83226;
+      --blue: #2458a6;
+      --amber: #b7791f;
+      --stamp: #7a1f12;
+      --stamp-deep: #4d1109;
+      --rule: rgba(17, 23, 19, 0.12);
+      --shadow: 0 18px 48px rgba(17, 23, 19, 0.16);
+      --serif: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", "Cascadia Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 12% -10%, rgba(122, 31, 18, 0.06), transparent 60%),
+        radial-gradient(900px 700px at 110% 110%, rgba(15, 107, 79, 0.07), transparent 60%),
+        linear-gradient(90deg, rgba(17, 23, 19, 0.045) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(180deg, #ded7c5 0%, #f2eddf 48%, #d9e1d7 100%);
+      font-family: var(--sans);
+      font-feature-settings: "ss01", "cv11";
+    }
+    body::before {
+      content: "";
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+      mix-blend-mode: multiply;
+      opacity: 0.55;
+    }
+    .shell { position: relative; z-index: 1; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    header {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) auto;
+      gap: 28px;
+      align-items: end;
+      padding: 22px 36px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 244, 232, 0.72);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 6;
+    }
+    .titleblock { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; }
+    .filenum {
+      font-family: var(--serif);
+      font-weight: 300;
+      font-style: italic;
+      font-size: clamp(56px, 6vw, 96px);
+      line-height: 0.85;
+      color: var(--stamp);
+      letter-spacing: -0.04em;
+      transform: translateY(4px);
+    }
+    .filenum sup { font-size: 0.42em; vertical-align: super; color: var(--muted); font-style: normal; letter-spacing: 0.18em; font-family: var(--sans); font-weight: 700; padding-left: 4px; }
+    h1 {
+      margin: 0;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(30px, 3.4vw, 50px);
+      letter-spacing: -0.035em;
+      line-height: 1.0;
+    }
+    h1 em { font-style: italic; font-weight: 400; color: var(--ink-soft); }
+    .subtitle { margin: 8px 0 0; color: var(--muted); font-size: 13px; max-width: 56ch; letter-spacing: 0.01em; }
+    .rail { display: flex; gap: 7px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+    .stage {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 11px;
+      background: rgba(255, 255, 255, 0.36);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-decoration: none;
+    }
+    .stage.active { background: var(--ink); color: var(--card); border-color: var(--ink); }
+    .stage:hover:not(.active):not(span) { background: rgba(255, 255, 255, 0.8); color: var(--ink); }
+    input, select, textarea, button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 12px;
+      font: inherit;
+      font-size: 13px;
+      background: rgba(248, 244, 232, 0.92);
+      color: var(--ink);
+    }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--green); outline-offset: -1px; border-color: var(--green); }
+    textarea { min-height: 72px; resize: vertical; }
+    button { cursor: pointer; font-weight: 700; letter-spacing: 0.02em; border-radius: 6px; transition: background 120ms ease, border-color 120ms ease; }
+    button:hover:not(:disabled) { background: rgba(248, 244, 232, 1); }
+    button.primary { background: var(--ink); border-color: var(--ink); color: var(--card); }
+    button.primary:hover:not(:disabled) { background: var(--ink-soft); }
+    button.secondary { background: rgba(36, 88, 166, 0.10); border-color: rgba(36, 88, 166, 0.24); color: var(--blue); }
+    button.secondary:hover:not(:disabled) { background: rgba(36, 88, 166, 0.18); }
+    button:disabled { cursor: not-allowed; opacity: 0.38; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      min-height: 0;
+    }
+    .form-pane { padding: 28px 36px 60px; min-width: 0; display: grid; gap: 26px; align-content: start; }
+    aside.composer { border-left: 1px solid var(--line); background: rgba(248, 244, 232, 0.60); padding: 22px; }
+    .sticky { position: sticky; top: 116px; max-height: calc(100vh - 116px); overflow: auto; display: grid; gap: 22px; align-content: start; }
+    section.card {
+      background: rgba(248, 244, 232, 0.78);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px 22px;
+      box-shadow: 0 2px 8px rgba(17, 23, 19, 0.05);
+      display: grid;
+      gap: 14px;
+    }
+    section.card h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+    section.card h2 em { font-style: italic; color: var(--ink-soft); font-weight: 400; }
+    section.card .hint { color: var(--muted); font-size: 12px; font-style: italic; margin: 0; }
+    .field { display: grid; gap: 5px; }
+    .field label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .field-help { color: var(--muted); font-size: 11px; font-style: italic; margin-top: 1px; }
+    .field-label-row { display: flex; align-items: baseline; gap: 6px; }
+    .field-label-row label { flex: 1; }
+    .recommend { color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+    .hp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+    .weight-list { display: grid; gap: 6px; max-height: 320px; overflow: auto; padding-right: 4px; }
+    .weight-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.32);
+      padding: 9px 11px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .weight-row:hover { background: rgba(255, 255, 255, 0.6); }
+    .weight-row:has(input:checked) { background: rgba(15, 107, 79, 0.08); border-color: rgba(15, 107, 79, 0.36); }
+    .weight-row input[type="checkbox"] { margin: 0; }
+    .weight-name { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+    .weight-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .prov {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 3px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    .prov.documented { background: rgba(15, 107, 79, 0.14); color: var(--green); }
+    .prov.undocumented { background: rgba(183, 121, 31, 0.18); color: var(--amber); }
+    .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .preset-chip {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.42);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    }
+    .preset-chip:hover { background: rgba(255, 255, 255, 0.85); color: var(--ink); }
+    .preset-chip.active { background: var(--ink); border-color: var(--ink); color: var(--card); }
+    .aug-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
+    details.advanced { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 14px; background: rgba(255, 255, 255, 0.22); }
+    details.advanced summary { cursor: pointer; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    details.advanced[open] summary { margin-bottom: 10px; color: var(--ink); }
+    .run-name-list {
+      display: grid;
+      gap: 4px;
+      max-height: 200px;
+      overflow: auto;
+      padding: 8px 10px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.22);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-soft);
+    }
+    .run-name-list .empty { color: var(--muted); font-style: italic; font-family: var(--sans); }
+    .check-list { display: grid; gap: 6px; }
+    .check-item { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.35; }
+    .check-item .mark { font-family: var(--mono); font-weight: 700; line-height: 1.35; flex-shrink: 0; }
+    .check-item.pass .mark { color: var(--green); }
+    .check-item.warn .mark { color: var(--amber); }
+    .check-item.block .mark { color: var(--red); }
+    .check-item.pass { color: var(--ink-soft); }
+    .check-item.warn { color: var(--ink-soft); }
+    .check-item.block { color: var(--ink); font-weight: 600; }
+    .saved-list { display: grid; gap: 6px; }
+    .saved-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.28);
+      padding: 9px 11px;
+      display: grid;
+      gap: 4px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .saved-item:hover { background: rgba(255, 255, 255, 0.55); border-color: var(--line-strong); }
+    .saved-item.active { border-color: var(--green); background: rgba(15, 107, 79, 0.07); }
+    .saved-title { font-weight: 700; font-size: 12px; color: var(--ink); }
+    .saved-meta { color: var(--muted); font-size: 11px; }
+    .footer-actions { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid var(--rule); margin-top: 6px; }
+    .footer-actions .secondary-row { display: flex; gap: 6px; }
+    .footer-actions .secondary-row button { flex: 1; }
+    .dataset-detail {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.32);
+      padding: 12px 14px;
+      display: grid;
+      gap: 6px;
+    }
+    .dataset-detail .stat-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .dataset-stat {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      background: rgba(248, 244, 232, 0.82);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .dataset-stat strong { color: var(--ink); font-family: var(--mono); padding-right: 4px; }
+    .checkbox-row { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(18px);
+      opacity: 0;
+      pointer-events: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--ink);
+      color: var(--card);
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 20;
+      max-width: 420px;
+      text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+    .toast.error { background: var(--red); }
+    .empty { color: var(--muted); font-size: 12px; font-style: italic; }
+    @media (max-width: 1120px) {
+      header { position: static; grid-template-columns: 1fr; }
+      .rail { justify-content: flex-start; }
+      .layout { grid-template-columns: 1fr; }
+      aside.composer { border-left: 0; border-top: 1px solid var(--line); }
+      .sticky { position: static; max-height: none; }
+      .hp-grid, .aug-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 720px) {
+      .hp-grid, .aug-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">05<sup>/07</sup></div>
+        <div>
+          <h1>Training <em>Setup</em></h1>
+          <p class="subtitle">Pick an exported dataset, choose starting weights, set hyperparameters and augmentation, and save a reproducible training config. Launching the run is the next stage.</p>
+        </div>
+      </div>
+      <nav class="rail" aria-label="Training pipeline stages">
+        <a class="stage" href="/import">Import Data</a>
+        <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
+        <a class="stage" href="/bbox-overview">BBox Overview</a>
+        <a class="stage" href="/dataset-selection">Dataset Selection</a>
+        <a class="stage active" href="/training-setup">Training Setup</a>
+        <span class="stage">Train YOLO</span>
+        <span class="stage">Evaluate</span>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <div class="form-pane">
+
+        <section class="card">
+          <h2>Exported <em>Dataset</em></h2>
+          <p class="hint">Only dataset selections that have been exported to YOLO format appear here. Export from the previous stage if your dataset is missing.</p>
+          <div class="field">
+            <label for="datasetPick">Dataset</label>
+            <select id="datasetPick"><option value="">Loading datasets...</option></select>
+          </div>
+          <div class="dataset-detail" id="datasetDetail"><p class="empty">Pick a dataset to see split and class counts.</p></div>
+        </section>
+
+        <section class="card">
+          <h2>Starting <em>Weights</em></h2>
+          <p class="hint">Tick one weight for a single-model run, or several to launch a sequential suite. Run names are derived per weight.</p>
+          <div class="weight-list" id="weightList"><p class="empty">Loading available weights...</p></div>
+        </section>
+
+        <section class="card">
+          <h2>Hyper<em>parameters</em></h2>
+          <p class="hint">Defaults are rule-of-thumb starting points. Hover or focus a field for what it controls.</p>
+          <div class="hp-grid">
+            <div class="field">
+              <div class="field-label-row"><label for="imageSize">Image size</label><span class="recommend">rec 960</span></div>
+              <input id="imageSize" type="number" min="32" step="32" value="960">
+              <span class="field-help">Square training resolution in pixels. 640 / 960 / 1280 are common; match your annotation scale.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="epochs">Epochs</label><span class="recommend">rec 150</span></div>
+              <input id="epochs" type="number" min="1" step="1" value="150">
+              <span class="field-help">Full passes over the dataset. 100&ndash;300 is typical for transfer learning; early-stop trims it.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="batch">Batch</label><span class="recommend">rec 8</span></div>
+              <input id="batch" type="number" min="-1" step="1" value="8">
+              <span class="field-help">Images per gradient step. Largest that fits in GPU memory; use -1 to auto-fit.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="patience">Patience</label><span class="recommend">rec 20</span></div>
+              <input id="patience" type="number" min="0" step="1" value="20">
+              <span class="field-help">Early-stop after N epochs without val mAP improvement. 20&ndash;50 is typical.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="seed">Seed</label><span class="recommend">rec 42</span></div>
+              <input id="seed" type="number" min="0" step="1" value="42">
+              <span class="field-help">Random seed. Reuse the same seed to reproduce a run.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="device">Device</label><span class="recommend" id="deviceRec">auto</span></div>
+              <input id="device" value="auto">
+              <span class="field-help">GPU index (<code>0</code>), multi-GPU (<code>0,1</code>), or <code>cpu</code>. Auto-detected on load.</span>
+            </div>
+            <div class="field">
+              <div class="field-label-row"><label for="workers">Workers</label><span class="recommend">rec 4</span></div>
+              <input id="workers" type="number" min="0" step="1" value="4">
+              <span class="field-help">DataLoader worker processes. 4&ndash;8 is fine on most machines.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Aug<em>mentation</em></h2>
+          <p class="hint">Pick a preset to fill the fields below, then tweak. Unknown keys are rejected by the backend whitelist.</p>
+          <div class="preset-row" id="augPresets">
+            <button type="button" class="preset-chip" data-preset="none">None</button>
+            <button type="button" class="preset-chip" data-preset="light">Light</button>
+            <button type="button" class="preset-chip active" data-preset="default">Default</button>
+            <button type="button" class="preset-chip" data-preset="heavy">Heavy</button>
+          </div>
+          <div class="aug-grid" id="augCommon">
+            <div class="field"><label for="aug_mosaic">mosaic</label><input id="aug_mosaic" type="number" min="0" max="1" step="0.05" value="1.0"></div>
+            <div class="field"><label for="aug_mixup">mixup</label><input id="aug_mixup" type="number" min="0" max="1" step="0.01" value="0.05"></div>
+            <div class="field"><label for="aug_fliplr">fliplr</label><input id="aug_fliplr" type="number" min="0" max="1" step="0.05" value="0.5"></div>
+            <div class="field"><label for="aug_flipud">flipud</label><input id="aug_flipud" type="number" min="0" max="1" step="0.05" value="0.5"></div>
+            <div class="field"><label for="aug_degrees">degrees</label><input id="aug_degrees" type="number" min="0" max="360" step="1" value="180"></div>
+            <div class="field"><label for="aug_scale">scale</label><input id="aug_scale" type="number" min="0" max="1" step="0.05" value="0.4"></div>
+            <div class="field"><label for="aug_translate">translate</label><input id="aug_translate" type="number" min="0" max="1" step="0.05" value="0.1"></div>
+          </div>
+          <details class="advanced" id="augAdvanced">
+            <summary>Advanced augmentation</summary>
+            <div class="aug-grid">
+              <div class="field"><label for="aug_hsv_h">hsv_h</label><input id="aug_hsv_h" type="number" min="0" max="1" step="0.005" value="0"></div>
+              <div class="field"><label for="aug_hsv_s">hsv_s</label><input id="aug_hsv_s" type="number" min="0" max="1" step="0.05" value="0.35"></div>
+              <div class="field"><label for="aug_hsv_v">hsv_v</label><input id="aug_hsv_v" type="number" min="0" max="1" step="0.05" value="0.25"></div>
+              <div class="field"><label for="aug_shear">shear</label><input id="aug_shear" type="number" min="0" max="45" step="1" value="0"></div>
+              <div class="field"><label for="aug_perspective">perspective</label><input id="aug_perspective" type="number" min="0" max="0.001" step="0.0001" value="0"></div>
+              <div class="field"><label for="aug_copy_paste">copy_paste</label><input id="aug_copy_paste" type="number" min="0" max="1" step="0.05" value="0"></div>
+              <div class="field"><label for="aug_erasing">erasing</label><input id="aug_erasing" type="number" min="0" max="1" step="0.05" value="0"></div>
+              <div class="field"><label for="aug_crop_fraction">crop_fraction</label><input id="aug_crop_fraction" type="number" min="0" max="1" step="0.05" value="0"></div>
+            </div>
+          </details>
+        </section>
+
+        <section class="card">
+          <h2>Run <em>Identity</em></h2>
+          <p class="hint">The run group is the experiment label. Run names are derived per selected weight as <code>&lt;weight_stem&gt;_&lt;run_group&gt;</code>.</p>
+          <div class="field">
+            <label for="runGroup">Run group</label>
+            <input id="runGroup" placeholder="e.g. manual_reviewed_gavin_balanced_1to1_v1_e150_img960">
+          </div>
+          <div class="field">
+            <label>Derived run names</label>
+            <div class="run-name-list" id="runNameList"><span class="empty">Tick at least one weight and enter a run group.</span></div>
+          </div>
+          <label class="checkbox-row"><input id="overwrite" type="checkbox"> Overwrite existing run directories</label>
+        </section>
+
+      </div>
+
+      <aside class="composer">
+        <div class="sticky">
+
+          <section class="card">
+            <h2>Readiness</h2>
+            <p class="hint" id="readinessHint">Fill in a run group, dataset, and at least one weight to see readiness.</p>
+            <div class="check-list" id="readinessList"></div>
+          </section>
+
+          <section class="card">
+            <h2>Saved <em>Configs</em></h2>
+            <div class="saved-list" id="savedList"><p class="empty">Loading saved configs...</p></div>
+          </section>
+
+          <section class="card">
+            <h2>Actions</h2>
+            <div class="footer-actions">
+              <button class="primary" id="saveBtn" disabled>Save Config</button>
+              <div class="secondary-row">
+                <button id="resetBtn">Reset</button>
+                <button id="continueBtn" disabled title="Available in Step 6">Continue to Train YOLO</button>
+              </div>
+              <p class="hint" id="savePathHint">Save a config to use it for training.</p>
+            </div>
+          </section>
+
+        </div>
+      </aside>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const stateKey = 'opendarksts.trainingSetup.state.v1';
+    const AUG_KEYS_COMMON = ['mosaic','mixup','fliplr','flipud','degrees','scale','translate'];
+    const AUG_KEYS_ADVANCED = ['hsv_h','hsv_s','hsv_v','shear','perspective','copy_paste','erasing','crop_fraction'];
+    const AUG_KEYS = AUG_KEYS_COMMON.concat(AUG_KEYS_ADVANCED);
+    const AUG_PRESETS = {
+      none: { mosaic:0, mixup:0, fliplr:0, flipud:0, degrees:0, scale:0, translate:0, hsv_h:0, hsv_s:0, hsv_v:0, shear:0, perspective:0, copy_paste:0, erasing:0, crop_fraction:0 },
+      light: { mosaic:0.5, mixup:0, fliplr:0.5, flipud:0, degrees:0, scale:0.2, translate:0.05, hsv_h:0, hsv_s:0.2, hsv_v:0.2, shear:0, perspective:0, copy_paste:0, erasing:0, crop_fraction:0 },
+      default: { mosaic:1.0, mixup:0.05, fliplr:0.5, flipud:0.5, degrees:180, scale:0.4, translate:0.1, hsv_h:0.015, hsv_s:0.35, hsv_v:0.25, shear:0, perspective:0, copy_paste:0, erasing:0, crop_fraction:0 },
+      heavy: { mosaic:1.0, mixup:0.10, fliplr:0.5, flipud:0.5, degrees:180, scale:0.6, translate:0.2, hsv_h:0.015, hsv_s:0.4, hsv_v:0.3, shear:0, perspective:0, copy_paste:0.1, erasing:0.4, crop_fraction:0 },
+    };
+    const HP_DEFAULTS = { image_size:960, epochs:150, batch:8, patience:20, seed:42, device:'auto', workers:4 };
+
+    const state = {
+      datasets: [],
+      weights: [],
+      saved: [],
+      deviceInfo: null,
+      selectedSelectionPath: '',
+      selectedWeights: [],
+      lastSavedRunGroup: null,
+      lastSavedConfigPath: null,
+      readiness: null,
+    };
+
+    function escape(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      })[ch]);
+    }
+    function weightStem(name) {
+      const base = (name || '').split('/').pop();
+      const dot = base.lastIndexOf('.');
+      return dot >= 0 ? base.slice(0, dot) : base;
+    }
+    function showToast(message, kind) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.toggle('error', kind === 'error');
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+    function logAction(action, details) {
+      const payload = {
+        action,
+        timestamp: new Date().toISOString(),
+        page: 'training-setup',
+        selected_weights: state.selectedWeights,
+        selection_path: state.selectedSelectionPath,
+        details: details || {},
+      };
+      const body = JSON.stringify(payload);
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/training-ui-interaction', new Blob([body], { type: 'application/json' }));
+          return;
+        }
+      } catch (e) {}
+      fetch('/api/training-ui-interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
+    }
+    function persistState() {
+      localStorage.setItem(stateKey, JSON.stringify({
+        selectedSelectionPath: state.selectedSelectionPath,
+        selectedWeights: state.selectedWeights,
+        lastSavedRunGroup: state.lastSavedRunGroup,
+        lastSavedConfigPath: state.lastSavedConfigPath,
+        runGroup: document.getElementById('runGroup').value,
+        overwrite: document.getElementById('overwrite').checked,
+        hp: collectHyperparams(),
+        aug: collectAugmentation(),
+      }));
+    }
+    function restoreState() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(stateKey) || '{}');
+        if (typeof raw.selectedSelectionPath === 'string') state.selectedSelectionPath = raw.selectedSelectionPath;
+        if (Array.isArray(raw.selectedWeights)) state.selectedWeights = raw.selectedWeights.filter(x => typeof x === 'string');
+        if (typeof raw.lastSavedRunGroup === 'string') state.lastSavedRunGroup = raw.lastSavedRunGroup;
+        if (typeof raw.lastSavedConfigPath === 'string') state.lastSavedConfigPath = raw.lastSavedConfigPath;
+        if (raw.runGroup) document.getElementById('runGroup').value = raw.runGroup;
+        if (typeof raw.overwrite === 'boolean') document.getElementById('overwrite').checked = raw.overwrite;
+        if (raw.hp) applyHyperparams(raw.hp);
+        if (raw.aug) applyAugmentation(raw.aug);
+      } catch (e) {}
+    }
+    function applyHyperparams(hp) {
+      if (hp.image_size != null) document.getElementById('imageSize').value = hp.image_size;
+      if (hp.epochs != null) document.getElementById('epochs').value = hp.epochs;
+      if (hp.batch != null) document.getElementById('batch').value = hp.batch;
+      if (hp.patience != null) document.getElementById('patience').value = hp.patience;
+      if (hp.seed != null) document.getElementById('seed').value = hp.seed;
+      if (hp.device != null) document.getElementById('device').value = hp.device;
+      if (hp.workers != null) document.getElementById('workers').value = hp.workers;
+    }
+    function applyAugmentation(aug) {
+      for (const key of AUG_KEYS) {
+        if (aug[key] != null) {
+          const input = document.getElementById('aug_' + key);
+          if (input) input.value = aug[key];
+        }
+      }
+    }
+    function applyPreset(presetName) {
+      const preset = AUG_PRESETS[presetName];
+      if (!preset) return;
+      applyAugmentation(preset);
+      document.querySelectorAll('#augPresets .preset-chip').forEach(chip => {
+        chip.classList.toggle('active', chip.dataset.preset === presetName);
+      });
+      logAction('aug_preset_selected', { preset: presetName });
+      persistState();
+      requestReadiness();
+    }
+    function collectHyperparams() {
+      return {
+        image_size: Number(document.getElementById('imageSize').value || HP_DEFAULTS.image_size),
+        epochs: Number(document.getElementById('epochs').value || HP_DEFAULTS.epochs),
+        batch: Number(document.getElementById('batch').value || HP_DEFAULTS.batch),
+        patience: Number(document.getElementById('patience').value || HP_DEFAULTS.patience),
+        seed: Number(document.getElementById('seed').value || HP_DEFAULTS.seed),
+        device: document.getElementById('device').value.trim() || HP_DEFAULTS.device,
+        workers: Number(document.getElementById('workers').value || HP_DEFAULTS.workers),
+      };
+    }
+    function collectAugmentation() {
+      const out = {};
+      for (const key of AUG_KEYS) {
+        const input = document.getElementById('aug_' + key);
+        if (!input) continue;
+        const value = Number(input.value);
+        if (Number.isFinite(value)) out[key] = value;
+      }
+      return out;
+    }
+    function selectedDataset() {
+      return state.datasets.find(d => d.selection_path === state.selectedSelectionPath) || null;
+    }
+    function selectedWeightEntries() {
+      const selected = new Set(state.selectedWeights);
+      return state.weights.filter(w => selected.has(w.path));
+    }
+    function derivedRunNames() {
+      const group = document.getElementById('runGroup').value.trim();
+      if (!group) return [];
+      return selectedWeightEntries().map(w => weightStem(w.path) + '_' + group);
+    }
+
+    function renderDatasetPicker() {
+      const host = document.getElementById('datasetPick');
+      if (!state.datasets.length) {
+        host.innerHTML = '<option value="">No exported datasets found</option>';
+        return;
+      }
+      const options = state.datasets.map(d => {
+        const label = (d.dataset_name || d.name || 'dataset') + (d.dataset_version ? ' / ' + d.dataset_version : '');
+        const suffix = d.available === false ? ' (unavailable)' : '';
+        const disabled = d.available === false ? ' disabled' : '';
+        const selected = d.selection_path === state.selectedSelectionPath ? ' selected' : '';
+        return '<option value="' + escape(d.selection_path) + '"' + disabled + selected + '>' + escape(label + suffix) + '</option>';
+      });
+      host.innerHTML = '<option value="">Select a dataset...</option>' + options.join('');
+    }
+    function renderDatasetDetail() {
+      const host = document.getElementById('datasetDetail');
+      const dataset = selectedDataset();
+      if (!dataset) {
+        host.innerHTML = '<p class="empty">Pick a dataset to see split and class counts.</p>';
+        return;
+      }
+      if (dataset.available === false) {
+        host.innerHTML = '<p class="empty">' + escape(dataset.unavailable_reason || 'This dataset is not ready for training.') + '</p>';
+        return;
+      }
+      const splits = dataset.split_counts || dataset.splits || {};
+      const counts = dataset.bbox_counts || dataset.counts || {};
+      const rows = [
+        ['train', splits.train || 0],
+        ['val', splits.val || 0],
+        ['test', splits.test || 0],
+        ['ship boxes', counts.ship || 0],
+        ['ships boxes', counts.ships || 0],
+      ];
+      const stats = rows.map(([label, value]) => '<span class="dataset-stat"><strong>' + escape(value) + '</strong>' + escape(label) + '</span>').join('');
+      host.innerHTML = '<div class="stat-row">' + stats + '</div><div style="font-family: var(--mono); font-size: 11px; color: var(--muted);">' + escape(dataset.selection_path) + '</div>';
+    }
+    function renderWeightList() {
+      const host = document.getElementById('weightList');
+      if (!state.weights.length) {
+        host.innerHTML = '<p class="empty">No starting weights discovered. Add a .pt file to the repo root or workspace/model_weights/.</p>';
+        return;
+      }
+      const selected = new Set(state.selectedWeights);
+      host.innerHTML = state.weights.map(w => {
+        const checked = selected.has(w.path) ? 'checked' : '';
+        const documented = w.provenance && w.provenance.documented;
+        const prov = documented
+          ? '<span class="prov documented" title="' + escape(w.provenance.source_doc || 'documented') + '">documented</span>'
+          : '<span class="prov undocumented" title="No entry in docs/yolo_weight_recreation.md">undocumented</span>';
+        const sizeMb = w.size_bytes ? (w.size_bytes / (1024 * 1024)).toFixed(1) + ' MB' : '';
+        return '<label class="weight-row" data-weight-path="' + escape(w.path) + '">'
+          + '<input type="checkbox" ' + checked + '>'
+          + '<span><div class="weight-name">' + escape(w.basename || w.path) + '</div>'
+          + '<div class="weight-meta">' + escape(w.path) + (sizeMb ? ' &middot; ' + escape(sizeMb) : '') + '</div></span>'
+          + prov
+          + '</label>';
+      }).join('');
+      host.querySelectorAll('.weight-row input[type="checkbox"]').forEach(input => {
+        input.onchange = () => {
+          const path = input.closest('.weight-row').getAttribute('data-weight-path');
+          const set = new Set(state.selectedWeights);
+          if (input.checked) set.add(path); else set.delete(path);
+          state.selectedWeights = Array.from(set);
+          logAction('weight_toggled', { path, selected: input.checked });
+          persistState();
+          renderRunNames();
+          renderActions();
+          requestReadiness();
+        };
+      });
+    }
+    function renderRunNames() {
+      const host = document.getElementById('runNameList');
+      const names = derivedRunNames();
+      if (!names.length) {
+        host.innerHTML = '<span class="empty">Tick at least one weight and enter a run group.</span>';
+        return;
+      }
+      host.innerHTML = names.map(n => '<div>' + escape(n) + '</div>').join('');
+    }
+    function renderSavedList() {
+      const host = document.getElementById('savedList');
+      if (!state.saved.length) {
+        host.innerHTML = '<p class="empty">No saved configs yet.</p>';
+        return;
+      }
+      host.innerHTML = state.saved.map(item => {
+        const active = item.run_group === state.lastSavedRunGroup ? ' active' : '';
+        const modelCount = item.model_count || (item.models ? item.models.length : 1);
+        const datasetLabel = item.dataset_name ? escape(item.dataset_name) + (item.dataset_version ? ' / ' + escape(item.dataset_version) : '') : 'unknown dataset';
+        return '<article class="saved-item' + active + '" data-run-group="' + escape(item.run_group) + '" data-config-path="' + escape(item.config_path || '') + '">'
+          + '<div class="saved-title">' + escape(item.run_group) + '</div>'
+          + '<div class="saved-meta">' + datasetLabel + ' &middot; ' + escape(modelCount) + ' model' + (modelCount === 1 ? '' : 's') + '</div>'
+          + '</article>';
+      }).join('');
+      host.querySelectorAll('.saved-item').forEach(item => {
+        item.onclick = () => {
+          const runGroup = item.getAttribute('data-run-group');
+          loadSavedConfig(runGroup);
+        };
+      });
+    }
+    function renderReadiness() {
+      const host = document.getElementById('readinessList');
+      const hint = document.getElementById('readinessHint');
+      const data = state.readiness;
+      if (!data) {
+        host.innerHTML = '';
+        hint.textContent = 'Fill in a run group, dataset, and at least one weight to see readiness.';
+        return;
+      }
+      hint.textContent = data.ready ? 'Ready to save.' : 'Resolve blockers before saving.';
+      const items = [];
+      for (const msg of (data.missing || [])) items.push({ level: 'block', message: msg });
+      for (const msg of (data.warnings || [])) items.push({ level: 'warn', message: msg });
+      if (!items.length && data.ready) items.push({ level: 'pass', message: 'All checks pass.' });
+      host.innerHTML = items.map(item => {
+        const mark = item.level === 'pass' ? '✓' : (item.level === 'warn' ? '!' : '✗');
+        return '<div class="check-item ' + item.level + '"><span class="mark">' + mark + '</span><span>' + escape(item.message) + '</span></div>';
+      }).join('');
+      if (data.runs && data.runs.length > 1) {
+        const perRun = data.runs.map(run => {
+          const status = run.ready ? 'pass' : 'block';
+          const mark = run.ready ? '✓' : '✗';
+          const detail = (run.missing && run.missing.length) ? ': ' + run.missing.join('; ') : '';
+          return '<div class="check-item ' + status + '"><span class="mark">' + mark + '</span><span>' + escape(run.run_name || run.model || 'run') + escape(detail) + '</span></div>';
+        }).join('');
+        host.innerHTML += '<div style="margin-top:8px;border-top:1px solid var(--rule);padding-top:8px;font-size:11px;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase;font-weight:700;">Per-run</div>' + perRun;
+      }
+    }
+    function renderActions() {
+      const hasDataset = !!state.selectedSelectionPath;
+      const hasWeights = state.selectedWeights.length > 0;
+      const hasGroup = document.getElementById('runGroup').value.trim().length > 0;
+      const ready = state.readiness && state.readiness.ready;
+      document.getElementById('saveBtn').disabled = !(hasDataset && hasWeights && hasGroup && ready);
+      const pathHint = document.getElementById('savePathHint');
+      if (state.lastSavedConfigPath) {
+        pathHint.textContent = 'Saved: ' + state.lastSavedConfigPath;
+      } else if (!hasDataset) {
+        pathHint.textContent = 'Pick a dataset to begin.';
+      } else if (!hasWeights) {
+        pathHint.textContent = 'Tick at least one starting weight.';
+      } else if (!hasGroup) {
+        pathHint.textContent = 'Name the run group.';
+      } else if (!ready) {
+        pathHint.textContent = 'Resolve readiness blockers to save.';
+      } else {
+        pathHint.textContent = 'Ready to save.';
+      }
+    }
+
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || payload.message || response.statusText);
+      return payload;
+    }
+
+    async function loadDatasets() {
+      try {
+        const payload = await fetchJson('/api/exported-datasets');
+        state.datasets = payload.datasets || payload.result?.datasets || [];
+        renderDatasetPicker();
+        renderDatasetDetail();
+      } catch (error) {
+        document.getElementById('datasetPick').innerHTML = '<option value="">Failed to load datasets</option>';
+        showToast('Could not load exported datasets: ' + error.message, 'error');
+        logAction('datasets_load_error', { message: error.message });
+      }
+    }
+    async function loadWeights() {
+      try {
+        const payload = await fetchJson('/api/starting-weights');
+        state.weights = payload.weights || payload.result?.weights || [];
+        renderWeightList();
+      } catch (error) {
+        document.getElementById('weightList').innerHTML = '<p class="empty">Could not load starting weights: ' + escape(error.message) + '</p>';
+        logAction('weights_load_error', { message: error.message });
+      }
+    }
+    async function loadSavedConfigs() {
+      try {
+        const payload = await fetchJson('/api/training-configs');
+        state.saved = payload.configs || payload.result?.configs || [];
+        renderSavedList();
+      } catch (error) {
+        document.getElementById('savedList').innerHTML = '<p class="empty">Could not load saved configs: ' + escape(error.message) + '</p>';
+        logAction('saved_configs_load_error', { message: error.message });
+      }
+    }
+    async function loadDeviceInfo() {
+      try {
+        const payload = await fetchJson('/api/system/device-info');
+        state.deviceInfo = payload.device_info || payload.result || payload;
+        const recommended = state.deviceInfo.recommended_device || 'cpu';
+        document.getElementById('deviceRec').textContent = 'rec ' + recommended;
+        const input = document.getElementById('device');
+        if (input.value === 'auto' || input.value === '') input.value = recommended;
+        if (state.deviceInfo.gpus && state.deviceInfo.gpus.length) {
+          const gpu = state.deviceInfo.gpus[0];
+          input.title = 'Detected: ' + (gpu.name || 'GPU ' + gpu.index) + (gpu.memory_gb ? ' (' + gpu.memory_gb + ' GB)' : '');
+        }
+      } catch (error) {
+        document.getElementById('deviceRec').textContent = 'cpu (probe failed)';
+        document.getElementById('device').value = 'cpu';
+      }
+    }
+    async function loadSavedConfig(runGroup) {
+      try {
+        const payload = await fetchJson('/api/training-configs/' + encodeURIComponent(runGroup));
+        const config = payload.config || payload.result || payload;
+        applyLoadedConfig(config);
+        showToast('Loaded ' + runGroup);
+        logAction('saved_config_loaded', { run_group: runGroup });
+      } catch (error) {
+        showToast('Load failed: ' + error.message, 'error');
+        logAction('saved_config_load_error', { run_group: runGroup, message: error.message });
+      }
+    }
+    function applyLoadedConfig(config) {
+      if (!config) return;
+      if (config.selection_path) state.selectedSelectionPath = config.selection_path;
+      const models = Array.isArray(config.models) ? config.models : (config.model ? [config.model] : []);
+      state.selectedWeights = models.map(name => {
+        const match = state.weights.find(w => w.basename === name || w.path === name);
+        return match ? match.path : name;
+      });
+      document.getElementById('runGroup').value = config.run_group || '';
+      document.getElementById('overwrite').checked = !!config.overwrite;
+      applyHyperparams({
+        image_size: config.image_size,
+        epochs: config.epochs,
+        batch: config.batch,
+        patience: config.patience,
+        seed: config.seed,
+        device: config.device,
+        workers: config.workers,
+      });
+      applyAugmentation(config.augmentation || {});
+      state.lastSavedRunGroup = config.run_group || null;
+      renderDatasetPicker();
+      renderDatasetDetail();
+      renderWeightList();
+      renderRunNames();
+      renderSavedList();
+      persistState();
+      requestReadiness();
+    }
+    function buildConfigPayload() {
+      const hp = collectHyperparams();
+      const aug = collectAugmentation();
+      const runGroup = document.getElementById('runGroup').value.trim();
+      const selected = selectedWeightEntries();
+      const dataset = selectedDataset();
+      return {
+        schema_version: 1,
+        selection_path: state.selectedSelectionPath,
+        dataset_name: dataset ? dataset.dataset_name : null,
+        dataset_version: dataset ? dataset.dataset_version : null,
+        models: selected.map(w => w.basename || w.path.split('/').pop()),
+        image_size: hp.image_size,
+        epochs: hp.epochs,
+        batch: hp.batch,
+        patience: hp.patience,
+        seed: hp.seed,
+        device: hp.device,
+        workers: hp.workers,
+        augmentation: aug,
+        run_group: runGroup,
+        overwrite: document.getElementById('overwrite').checked,
+      };
+    }
+
+    let readinessTimer = null;
+    function requestReadiness() {
+      if (readinessTimer) clearTimeout(readinessTimer);
+      readinessTimer = setTimeout(() => {
+        readinessTimer = null;
+        doReadinessCheck();
+      }, 250);
+    }
+    async function doReadinessCheck() {
+      const hasDataset = !!state.selectedSelectionPath;
+      const hasWeights = state.selectedWeights.length > 0;
+      const hasGroup = document.getElementById('runGroup').value.trim().length > 0;
+      if (!(hasDataset && hasWeights && hasGroup)) {
+        state.readiness = null;
+        renderReadiness();
+        renderActions();
+        return;
+      }
+      try {
+        const config = buildConfigPayload();
+        const payload = await fetchJson('/api/training-config/check-ready', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config, selection_path: state.selectedSelectionPath }),
+        });
+        state.readiness = payload.result || payload;
+        renderReadiness();
+        renderActions();
+      } catch (error) {
+        state.readiness = { ready: false, missing: ['Readiness check failed: ' + error.message], warnings: [] };
+        renderReadiness();
+        renderActions();
+      }
+    }
+
+    async function saveConfig() {
+      const config = buildConfigPayload();
+      if (!config.run_group) {
+        showToast('Run group is required', 'error');
+        return;
+      }
+      if (!config.models.length) {
+        showToast('Pick at least one starting weight', 'error');
+        return;
+      }
+      try {
+        logAction('save_started', { run_group: config.run_group, model_count: config.models.length });
+        const payload = await fetchJson('/api/training-configs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+        const saved = payload.config || payload.result || payload;
+        state.lastSavedRunGroup = saved.run_group || config.run_group;
+        state.lastSavedConfigPath = payload.config_path || payload.result?.config_path || null;
+        const warnings = payload.provenance_warnings || saved.provenance_warnings || [];
+        if (warnings.length) {
+          showToast('Saved with ' + warnings.length + ' provenance warning(s)');
+        } else {
+          showToast('Config saved');
+        }
+        await loadSavedConfigs();
+        persistState();
+        document.getElementById('continueBtn').disabled = false;
+        document.getElementById('continueBtn').title = 'Available in Step 6';
+        renderActions();
+        logAction('save_done', { run_group: state.lastSavedRunGroup, config_path: state.lastSavedConfigPath });
+      } catch (error) {
+        showToast('Save failed: ' + error.message, 'error');
+        logAction('save_error', { message: error.message });
+      }
+    }
+    function resetToDefaults() {
+      applyHyperparams(HP_DEFAULTS);
+      applyPreset('default');
+      document.getElementById('runGroup').value = '';
+      document.getElementById('overwrite').checked = false;
+      state.selectedWeights = [];
+      state.selectedSelectionPath = '';
+      state.readiness = null;
+      state.lastSavedConfigPath = null;
+      state.lastSavedRunGroup = null;
+      renderDatasetPicker();
+      renderDatasetDetail();
+      renderWeightList();
+      renderRunNames();
+      renderReadiness();
+      renderActions();
+      persistState();
+      if (state.deviceInfo && state.deviceInfo.recommended_device) {
+        document.getElementById('device').value = state.deviceInfo.recommended_device;
+      }
+      logAction('reset_clicked');
+    }
+
+    function attachInputHandlers() {
+      document.getElementById('datasetPick').onchange = (event) => {
+        state.selectedSelectionPath = event.target.value;
+        renderDatasetDetail();
+        persistState();
+        logAction('dataset_selected', { selection_path: state.selectedSelectionPath });
+        requestReadiness();
+        renderActions();
+      };
+      document.getElementById('runGroup').oninput = () => {
+        renderRunNames();
+        renderActions();
+        persistState();
+        requestReadiness();
+      };
+      document.getElementById('overwrite').onchange = () => {
+        persistState();
+        logAction('overwrite_toggled', { overwrite: document.getElementById('overwrite').checked });
+        requestReadiness();
+      };
+      const hpIds = ['imageSize','epochs','batch','patience','seed','device','workers'];
+      for (const id of hpIds) {
+        document.getElementById(id).oninput = () => { persistState(); requestReadiness(); };
+      }
+      for (const key of AUG_KEYS) {
+        const input = document.getElementById('aug_' + key);
+        if (input) input.oninput = () => {
+          document.querySelectorAll('#augPresets .preset-chip').forEach(chip => chip.classList.remove('active'));
+          persistState();
+        };
+      }
+      document.querySelectorAll('#augPresets .preset-chip').forEach(chip => {
+        chip.onclick = () => applyPreset(chip.dataset.preset);
+      });
+      document.getElementById('saveBtn').onclick = saveConfig;
+      document.getElementById('resetBtn').onclick = resetToDefaults;
+      document.getElementById('continueBtn').onclick = () => {
+        logAction('continue_to_train_yolo_stub', { run_group: state.lastSavedRunGroup });
+        showToast('Train YOLO is the next stage and is not implemented yet.');
+      };
+    }
+
+    function applyUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      const selectionPath = params.get('selection_path');
+      if (selectionPath) state.selectedSelectionPath = selectionPath;
+    }
+
+    async function boot() {
+      attachInputHandlers();
+      applyUrlParams();
+      restoreState();
+      renderRunNames();
+      renderSavedList();
+      renderReadiness();
+      renderActions();
+      try {
+        await Promise.all([loadDatasets(), loadWeights(), loadSavedConfigs(), loadDeviceInfo()]);
+        renderDatasetPicker();
+        renderDatasetDetail();
+        renderWeightList();
+        renderActions();
+        requestReadiness();
+        logAction('page_open', { selection_path: state.selectedSelectionPath });
+      } catch (error) {
+        showToast('Training setup failed to initialize: ' + error.message, 'error');
         logAction('boot_error', { message: error.message });
       }
     }
@@ -1392,7 +2459,7 @@ BBOX_OVERVIEW_HTML = """<!DOCTYPE html>
         <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
         <a class="stage active" href="/bbox-overview">BBox Overview</a>
         <a class="stage" href="/dataset-selection">Dataset Selection</a>
-        <span class="stage">Training Setup</span>
+        <a class="stage" href="/training-setup">Training Setup</a>
         <span class="stage">Train YOLO</span>
         <span class="stage">Evaluate</span>
       </nav>
@@ -2557,7 +3624,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
         <a class="stage" href="/dataset-selection">Dataset Selection</a>
-        <span class="stage">Training Setup</span>
+        <a class="stage" href="/training-setup">Training Setup</a>
         <span class="stage">Train YOLO</span>
         <span class="stage">Evaluate</span>
       </nav>
@@ -3892,6 +4959,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/dataset-selection":
             self._respond_html(render_dataset_selection_html())
             return
+        if path == "/training-setup":
+            self._respond_html(render_training_setup_html())
+            return
         if path == "/import":
             self._respond_html(render_import_html())
             return
@@ -3927,6 +4997,23 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/dataset-selections":
             self._handle_list_dataset_selections()
             return
+        if path == "/api/exported-datasets":
+            self._handle_list_exported_datasets()
+            return
+        if path == "/api/starting-weights":
+            self._handle_list_starting_weights()
+            return
+        if path == "/api/training-configs":
+            self._handle_list_training_configs()
+            return
+        if path == "/api/system/device-info":
+            self._handle_device_info()
+            return
+        if path.startswith("/api/training-configs/"):
+            run_group = path[len("/api/training-configs/"):].strip("/")
+            if run_group and "/" not in run_group:
+                self._handle_show_training_config(run_group)
+                return
         if path.startswith("/api/albums/"):
             album_id = path[len("/api/albums/"):].strip("/")
             if album_id and "/" not in album_id:
@@ -3963,6 +5050,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/dataset-selections/export":
             self._handle_export_dataset_selection()
+            return
+        if parsed.path == "/api/training-configs":
+            self._handle_save_training_config()
+            return
+        if parsed.path == "/api/training-config/check-ready":
+            self._handle_training_config_check_ready()
             return
         if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/add-images"):
             album_id = parsed.path[len("/api/albums/"):-len("/add-images")].strip("/")
@@ -4116,6 +5209,57 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         self._respond_json({"selections": selections})
 
+
+    def _handle_list_exported_datasets(self) -> None:
+        try:
+            datasets = pipeline.list_exported_datasets(pipeline.DEFAULT_DATASET_SELECTIONS_DIR)
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "datasets": datasets})
+
+
+    def _handle_list_starting_weights(self) -> None:
+        try:
+            weights = pipeline.list_starting_weights()
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "weights": weights})
+
+
+    def _handle_list_training_configs(self) -> None:
+        try:
+            configs = pipeline.list_training_configs(pipeline.DEFAULT_TRAINING_CONFIGS_DIR)
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "configs": configs})
+
+
+    def _handle_show_training_config(self, run_group: str) -> None:
+        try:
+            path = pipeline.training_config_path(pipeline.DEFAULT_TRAINING_CONFIGS_DIR, run_group)
+            if not path.is_file():
+                self._respond_json({"ok": False, "error": "training config not found"}, status=404)
+                return
+            config = pipeline.load_json(path)
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "config_path": pipeline.repo_relative(path), "config": config})
+
+
+    def _handle_device_info(self) -> None:
+        try:
+            result = pipeline.probe_training_devices()
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        payload = {"ok": True}
+        payload.update(result)
+        self._respond_json(payload)
+
     def _handle_save_dataset_selection(self) -> None:
         try:
             payload = self._json_body()
@@ -4165,6 +5309,47 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             "data_yaml": str(dataset_dir / "data.yaml"),
             "exported_image_count": len(manifest.get("exported_image_keys") or []),
             "warnings": list(manifest.get("warnings") or []),
+        })
+
+
+    def _handle_save_training_config(self) -> None:
+        try:
+            payload = self._json_body()
+            config = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+            append_training_ui_interaction({"action": "training_config_save_attempted", "run_group": config.get("run_group") if isinstance(config, dict) else None})
+            if not isinstance(config, dict):
+                raise ValueError("config JSON object is required")
+            result = pipeline.save_training_config(config, configs_dir=pipeline.DEFAULT_TRAINING_CONFIGS_DIR)
+        except Exception as exc:
+            append_training_ui_interaction({"action": "training_config_save_failed", "error": str(exc)})
+            self._respond_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        append_training_ui_interaction({"action": "training_config_save_succeeded", "config_path": result.get("config_path"), "run_group": result.get("config", {}).get("run_group")})
+        self._respond_json({
+            "ok": True,
+            "config_path": result["config_path"],
+            "config": result["config"],
+            "provenance_warnings": result.get("provenance_warnings") or [],
+        }, status=201)
+
+
+    def _handle_training_config_check_ready(self) -> None:
+        try:
+            payload = self._json_body()
+            config = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+            if not isinstance(config, dict):
+                raise ValueError("config JSON object is required")
+            selection_path = payload.get("selection_path") or config.get("selection_path")
+            readiness = pipeline.check_training_readiness(selection_path, config)
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._respond_json({
+            "ok": True,
+            "ready": readiness["ready"],
+            "missing": readiness["missing"],
+            "warnings": readiness.get("warnings") or [],
+            "runs": readiness.get("runs") or [],
         })
 
     def _handle_show_album(self, album_id: str) -> None:

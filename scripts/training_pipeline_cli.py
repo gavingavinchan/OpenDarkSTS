@@ -100,6 +100,34 @@ def selection_dataset_dir(selection_path: str | Path) -> Path:
     return pipeline.repo_resolve(output_dir)
 
 
+def load_config_argument(value: str) -> dict[str, Any]:
+    if value.lstrip().startswith("{"):
+        payload = json.loads(value)
+        if not isinstance(payload, dict):
+            raise ValueError("--config must be a JSON object or a path to a JSON object")
+        return payload
+    candidate = Path(value)
+    if candidate.exists() or value.endswith(".json"):
+        return pipeline.load_json(candidate)
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise ValueError("--config must be a JSON object or a path to a JSON object")
+    return payload
+
+
+def parse_roots_option(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def resolve_selection_for_config(args: argparse.Namespace, config: dict[str, Any]) -> Path:
+    selection = getattr(args, "selection", None) or config.get("selection_path")
+    if not selection:
+        raise ValueError("Dataset selection is required; pass --selection or include selection_path in the training config")
+    return pipeline.repo_resolve(selection)
+
+
 def add_diagnostics(result: dict[str, Any], args: argparse.Namespace, helper: str, **paths: str | Path) -> None:
     if not getattr(args, "verbose", False):
         return
@@ -230,6 +258,47 @@ def command_list_dataset_selections(args: argparse.Namespace) -> tuple[int, dict
     return 0, envelope("list-dataset-selections", ok=True, result=result)
 
 
+def command_list_exported_datasets(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = {"datasets": pipeline.list_exported_datasets(args.selections_dir)}
+    add_diagnostics(result, args, "list_exported_datasets", selections_dir=args.selections_dir)
+    return 0, envelope("list-exported-datasets", ok=True, result=result)
+
+
+def command_list_starting_weights(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = {"weights": pipeline.list_starting_weights(parse_roots_option(args.weights_roots), parse_roots_option(args.docs_roots))}
+    add_diagnostics(result, args, "list_starting_weights")
+    return 0, envelope("list-starting-weights", ok=True, result=result)
+
+
+def command_list_training_configs(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = {"configs": pipeline.list_training_configs(args.configs_dir)}
+    add_diagnostics(result, args, "list_training_configs", configs_dir=args.configs_dir)
+    return 0, envelope("list-training-configs", ok=True, result=result)
+
+
+def command_save_training_config(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    config = load_config_argument(args.config)
+    saved = pipeline.save_training_config(
+        config,
+        configs_dir=args.configs_dir,
+        weights_roots=parse_roots_option(args.weights_roots),
+        docs_roots=parse_roots_option(args.docs_roots),
+    )
+    result = {
+        "config_path": saved["config_path"],
+        "config": saved["config"],
+        "provenance_warnings": saved.get("provenance_warnings") or [],
+    }
+    add_diagnostics(result, args, "save_training_config", configs_dir=args.configs_dir)
+    return 0, envelope("save-training-config", ok=True, result=result, warnings=list(saved.get("provenance_warnings") or []))
+
+
+def command_device_info(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.probe_training_devices()
+    add_diagnostics(result, args, "probe_training_devices")
+    return 0, envelope("device-info", ok=True, result=result)
+
+
 def command_import_data(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     result = pipeline.import_training_data(
         list(args.source),
@@ -282,7 +351,9 @@ def command_run_auto_detect(args: argparse.Namespace) -> tuple[int, dict[str, An
 def command_check_training_ready(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     readiness = pipeline.check_training_readiness(args.selection, args.config)
     result = {"ready": readiness["ready"], "missing": readiness["missing"]}
-    add_diagnostics(result, args, "check_training_readiness", selection_path=args.selection, config_path=args.config)
+    if "runs" in readiness:
+        result["runs"] = readiness["runs"]
+    add_diagnostics(result, args, "check_training_readiness", selection_path=args.selection or "", config_path=args.config)
     response = envelope("check-training-ready", ok=True, result=result, warnings=list(readiness.get("warnings") or []))
     return (0 if readiness["ready"] else 3), response
 
@@ -292,17 +363,21 @@ def command_build_train_command(args: argparse.Namespace) -> tuple[int, dict[str
     missing = pipeline.config_missing_items(config)
     if missing:
         raise ValueError("; ".join(missing))
-    dataset_dir = selection_dataset_dir(args.selection)
-    command_line = pipeline.build_yolo_train_command(config, dataset_dir)
+    selection_path = resolve_selection_for_config(args, config)
+    dataset_dir = selection_dataset_dir(selection_path)
+    built = pipeline.build_yolo_train_command(config, dataset_dir)
+    commands = built if built and isinstance(built[0], list) else [built]
     run_group = str(config.get("run_group") or "default")
-    run_name = str(config.get("run_name") or "")
     output_root = pipeline.repo_resolve(config.get("output_dir") or pipeline.WORKSPACE_DIR / "runs")
     result = {
-        "command_line": command_line,
-        "run_dir": str(output_root / run_group / run_name),
+        "commands": commands,
+        "run_dirs": [str(output_root / run_group / str(run["run_name"])) for run in pipeline.expand_training_config_runs(config)],
         "data_yaml": str(dataset_dir / "data.yaml"),
     }
-    add_diagnostics(result, args, "build_yolo_train_command", selection_path=args.selection, config_path=args.config, dataset_dir=dataset_dir)
+    if len(commands) == 1:
+        result["command_line"] = commands[0]
+        result["run_dir"] = result["run_dirs"][0]
+    add_diagnostics(result, args, "build_yolo_train_command", selection_path=selection_path, config_path=args.config, dataset_dir=dataset_dir)
     return 0, envelope("build-train-command", ok=True, result=result)
 
 
@@ -549,13 +624,36 @@ def build_parser() -> argparse.ArgumentParser:
     list_selections_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))
     list_selections_parser.set_defaults(handler=command_list_dataset_selections)
 
+    list_exported_parser = subparsers.add_parser("list-exported-datasets")
+    list_exported_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))
+    list_exported_parser.set_defaults(handler=command_list_exported_datasets)
+
+    list_weights_parser = subparsers.add_parser("list-starting-weights")
+    list_weights_parser.add_argument("--weights-roots")
+    list_weights_parser.add_argument("--docs-roots")
+    list_weights_parser.set_defaults(handler=command_list_starting_weights)
+
+    list_configs_parser = subparsers.add_parser("list-training-configs")
+    list_configs_parser.add_argument("--configs-dir", default=str(pipeline.DEFAULT_TRAINING_CONFIGS_DIR))
+    list_configs_parser.set_defaults(handler=command_list_training_configs)
+
+    save_config_parser = subparsers.add_parser("save-training-config")
+    save_config_parser.add_argument("--config", required=True)
+    save_config_parser.add_argument("--configs-dir", default=str(pipeline.DEFAULT_TRAINING_CONFIGS_DIR))
+    save_config_parser.add_argument("--weights-roots")
+    save_config_parser.add_argument("--docs-roots")
+    save_config_parser.set_defaults(handler=command_save_training_config)
+
+    device_parser = subparsers.add_parser("device-info")
+    device_parser.set_defaults(handler=command_device_info)
+
     ready_parser = subparsers.add_parser("check-training-ready")
-    ready_parser.add_argument("--selection", required=True)
+    ready_parser.add_argument("--selection")
     ready_parser.add_argument("--config", required=True)
     ready_parser.set_defaults(handler=command_check_training_ready)
 
     command_parser = subparsers.add_parser("build-train-command")
-    command_parser.add_argument("--selection", required=True)
+    command_parser.add_argument("--selection")
     command_parser.add_argument("--config", required=True)
     command_parser.set_defaults(handler=command_build_train_command)
 

@@ -70,3 +70,25 @@ def test_build_yolo_train_command_adds_exist_ok_only_for_overwrite(tmp_path: Pat
     command = training_lib.build_yolo_train_command(config, dataset_dir)
 
     assert "exist_ok=True" in command
+
+
+def test_expand_training_config_runs_rejects_duplicate_derived_names() -> None:
+    training_lib = load_training_lib()
+
+    try:
+        training_lib.expand_training_config_runs(
+            {
+                "models": ["/a/yolov8n.pt", "/b/yolov8n.pt"],
+                "image_size": 960,
+                "epochs": 2,
+                "batch": 1,
+                "device": "cpu",
+                "seed": 42,
+                "run_group": "fixture",
+                "augmentation": {},
+            }
+        )
+    except ValueError as exc:
+        assert "Duplicate derived run name" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("duplicate run names should fail")
