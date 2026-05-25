@@ -798,7 +798,7 @@ DATASET_SELECTION_HTML = """<!DOCTYPE html>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
         <a class="stage active" href="/dataset-selection">Dataset Selection</a>
         <a class="stage" href="/training-setup">Training Setup</a>
-        <span class="stage">Train YOLO</span>
+        <a class="stage" href="/train-yolo">Train YOLO</a>
         <span class="stage">Evaluate</span>
       </nav>
     </header>
@@ -1223,6 +1223,69 @@ def render_training_setup_html() -> str:
     return TRAINING_SETUP_HTML.replace("__MANUAL_REVIEW_HREF__", MANUAL_REVIEW_URL.rstrip("/") + "/")
 
 
+def render_train_yolo_html() -> str:
+    return TRAIN_YOLO_HTML.replace("__MANUAL_REVIEW_HREF__", MANUAL_REVIEW_URL.rstrip("/") + "/")
+
+
+TRAIN_YOLO_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Train YOLO</title>
+  <style>
+    :root { --ink: #121817; --paper: #ebe6d8; --card: #f8f4e8; --line: rgba(18,24,23,0.18); --muted: #68736f; --blue: #2458a6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .shell { max-width: 1180px; margin: 0 auto; padding: 28px; }
+    header { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: start; margin-bottom: 28px; }
+    h1 { margin: 0; font-size: clamp(34px, 6vw, 74px); letter-spacing: -0.06em; line-height: 0.9; }
+    em { font-family: Georgia, serif; font-weight: 400; }
+    .subtitle { color: var(--muted); max-width: 680px; font-size: 16px; line-height: 1.5; }
+    .filenum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
+    .rail { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .stage { color: inherit; text-decoration: none; border: 1px solid var(--line); background: rgba(255,255,255,0.35); border-radius: 999px; padding: 8px 11px; font-size: 12px; font-weight: 700; }
+    .stage:hover { border-color: var(--blue); color: var(--blue); }
+    .stage.active { background: var(--ink); border-color: var(--ink); color: white; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 26px; box-shadow: 0 18px 40px rgba(18,24,23,0.08); }
+    .card h2 { margin: 0 0 10px; font-size: 24px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+    .button { display: inline-block; color: white; background: var(--blue); text-decoration: none; border-radius: 12px; padding: 11px 14px; font-weight: 700; }
+    .button.secondary { color: var(--ink); background: transparent; border: 1px solid var(--line); }
+    @media (max-width: 860px) { header { grid-template-columns: 1fr; } .rail { justify-content: flex-start; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <div class="filenum">06<sup>/07</sup></div>
+        <h1>Train <em>YOLO</em></h1>
+        <p class="subtitle">Launch and monitor YOLO training from pipeline-managed configs. The full Step 6 run controls are being wired next; this page is available so the stage rail can navigate here from every previous step.</p>
+      </div>
+      <nav class="rail" aria-label="Training pipeline stages">
+        <a class="stage" href="/import">Import Data</a>
+        <a class="stage" href="__MANUAL_REVIEW_HREF__">Manual Review</a>
+        <a class="stage" href="/bbox-overview">BBox Overview</a>
+        <a class="stage" href="/dataset-selection">Dataset Selection</a>
+        <a class="stage" href="/training-setup">Training Setup</a>
+        <a class="stage active" href="/train-yolo">Train YOLO</a>
+        <span class="stage">Evaluate</span>
+      </nav>
+    </header>
+    <main class="card">
+      <h2>Step 6 Placeholder</h2>
+      <p class="subtitle">Use this page as the navigation target while the Step 6 backend, CLI, and active-run UI are implemented. Training setup remains the source for saved configs.</p>
+      <div class="actions">
+        <a class="button" href="/training-setup">Back To Training Setup</a>
+        <a class="button secondary" href="/dataset-selection">Dataset Selection</a>
+      </div>
+    </main>
+  </div>
+</body>
+</html>"""
+
+
 TRAINING_SETUP_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1544,7 +1607,7 @@ TRAINING_SETUP_HTML = """<!DOCTYPE html>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
         <a class="stage" href="/dataset-selection">Dataset Selection</a>
         <a class="stage active" href="/training-setup">Training Setup</a>
-        <span class="stage">Train YOLO</span>
+        <a class="stage" href="/train-yolo">Train YOLO</a>
         <span class="stage">Evaluate</span>
       </nav>
     </header>
@@ -2460,7 +2523,7 @@ BBOX_OVERVIEW_HTML = """<!DOCTYPE html>
         <a class="stage active" href="/bbox-overview">BBox Overview</a>
         <a class="stage" href="/dataset-selection">Dataset Selection</a>
         <a class="stage" href="/training-setup">Training Setup</a>
-        <span class="stage">Train YOLO</span>
+        <a class="stage" href="/train-yolo">Train YOLO</a>
         <span class="stage">Evaluate</span>
       </nav>
     </header>
@@ -3625,7 +3688,7 @@ IMPORT_HTML = r"""<!DOCTYPE html>
         <a class="stage" href="/bbox-overview">BBox Overview</a>
         <a class="stage" href="/dataset-selection">Dataset Selection</a>
         <a class="stage" href="/training-setup">Training Setup</a>
-        <span class="stage">Train YOLO</span>
+        <a class="stage" href="/train-yolo">Train YOLO</a>
         <span class="stage">Evaluate</span>
       </nav>
     </header>
@@ -4961,6 +5024,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if path == "/training-setup":
             self._respond_html(render_training_setup_html())
+            return
+        if path == "/train-yolo":
+            self._respond_html(render_train_yolo_html())
             return
         if path == "/import":
             self._respond_html(render_import_html())

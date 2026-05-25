@@ -761,7 +761,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         <a class="pipeline-stage enabled" href="/bbox-overview">BBox Overview</a>
         <a class="pipeline-stage enabled" href="/dataset-selection">Dataset Selection</a>
         <a class="pipeline-stage enabled" href="/training-setup">Training Setup</a>
-        <span class="pipeline-stage">Train YOLO</span>
+        <a class="pipeline-stage enabled" href="/train-yolo">Train YOLO</a>
         <span class="pipeline-stage">Evaluate</span>
       </nav>
       <div class="queue-meta" id="queueMeta"></div>

@@ -45,6 +45,40 @@ def post_json(url: str, payload: dict) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def get_text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return response.read().decode("utf-8")
+
+
+def test_stage_rail_links_to_train_yolo_from_existing_steps() -> None:
+    from scripts import review_visual_detections_ui as review_ui
+    from scripts import training_pipeline_ui as ui
+
+    pages = [
+        ui.render_import_html(),
+        review_ui.render_app_html(None),
+        ui.render_bbox_overview_html(),
+        ui.render_dataset_selection_html(),
+        ui.render_training_setup_html(),
+        ui.render_train_yolo_html(),
+    ]
+
+    for html in pages:
+        assert 'href="/train-yolo"' in html
+        assert '<span class="stage">Train YOLO</span>' not in html
+        assert '<span class="pipeline-stage">Train YOLO</span>' not in html
+
+
+def test_train_yolo_page_route_renders() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        html = get_text(server.base_url + "/train-yolo")
+
+    assert "Train <em>YOLO</em>" in html
+    assert 'class="stage active" href="/train-yolo"' in html
+
+
 def test_import_summary_includes_review_only_queue_images(tmp_path: Path, monkeypatch) -> None:
     from scripts import training_pipeline_ui as ui
 
