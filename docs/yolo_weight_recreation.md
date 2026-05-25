@@ -2,7 +2,7 @@
 
 This document is the repository registry for YOLO `*.pt` weight files. Every YOLO weight kept in the repository must be listed here or documented by an adjacent weight-specific markdown file.
 
-Current inventory date: 2026-05-07.
+Current inventory date: 2026-05-25.
 
 ## Reproducibility Standard
 
@@ -207,6 +207,44 @@ These weights use datasets exported by the training pipeline from reviewed image
 Common classes: `0: ship`, `1: ships`.
 
 Common package metadata in checkpoints: Ultralytics `8.4.23`.
+
+### Step 6 Backend Pipeline Smoke Runs
+
+Dataset: `workspace/datasets/manual_reviewed_gavin_balanced_1to1_v1/data.yaml`.
+
+Dataset manifest: `workspace/datasets/manual_reviewed_gavin_balanced_1to1_v1/dataset_manifest.json`.
+
+Dataset selection manifest: `workspace/dataset_selections/manual_reviewed_gavin_balanced_1to1_v1.json`.
+
+Starting weights: `yolov8n.pt`.
+
+Final pipeline-managed smoke config: `workspace/training_configs/step6_backend_smoke_20260525_c.json`.
+
+Recreate the successful pipeline-managed run with:
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py export-dataset \
+  --selection workspace/dataset_selections/manual_reviewed_gavin_balanced_1to1_v1.json
+.venv/bin/python scripts/training_pipeline_cli.py save-training-config \
+  --config '{"schema_version":1,"selection_path":"workspace/dataset_selections/manual_reviewed_gavin_balanced_1to1_v1.json","dataset_name":"manual_reviewed_gavin_balanced_1to1","dataset_version":1,"model":"yolov8n.pt","image_size":320,"epochs":1,"batch":2,"patience":1,"seed":42,"device":"cpu","workers":0,"augmentation":{},"output_dir":"workspace/runs","run_group":"step6_backend_smoke_20260525_c","run_name":"yolov8n_step6_backend_smoke_20260525_c","overwrite":false}'
+.venv/bin/python scripts/training_pipeline_cli.py start-training \
+  --config workspace/training_configs/step6_backend_smoke_20260525_c.json
+.venv/bin/python scripts/training_pipeline_cli.py training-status \
+  --run-dir workspace/runs/step6_backend_smoke_20260525_c/yolov8n_step6_backend_smoke_20260525_c
+```
+
+Equivalent launched YOLO parameters: `model=yolov8n.pt`, `imgsz=320`, `epochs=1`, `batch=2`, `device=cpu`, `seed=42`, `patience=1`, `workers=0`, `exist_ok=True`.
+
+Covered weights:
+
+| Weight | Starting weights | Training config | Run metadata |
+|---|---|---|---|
+| `workspace/runs/step6_backend_smoke_20260525_c/yolov8n_step6_backend_smoke_20260525_c/weights/best.pt` | `yolov8n.pt` | `workspace/training_configs/step6_backend_smoke_20260525_c.json` | `workspace/runs/step6_backend_smoke_20260525_c/yolov8n_step6_backend_smoke_20260525_c/training_metadata.json`, `process.json`, `args.yaml` |
+| `workspace/runs/step6_backend_smoke_20260525_c/yolov8n_step6_backend_smoke_20260525_c/weights/last.pt` | `yolov8n.pt` | `workspace/training_configs/step6_backend_smoke_20260525_c.json` | `workspace/runs/step6_backend_smoke_20260525_c/yolov8n_step6_backend_smoke_20260525_c/training_metadata.json`, `process.json`, `args.yaml` |
+
+An intermediate smoke run before the `exist_ok=True` launch fix wrote YOLO artifacts to Ultralytics' auto-incremented output directory `workspace/runs/step6_backend_smoke_20260525_b/yolov8n_step6_backend_smoke_20260525_b2`. It used the same dataset, starting weights, and training parameters as the final run above, with training config `workspace/training_configs/step6_backend_smoke_20260525_b.json`. Those artifacts are diagnostic only and are not promoted.
+
+Known gaps: these are 1-epoch CPU smoke tests intended to validate the backend export/config/readiness/launch/status path, not model quality. The first two smoke attempts intentionally remain as diagnostics for launch failure and Ultralytics auto-increment behavior discovered during testing.
 
 ### Smoke Run
 

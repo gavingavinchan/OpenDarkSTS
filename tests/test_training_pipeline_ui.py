@@ -77,6 +77,41 @@ def test_train_yolo_page_route_renders() -> None:
 
     assert "Train <em>YOLO</em>" in html
     assert 'class="stage active" href="/train-yolo"' in html
+    assert "/api/runs/active" in html
+
+
+def test_step6_run_apis_start_status_and_active(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    monkeypatch.setattr(ui.pipeline, "WORKSPACE_DIR", tmp_path)
+    monkeypatch.setattr(
+        ui.pipeline,
+        "list_active_training_runs",
+        lambda runs_root: [{"state": "running", "run_group": "fixture_group", "run_name": "fixture_run", "run_dir": str(tmp_path / "runs" / "fixture_group" / "fixture_run")}],
+    )
+    monkeypatch.setattr(ui.pipeline, "training_status", lambda run_dir: {"state": "running", "run_dir": str(run_dir), "log_tail": []})
+    monkeypatch.setattr(
+        ui.pipeline,
+        "start_training_run",
+        lambda selection_path, config_path, run_name=None: {
+            "state": "running",
+            "run_group": "fixture_group",
+            "run_name": run_name or "fixture_run",
+            "run_dir": str(tmp_path / "runs" / "fixture_group" / "fixture_run"),
+        },
+    )
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        active = get_json(server.base_url + "/api/runs/active")
+        status = get_json(server.base_url + "/api/runs/fixture_group/fixture_run/status")
+        started = post_json(server.base_url + "/api/runs/start", {"config_path": "workspace/training_configs/fixture_group.json", "run_name": "fixture_run"})
+
+    assert active["ok"] is True
+    assert active["runs"][0]["run_name"] == "fixture_run"
+    assert status["ok"] is True
+    assert status["result"]["state"] == "running"
+    assert started["ok"] is True
+    assert started["result"]["state"] == "running"
 
 
 def test_import_summary_includes_review_only_queue_images(tmp_path: Path, monkeypatch) -> None:

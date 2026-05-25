@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -1383,6 +1384,163 @@ def test_cli_non_verbose_omits_diagnostics(tmp_path: Path) -> None:
 
     assert process.returncode == 3
     assert "diagnostics" not in parse_envelope(process)["result"]
+
+
+def test_process_is_live_accepts_real_python_subprocess() -> None:
+    pipeline = load_training_lib()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], start_new_session=True)
+    try:
+        for _ in range(20):
+            start_jiffies = pipeline.proc_start_jiffies(child.pid)
+            if start_jiffies is not None:
+                break
+            time.sleep(0.05)
+        record = {
+            "pid": child.pid,
+            "state": "running",
+            "command_line": [str(Path(sys.executable).with_name("yolo")), "detect", "train"],
+            "process_start_jiffies": start_jiffies,
+        }
+        assert pipeline.process_is_live(record) is True
+    finally:
+        child.terminate()
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def write_ready_training_inputs(tmp_path: Path, *, multi_model: bool = False) -> tuple[Path, Path, Path]:
+    pipeline = load_training_lib()
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    dataset_dir = tmp_path / "datasets" / "fixture_dataset"
+    write_review(reviews_dir, cache_dir, reviewer="gavin", image_key="img_train", detections=[detection("auto-0001", "ship_non_sts")])
+    write_review(reviews_dir, cache_dir, reviewer="gavin", image_key="img_val", detections=[detection("auto-0001", "ships_sts")])
+    selection_path = write_selection(
+        tmp_path / "dataset_selections" / "fixture_dataset.json",
+        reviews_dir=reviews_dir,
+        output_dir=dataset_dir,
+        items=[
+            {"image_key": "img_train", "split": "train", "include_labels": "all_exportable", "selected_detection_ids": None},
+            {"image_key": "img_val", "split": "val", "include_labels": "all_exportable", "selected_detection_ids": None},
+        ],
+    )
+    pipeline.export_dataset_selection(selection_path)
+    config_path = tmp_path / "training_configs" / "fixture_group.json"
+    if multi_model:
+        write_json(
+            config_path,
+            {
+                "schema_version": 1,
+                "dataset_name": "fixture_dataset",
+                "dataset_version": 1,
+                "models": ["yolov8n.pt", "yolo11n.pt"],
+                "image_size": 960,
+                "epochs": 2,
+                "batch": 4,
+                "device": "cpu",
+                "seed": 42,
+                "run_group": "fixture_group",
+                "output_dir": str(tmp_path / "runs"),
+                "overwrite": False,
+                "augmentation": {},
+            },
+        )
+    else:
+        write_training_config(config_path, output_dir=tmp_path / "runs")
+    return selection_path, config_path, dataset_dir
+
+
+def test_cli_start_training_dry_run_does_not_write_run_files(tmp_path: Path) -> None:
+    selection_path, config_path, _ = write_ready_training_inputs(tmp_path)
+
+    process = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path), "--dry-run")
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="start-training", ok=True)
+    result = envelope["result"]
+    assert result["state"] == "dry_run"
+    assert result["run_dir"] == str(tmp_path / "runs" / "fixture_group" / "fixture_run")
+    assert result["log_path"].endswith("train.log")
+    assert result["process_metadata"].endswith("process.json")
+    assert result["training_metadata"].endswith("training_metadata.json")
+    assert Path(result["command_line"][0]).name == "yolo"
+    assert result["command_line"][1:3] == ["detect", "train"]
+    assert "exist_ok=True" in result["command_line"]
+    assert not Path(result["process_metadata"]).exists()
+
+
+def test_cli_start_training_uses_selection_path_from_config(tmp_path: Path) -> None:
+    selection_path, config_path, _ = write_ready_training_inputs(tmp_path)
+    config = json.loads(config_path.read_text())
+    config["selection_path"] = str(selection_path)
+    write_json(config_path, config)
+
+    process = run_cli("start-training", "--config", str(config_path), "--dry-run")
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="start-training", ok=True)
+    assert envelope["result"]["state"] == "dry_run"
+
+
+def test_cli_start_training_multi_model_requires_run_name(tmp_path: Path) -> None:
+    selection_path, config_path, _ = write_ready_training_inputs(tmp_path, multi_model=True)
+
+    process = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path), "--dry-run")
+
+    assert process.returncode == 2
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="start-training", ok=False)
+    assert envelope["result"]["available_run_names"] == ["yolov8n_fixture_group", "yolo11n_fixture_group"]
+
+
+def test_cli_training_status_infers_historical_run_without_process_json(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
+    (run_dir / "weights").mkdir(parents=True)
+    (run_dir / "weights" / "best.pt").write_bytes(b"fixture")
+    (run_dir / "results.csv").write_text("epoch,metrics/mAP50(B)\n1,0.42\n")
+    (run_dir / "train.log").write_text("finished\n")
+
+    process = run_cli("training-status", "--run-dir", str(run_dir), "--log-lines", "1")
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="training-status", ok=True)
+    result = envelope["result"]
+    assert result["state"] == "completed"
+    assert result["latest_metrics"] == {"metrics/mAP50(B)": 0.42}
+    assert result["log_tail"] == ["finished"]
+    assert envelope["warnings"] == ["process.json not found; inferred terminal state from run artifacts"]
+
+
+def test_cli_stop_training_exits_4_for_terminal_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
+    write_json(
+        run_dir / "process.json",
+        {
+            "schema_version": 1,
+            "run_group": "fixture_group",
+            "run_name": "fixture_run",
+            "pid": None,
+            "state": "completed",
+            "command_line": ["yolo", "detect", "train"],
+            "log_path": str(run_dir / "train.log"),
+            "started_at": "2026-05-25T00:00:00Z",
+            "ended_at": "2026-05-25T00:01:00Z",
+            "return_code": 0,
+        },
+    )
+
+    process = run_cli("stop-training", "--run-dir", str(run_dir))
+
+    assert process.returncode == 4
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="stop-training", ok=False)
+    assert "already terminal" in envelope["errors"][0]
 
 
 def test_cli_image_key_returns_stable_identity(tmp_path: Path) -> None:

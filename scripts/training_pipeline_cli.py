@@ -78,6 +78,11 @@ def print_human(payload: dict[str, Any]) -> None:
         "protected_count",
         "archived_count",
         "report_path",
+        "state",
+        "pid",
+        "log_path",
+        "process_metadata",
+        "training_metadata",
     ):
         if key in result:
             print(f"{key}: {result[key]}")
@@ -381,6 +386,44 @@ def command_build_train_command(args: argparse.Namespace) -> tuple[int, dict[str
     return 0, envelope("build-train-command", ok=True, result=result)
 
 
+def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    try:
+        result = pipeline.start_training_run(
+            args.selection,
+            args.config,
+            run_name=args.run_name,
+            dry_run=bool(args.dry_run),
+            foreground=bool(args.foreground),
+        )
+    except pipeline.TrainingRunSelectionError as exc:
+        return 2, envelope(
+            "start-training",
+            ok=False,
+            result={"available_run_names": exc.available_run_names},
+            errors=[str(exc)],
+        )
+    add_diagnostics(result, args, "start_training_run", selection_path=args.selection or "", config_path=args.config)
+    warnings = list(result.get("warnings") or [])
+    if result.get("state") == "blocked":
+        return 3, envelope("start-training", ok=True, result=result, warnings=warnings)
+    return 0, envelope("start-training", ok=True, result=result, warnings=warnings)
+
+
+def command_training_status(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.training_status(args.run_dir, log_lines=int(args.log_lines))
+    add_diagnostics(result, args, "training_status", run_dir=args.run_dir)
+    return 0, envelope("training-status", ok=True, result=result, warnings=list(result.get("warnings") or []))
+
+
+def command_stop_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    try:
+        result = pipeline.stop_training_run(args.run_dir)
+    except pipeline.TrainingRunStateError as exc:
+        return 4, envelope("stop-training", ok=False, errors=[str(exc)])
+    add_diagnostics(result, args, "stop_training_run", run_dir=args.run_dir)
+    return 0, envelope("stop-training", ok=True, result=result, warnings=list(result.get("warnings") or []))
+
+
 def command_image_key(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     render_profile = pipeline.load_json(args.render_profile)
     source_path = pipeline.repo_resolve(args.source)
@@ -656,6 +699,23 @@ def build_parser() -> argparse.ArgumentParser:
     command_parser.add_argument("--selection")
     command_parser.add_argument("--config", required=True)
     command_parser.set_defaults(handler=command_build_train_command)
+
+    start_training_parser = subparsers.add_parser("start-training")
+    start_training_parser.add_argument("--selection")
+    start_training_parser.add_argument("--config", required=True)
+    start_training_parser.add_argument("--run-name")
+    start_training_parser.add_argument("--foreground", action="store_true")
+    start_training_parser.add_argument("--dry-run", action="store_true")
+    start_training_parser.set_defaults(handler=command_start_training)
+
+    training_status_parser = subparsers.add_parser("training-status")
+    training_status_parser.add_argument("--run-dir", required=True)
+    training_status_parser.add_argument("--log-lines", type=int, default=80)
+    training_status_parser.set_defaults(handler=command_training_status)
+
+    stop_training_parser = subparsers.add_parser("stop-training")
+    stop_training_parser.add_argument("--run-dir", required=True)
+    stop_training_parser.set_defaults(handler=command_stop_training)
 
     image_key_parser = subparsers.add_parser("image-key")
     image_key_parser.add_argument("--source", required=True)

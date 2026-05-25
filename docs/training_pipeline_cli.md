@@ -41,6 +41,7 @@ Exit codes:
 - `1`: pipeline failure, such as missing files or invalid manifests.
 - `2`: command-line usage error.
 - `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`.
+- `4`: long-running run/process state mismatch, such as stopping an already terminal run or a run with no active process.
 
 `ok` means the CLI command ran and returned a valid response. It does not always mean the domain condition is positive. For example, `check-training-ready` exits `3` with `ok: true` when it successfully reports training blockers.
 
@@ -260,6 +261,77 @@ To run the command manually, use the project virtualenv's `yolo` executable or p
 
 For long training runs, start them detached and log under `workspace/runs/` or `workspace/reports/` so the LLM session remains usable.
 
+### `start-training`
+
+Starts a pipeline-managed YOLO training run from an exported dataset selection and saved training config.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py start-training \
+  --selection workspace/dataset_selections/manual_reviewed_gavin_v1.json \
+  --config workspace/training_configs/manual_reviewed_gavin_v1_yolov8n_smoke.json
+```
+
+Options:
+
+- `--selection <path>`: dataset selection manifest. Optional when the config includes `selection_path`.
+- `--config <path>`: required saved training config JSON.
+- `--run-name <name>`: required only when the config expands to more than one run.
+- `--dry-run`: return command/run/log/metadata paths without launching or writing files.
+- `--foreground`: debugging only. Runs in the current process instead of detached background mode. Do not use from the GUI or LLM automation.
+
+Default behavior starts YOLO detached, writes stdout/stderr to `workspace/runs/<run_group>/<run_name>/train.log`, writes `process.json`, and writes initial `training_metadata.json` with status `running`.
+
+The JSON result includes:
+
+- `state`: `running`, `dry_run`, `completed`, `failed`, or `blocked`
+- `pid`: process id when detached training starts
+- `run_dir`
+- `log_path`
+- `process_metadata`
+- `training_metadata`
+- `command_line`
+
+When a config contains multiple model runs and `--run-name` is omitted, the command exits `2` and returns `available_run_names`.
+
+### `training-status`
+
+Reads a run directory and reports process state, log tail, metrics, and output artifacts.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py training-status \
+  --run-dir workspace/runs/<run_group>/<run_name>
+```
+
+Options:
+
+- `--run-dir <path>`: required run directory.
+- `--log-lines <n>`: number of log lines to return. Defaults to `80`.
+
+The command tolerates historical run directories without `process.json` by inferring a terminal state from artifacts such as `results.csv` and `weights/best.pt`.
+
+The JSON result includes:
+
+- `state`
+- `pid`
+- `run_dir`
+- `latest_metrics`
+- `series`
+- `log_tail`
+- `artifacts`
+
+### `stop-training`
+
+Requests cancellation for a running detached training process.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py stop-training \
+  --run-dir workspace/runs/<run_group>/<run_name>
+```
+
+The command sends `SIGTERM` to the process group, waits briefly, then sends `SIGKILL` if the process is still alive. It marks `process.json.state` and `training_metadata.json.status` as `cancelled` and leaves partial run files in place.
+
+It exits `4` if the run is already completed, failed, cancelled, or has no active process.
+
 ### `image-key`
 
 Computes the stable image key for a source image and render profile.
@@ -441,4 +513,4 @@ Labels marked `neither` are not exported as YOLO labels. Background negatives ca
 - Do not write to `/home/gavin/Downloads/AIS data`; it is read-only project input.
 - Prefer JSON output for tests, scripts, and agent diagnostics.
 - Use `--dry-run` before exports when checking path overrides or manifest changes.
-- The CLI currently implements backend preparation and diagnostics. It does not yet provide `start-training`, `training-status`, or `stop-training`; those are planned in `docs/training_pipeline_plan.md`.
+- Prefer pipeline-managed `start-training`, `training-status`, and `stop-training` over raw `yolo detect train ...` commands so logs, metadata, and run state remain reproducible.

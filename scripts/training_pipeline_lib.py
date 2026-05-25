@@ -5,13 +5,17 @@ import csv
 import copy
 import json
 import math
+import os
 import platform
 import random
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +125,17 @@ ALLOWED_AUGMENTATION_KEYS = {
     "erasing",
     "crop_fraction",
 }
+TERMINAL_TRAINING_STATES = {"completed", "failed", "cancelled"}
+
+
+class TrainingRunSelectionError(ValueError):
+    def __init__(self, message: str, available_run_names: list[str]) -> None:
+        super().__init__(message)
+        self.available_run_names = available_run_names
+
+
+class TrainingRunStateError(RuntimeError):
+    pass
 
 
 def repo_resolve(path_value: str | Path) -> Path:
@@ -2787,6 +2802,425 @@ def load_training_results_series(results_csv: str | Path) -> dict[str, Any]:
                     series[field].append([epoch, value])
 
     return {"status": "ready", "message": None, "series": series}
+
+
+def latest_metrics_from_series(series: dict[str, Any]) -> dict[str, float]:
+    latest: dict[str, float] = {}
+    for key, values in series.items():
+        if isinstance(values, list) and values:
+            try:
+                latest[key] = float(values[-1][1])
+            except (TypeError, ValueError, IndexError):
+                continue
+    return latest
+
+
+def read_log_tail(log_path: str | Path, line_count: int = 80) -> list[str]:
+    target = repo_resolve(log_path)
+    if not target.exists():
+        return []
+    if int(line_count) <= 0:
+        return []
+    lines = target.read_text(errors="replace").splitlines()
+    return lines[-int(line_count):]
+
+
+def run_dir_for_expanded_run(run: dict[str, Any]) -> Path:
+    output_root = repo_resolve(run.get("output_dir") or WORKSPACE_DIR / "runs")
+    return output_root / str(run["run_group"]) / str(run["run_name"])
+
+
+def process_metadata_path(run_dir: str | Path) -> Path:
+    return repo_resolve(run_dir) / "process.json"
+
+
+def training_metadata_path(run_dir: str | Path) -> Path:
+    return repo_resolve(run_dir) / "training_metadata.json"
+
+
+def yolo_executable() -> str:
+    candidate = Path(sys.executable).parent / "yolo"
+    if candidate.exists():
+        return str(candidate)
+    resolved_candidate = Path(sys.executable).resolve().parent / "yolo"
+    if resolved_candidate.exists():
+        return str(resolved_candidate)
+    path_candidate = shutil.which("yolo")
+    if path_candidate:
+        return path_candidate
+    return "yolo"
+
+
+def launch_command_line(command: list[str]) -> list[str]:
+    if not command:
+        raise ValueError("Training command is empty")
+    launched = list(command)
+    if launched[0] == "yolo":
+        launched[0] = yolo_executable()
+    return launched
+
+
+def proc_start_jiffies(pid: int | None) -> int | None:
+    if pid is None or platform.system().lower() != "linux":
+        return None
+    stat_path = Path("/proc") / str(pid) / "stat"
+    try:
+        content = stat_path.read_text()
+    except OSError:
+        return None
+    try:
+        after_comm = content.rsplit(")", 1)[1].strip().split()
+        return int(after_comm[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def process_command_line(pid: int | None) -> list[str] | None:
+    if pid is None or platform.system().lower() != "linux":
+        return None
+    try:
+        raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return None
+    return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def process_is_live(process_record: dict[str, Any]) -> bool:
+    pid = process_record.get("pid")
+    if pid is None:
+        return False
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    recorded_start = process_record.get("process_start_jiffies")
+    current_start = proc_start_jiffies(pid_int)
+    if recorded_start is not None and current_start is not None and int(recorded_start) != int(current_start):
+        return False
+    return True
+
+
+def select_training_run(config: dict[str, Any], run_name: str | None = None) -> dict[str, Any]:
+    runs = expand_training_config_runs(config)
+    if run_name:
+        matches = [run for run in runs if str(run.get("run_name")) == str(run_name)]
+        if len(matches) == 1:
+            return matches[0]
+        raise TrainingRunSelectionError(
+            f"run_name must match exactly one configured run: {run_name}",
+            [str(run["run_name"]) for run in runs],
+        )
+    if len(runs) == 1:
+        return runs[0]
+    raise TrainingRunSelectionError(
+        "Multiple runs are configured; pass --run-name to choose one",
+        [str(run["run_name"]) for run in runs],
+    )
+
+
+def update_training_metadata_status(run_dir: str | Path, status: str, *, ended_at: str | None = None) -> None:
+    target = training_metadata_path(run_dir)
+    if not target.exists():
+        return
+    metadata = load_json(target)
+    metadata["status"] = status
+    if ended_at is not None:
+        metadata["ended_at"] = ended_at
+    best = repo_resolve(run_dir) / "weights" / "best.pt"
+    last = repo_resolve(run_dir) / "weights" / "last.pt"
+    if best.exists():
+        metadata["best_checkpoint_path"] = str(best)
+    if last.exists():
+        metadata["last_checkpoint_path"] = str(last)
+    write_json(target, metadata)
+
+
+def run_artifacts(run_dir: str | Path) -> dict[str, Any]:
+    root = repo_resolve(run_dir)
+    best = root / "weights" / "best.pt"
+    last = root / "weights" / "last.pt"
+    results = root / "results.csv"
+    plots = sorted(path for path in root.glob("*.png") if path.is_file())
+    return {
+        "best_pt": str(best) if best.exists() else None,
+        "last_pt": str(last) if last.exists() else None,
+        "results_csv": str(results) if results.exists() else None,
+        "plots": [str(path) for path in plots],
+    }
+
+
+def infer_terminal_state_from_artifacts(run_dir: str | Path) -> str:
+    artifacts = run_artifacts(run_dir)
+    if artifacts.get("best_pt") or artifacts.get("last_pt") or artifacts.get("results_csv"):
+        return "completed"
+    return "failed"
+
+
+def watch_training_process(process: subprocess.Popen[Any], run_dir: str | Path) -> None:
+    def target() -> None:
+        return_code = process.wait()
+        output_run_dir = repo_resolve(run_dir)
+        process_path = process_metadata_path(output_run_dir)
+        if not process_path.exists():
+            return
+        try:
+            process_record = load_json(process_path)
+        except Exception:
+            return
+        if process_record.get("state") != "running":
+            return
+        ended_at = utcnow_iso_for_training()
+        state = "completed" if return_code == 0 else "failed"
+        process_record["state"] = state
+        process_record["ended_at"] = ended_at
+        process_record["return_code"] = return_code
+        write_json(process_path, process_record)
+        update_training_metadata_status(output_run_dir, state, ended_at=ended_at)
+
+    threading.Thread(target=target, name=f"training-run-reaper-{process.pid}", daemon=True).start()
+
+
+def start_training_run(
+    selection_path: str | Path | None,
+    training_config_path: str | Path,
+    *,
+    run_name: str | None = None,
+    dry_run: bool = False,
+    foreground: bool = False,
+) -> dict[str, Any]:
+    config_file = repo_resolve(training_config_path)
+    config = load_json(config_file)
+    resolved_selection = resolve_training_selection_path(selection_path, config)
+    readiness = check_training_readiness(resolved_selection, config)
+    if not readiness.get("ready"):
+        return {"state": "blocked", "ready": False, "missing": readiness.get("missing") or [], "warnings": readiness.get("warnings") or []}
+    run = select_training_run(config, run_name)
+    dataset_dir = repo_resolve(load_json(resolved_selection).get("export", {}).get("output_dir"))
+    command = launch_command_line(build_single_yolo_train_command(run, dataset_dir))
+    if not any(str(part).startswith("exist_ok=") for part in command):
+        command.append("exist_ok=True")
+    output_run_dir = run_dir_for_expanded_run(run)
+    log_path = output_run_dir / "train.log"
+    process_path = process_metadata_path(output_run_dir)
+    metadata_path = training_metadata_path(output_run_dir)
+    dataset_manifest = dataset_dir / "dataset_manifest.json"
+    result = {
+        "state": "dry_run" if dry_run else "starting",
+        "pid": None,
+        "run_group": str(run["run_group"]),
+        "run_name": str(run["run_name"]),
+        "run_dir": str(output_run_dir),
+        "log_path": str(log_path),
+        "process_metadata": str(process_path),
+        "training_metadata": str(metadata_path),
+        "command_line": command,
+        "data_yaml": str(dataset_dir / "data.yaml"),
+        "ready": True,
+        "warnings": readiness.get("warnings") or [],
+    }
+    if dry_run:
+        return result
+
+    output_run_dir.mkdir(parents=True, exist_ok=True)
+    started_at = utcnow_iso_for_training()
+    write_training_metadata(
+        run_dir=output_run_dir,
+        training_config_path=config_file,
+        dataset_manifest_path=dataset_manifest,
+        command_line=command,
+        status="running",
+        started_at=started_at,
+    )
+    log_handle = log_path.open("ab")
+    try:
+        if foreground:
+            completed = subprocess.run(command, cwd=ROOT_DIR, stdout=log_handle, stderr=subprocess.STDOUT, check=False)
+            ended_at = utcnow_iso_for_training()
+            state = "completed" if completed.returncode == 0 else "failed"
+            process_record = {
+                "schema_version": SCHEMA_VERSION,
+                "run_group": str(run["run_group"]),
+                "run_name": str(run["run_name"]),
+                "pid": None,
+                "state": state,
+                "command_line": command,
+                "cwd": str(ROOT_DIR),
+                "log_path": str(log_path),
+                "run_dir": str(output_run_dir),
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "return_code": completed.returncode,
+                "foreground": True,
+                "process_start_jiffies": None,
+            }
+            write_json(process_path, process_record)
+            update_training_metadata_status(output_run_dir, state, ended_at=ended_at)
+            result.update({"state": state, "return_code": completed.returncode})
+            return result
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT_DIR,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        ended_at = utcnow_iso_for_training()
+        write_json(process_path, {
+            "schema_version": SCHEMA_VERSION,
+            "run_group": str(run["run_group"]),
+            "run_name": str(run["run_name"]),
+            "pid": None,
+            "state": "failed",
+            "command_line": command,
+            "cwd": str(ROOT_DIR),
+            "log_path": str(log_path),
+            "run_dir": str(output_run_dir),
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "return_code": None,
+            "foreground": bool(foreground),
+            "process_start_jiffies": None,
+            "diagnostic_reason": "launch_failed",
+        })
+        update_training_metadata_status(output_run_dir, "failed", ended_at=ended_at)
+        raise
+    finally:
+        log_handle.close()
+    process_record = {
+        "schema_version": SCHEMA_VERSION,
+        "run_group": str(run["run_group"]),
+        "run_name": str(run["run_name"]),
+        "pid": process.pid,
+        "state": "running",
+        "command_line": command,
+        "cwd": str(ROOT_DIR),
+        "log_path": str(log_path),
+        "run_dir": str(output_run_dir),
+        "started_at": started_at,
+        "ended_at": None,
+        "return_code": None,
+        "foreground": False,
+        "process_start_jiffies": proc_start_jiffies(process.pid),
+    }
+    write_json(process_path, process_record)
+    watch_training_process(process, output_run_dir)
+    result.update({"state": "running", "pid": process.pid})
+    return result
+
+
+def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, Any]:
+    output_run_dir = repo_resolve(run_dir)
+    process_path = process_metadata_path(output_run_dir)
+    metadata_path = training_metadata_path(output_run_dir)
+    warnings: list[str] = []
+    process_record: dict[str, Any] | None = None
+    if process_path.exists():
+        process_record = load_json(process_path)
+        state = str(process_record.get("state") or "unknown")
+    else:
+        state = infer_terminal_state_from_artifacts(output_run_dir)
+        warnings.append("process.json not found; inferred terminal state from run artifacts")
+
+    if process_record and state == "running" and not process_is_live(process_record):
+        ended_at = utcnow_iso_for_training()
+        state = infer_terminal_state_from_artifacts(output_run_dir)
+        if state == "failed":
+            warnings.append("process_missing")
+        else:
+            warnings.append("return_code_unavailable")
+        process_record["state"] = state
+        process_record["ended_at"] = ended_at
+        process_record.setdefault("return_code", None)
+        process_record["diagnostic_reason"] = None if state == "completed" else "process_missing"
+        write_json(process_path, process_record)
+        update_training_metadata_status(output_run_dir, state, ended_at=ended_at)
+
+    log_path = Path(str(process_record.get("log_path"))) if process_record and process_record.get("log_path") else output_run_dir / "train.log"
+    if not repo_resolve(log_path).exists():
+        warnings.append("train.log not found")
+    results = load_training_results_series(output_run_dir / "results.csv")
+    artifacts = run_artifacts(output_run_dir)
+    metadata = load_json(metadata_path) if metadata_path.exists() else None
+    return {
+        "state": state,
+        "pid": process_record.get("pid") if process_record else None,
+        "run_group": process_record.get("run_group") if process_record else output_run_dir.parent.name,
+        "run_name": process_record.get("run_name") if process_record else output_run_dir.name,
+        "run_dir": str(output_run_dir),
+        "log_path": str(repo_resolve(log_path)),
+        "process_metadata": str(process_path) if process_path.exists() else None,
+        "training_metadata": str(metadata_path) if metadata_path.exists() else None,
+        "latest_metrics": latest_metrics_from_series(results.get("series") or {}),
+        "series": results.get("series") or {},
+        "results_status": results.get("status"),
+        "log_tail": read_log_tail(log_path, log_lines),
+        "artifacts": artifacts,
+        "metadata_status": metadata.get("status") if metadata else None,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def stop_training_run(run_dir: str | Path, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
+    output_run_dir = repo_resolve(run_dir)
+    process_path = process_metadata_path(output_run_dir)
+    if not process_path.exists():
+        raise TrainingRunStateError("process.json not found; no active process can be stopped")
+    process_record = load_json(process_path)
+    state = str(process_record.get("state") or "unknown")
+    if state in TERMINAL_TRAINING_STATES:
+        raise TrainingRunStateError(f"run is already terminal: {state}")
+    if not process_is_live(process_record):
+        raise TrainingRunStateError("run has no active process")
+    pid = int(process_record["pid"])
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        raise TrainingRunStateError("run has no active process")
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if not process_is_live(process_record):
+            break
+        time.sleep(0.1)
+    killed = False
+    if process_is_live(process_record):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            killed = True
+        except ProcessLookupError:
+            pass
+    ended_at = utcnow_iso_for_training()
+    process_record["state"] = "cancelled"
+    process_record["ended_at"] = ended_at
+    process_record.setdefault("return_code", None)
+    process_record["stop_signal"] = "SIGKILL" if killed else "SIGTERM"
+    write_json(process_path, process_record)
+    update_training_metadata_status(output_run_dir, "cancelled", ended_at=ended_at)
+    return training_status(output_run_dir)
+
+
+def list_active_training_runs(runs_root: str | Path = WORKSPACE_DIR / "runs", *, log_lines: int = 20) -> list[dict[str, Any]]:
+    root = repo_resolve(runs_root)
+    runs: list[dict[str, Any]] = []
+    if not root.exists():
+        return runs
+    for process_path in sorted(root.glob("*/*/process.json")):
+        try:
+            status = training_status(process_path.parent, log_lines=log_lines)
+        except Exception:
+            continue
+        if status.get("state") not in TERMINAL_TRAINING_STATES:
+            runs.append(status)
+    runs.sort(key=lambda item: str(item.get("run_dir") or ""))
+    return runs
 
 
 def file_hash(path: Path) -> str:

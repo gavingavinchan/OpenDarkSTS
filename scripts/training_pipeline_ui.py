@@ -12,7 +12,7 @@ import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 try:
     from .visual_review_lib import (
@@ -1249,6 +1249,18 @@ TRAIN_YOLO_HTML = """<!DOCTYPE html>
     .stage.active { background: var(--ink); border-color: var(--ink); color: white; }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 26px; box-shadow: 0 18px 40px rgba(18,24,23,0.08); }
     .card h2 { margin: 0 0 10px; font-size: 24px; }
+    .grid { display: grid; grid-template-columns: 380px 1fr; gap: 18px; align-items: start; }
+    label { display: block; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; margin: 16px 0 6px; }
+    input, select { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.55); padding: 10px 12px; font: inherit; }
+    button { border: 0; border-radius: 12px; padding: 11px 14px; font-weight: 800; cursor: pointer; }
+    button.primary { background: var(--blue); color: white; }
+    button.secondary { background: transparent; border: 1px solid var(--line); color: var(--ink); }
+    button.danger { background: #a83226; color: white; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .run-card { border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-top: 12px; background: rgba(255,255,255,0.38); }
+    .run-card h3 { margin: 0 0 8px; }
+    .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    pre { max-height: 220px; overflow: auto; background: #111817; color: #e7ecdf; padding: 12px; border-radius: 12px; font-size: 12px; white-space: pre-wrap; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
     .button { display: inline-block; color: white; background: var(--blue); text-decoration: none; border-radius: 12px; padding: 11px 14px; font-weight: 700; }
     .button.secondary { color: var(--ink); background: transparent; border: 1px solid var(--line); }
@@ -1261,7 +1273,7 @@ TRAIN_YOLO_HTML = """<!DOCTYPE html>
       <div>
         <div class="filenum">06<sup>/07</sup></div>
         <h1>Train <em>YOLO</em></h1>
-        <p class="subtitle">Launch and monitor YOLO training from pipeline-managed configs. The full Step 6 run controls are being wired next; this page is available so the stage rail can navigate here from every previous step.</p>
+        <p class="subtitle">Launch and monitor YOLO training from pipeline-managed configs. Runs start detached, write logs under workspace/runs, and can be checked after navigation or refresh.</p>
       </div>
       <nav class="rail" aria-label="Training pipeline stages">
         <a class="stage" href="/import">Import Data</a>
@@ -1273,15 +1285,124 @@ TRAIN_YOLO_HTML = """<!DOCTYPE html>
         <span class="stage">Evaluate</span>
       </nav>
     </header>
-    <main class="card">
-      <h2>Step 6 Placeholder</h2>
-      <p class="subtitle">Use this page as the navigation target while the Step 6 backend, CLI, and active-run UI are implemented. Training setup remains the source for saved configs.</p>
-      <div class="actions">
-        <a class="button" href="/training-setup">Back To Training Setup</a>
-        <a class="button secondary" href="/dataset-selection">Dataset Selection</a>
-      </div>
+    <main class="grid">
+      <section class="card">
+        <h2>Start Training</h2>
+        <p class="subtitle">Choose a saved Step 5 config. If the config contains multiple model runs, enter one derived run name.</p>
+        <label for="configPick">Training Config</label>
+        <select id="configPick"><option value="">Loading configs...</option></select>
+        <label for="selectionPath">Selection Path Override</label>
+        <input id="selectionPath" placeholder="Optional if config includes selection_path">
+        <label for="runName">Run Name</label>
+        <input id="runName" placeholder="Required only for multi-model configs">
+        <div class="actions">
+          <button class="primary" id="startBtn">Start Training</button>
+          <button class="secondary" id="refreshBtn">Refresh Runs</button>
+        </div>
+        <p class="meta" id="message"></p>
+      </section>
+      <section class="card">
+        <h2>Active Runs</h2>
+        <p class="subtitle">Run cards are rediscovered from process ledgers, so they survive page refreshes.</p>
+        <div id="runs"><p class="meta">Loading active runs...</p></div>
+      </section>
     </main>
   </div>
+  <script>
+    const configPick = document.getElementById('configPick');
+    const selectionPath = document.getElementById('selectionPath');
+    const runName = document.getElementById('runName');
+    const startBtn = document.getElementById('startBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const message = document.getElementById('message');
+    const runsEl = document.getElementById('runs');
+    let pollTimer = null;
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) throw new Error(payload.error || (payload.errors || []).join('; ') || response.statusText);
+      return payload;
+    }
+    async function logAction(action, extra) {
+      try { await fetch('/api/training-ui-interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page: 'train-yolo', action, ...(extra || {}) }) }); } catch (_) {}
+    }
+    async function loadConfigs() {
+      const payload = await fetchJson('/api/training-configs');
+      const configs = payload.configs || [];
+      configPick.innerHTML = configs.length ? '<option value="">Choose config</option>' : '<option value="">No configs saved</option>';
+      for (const config of configs) {
+        const option = document.createElement('option');
+        option.value = config.config_path;
+        option.textContent = `${config.run_group || config.config_path} (${config.model_count || 0} run${config.model_count === 1 ? '' : 's'})`;
+        option.dataset.selectionPath = config.selection_path || '';
+        configPick.appendChild(option);
+      }
+    }
+    configPick.addEventListener('change', () => {
+      const selected = configPick.selectedOptions[0];
+      if (selected && selected.dataset.selectionPath && !selectionPath.value) selectionPath.value = selected.dataset.selectionPath;
+    });
+    function runCard(run) {
+      const runName = escapeHtml(run.run_name || 'run');
+      const runState = escapeHtml(run.state || 'unknown');
+      const runPid = escapeHtml(run.pid || 'none');
+      const runDir = escapeHtml(run.run_dir || '');
+      const runGroupRaw = String(run.run_group || '');
+      const runNameRaw = String(run.run_name || '');
+      const metrics = Object.entries(run.latest_metrics || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(value)}`).join(' | ') || 'Waiting for metrics';
+      const log = (run.log_tail || []).join('\n') || 'No log output yet.';
+      const stop = run.state === 'running' ? `<button class="danger" data-run-group="${escapeHtml(runGroupRaw)}" data-run-name="${escapeHtml(runNameRaw)}">Stop Training</button>` : '';
+      return `<div class="run-card"><h3>${runName}</h3><div class="meta">state: ${runState} | pid: ${runPid}</div><div class="meta">${runDir}</div><div class="meta">${metrics}</div><pre>${escapeHtml(log)}</pre>${stop}</div>`;
+    }
+    function escapeHtml(value) { return String(value).replace(/[&<>"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char])); }
+    async function loadRuns() {
+      try {
+        const payload = await fetchJson('/api/runs/active');
+        const runs = payload.runs || [];
+        runsEl.innerHTML = runs.length ? runs.map(runCard).join('') : '<p class="meta">No active runs.</p>';
+      } catch (err) {
+        runsEl.innerHTML = `<p class="meta">${escapeHtml(err.message)}</p>`;
+        await logAction('training_runs_poll_failed', { error: err.message });
+      }
+    }
+    async function startTraining() {
+      const body = { config_path: configPick.value, selection_path: selectionPath.value, run_name: runName.value };
+      startBtn.disabled = true;
+      message.textContent = 'Starting training...';
+      await logAction('training_start_attempted', body);
+      try {
+        const payload = await fetchJson('/api/runs/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        message.textContent = `Started ${payload.result.run_name || 'run'}: ${payload.result.state}`;
+        await logAction('training_start_succeeded', { run_dir: payload.result.run_dir, state: payload.result.state });
+        await loadRuns();
+      } catch (err) {
+        message.textContent = err.message;
+        await logAction('training_start_failed', { error: err.message });
+      } finally {
+        startBtn.disabled = false;
+      }
+    }
+    runsEl.addEventListener('click', async event => {
+      const button = event.target.closest('button[data-run-group][data-run-name]');
+      if (!button) return;
+      const group = button.dataset.runGroup;
+      const name = button.dataset.runName;
+      await logAction('training_stop_attempted', { run_group: group, run_name: name });
+      try {
+        await fetchJson(`/api/runs/${encodeURIComponent(group)}/${encodeURIComponent(name)}/stop`, { method: 'POST' });
+        await logAction('training_stop_succeeded', { run_group: group, run_name: name });
+      } catch (err) {
+        await logAction('training_stop_failed', { run_group: group, run_name: name, error: err.message });
+        message.textContent = err.message;
+      }
+      await loadRuns();
+    });
+    startBtn.addEventListener('click', startTraining);
+    refreshBtn.addEventListener('click', loadRuns);
+    loadConfigs();
+    loadRuns();
+    pollTimer = setInterval(loadRuns, 5000);
+  </script>
 </body>
 </html>"""
 
@@ -5072,9 +5193,17 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/training-configs":
             self._handle_list_training_configs()
             return
+        if path == "/api/runs/active":
+            self._handle_active_runs()
+            return
         if path == "/api/system/device-info":
             self._handle_device_info()
             return
+        if path.startswith("/api/runs/") and path.endswith("/status"):
+            parts = path[len("/api/runs/"):-len("/status")].strip("/").split("/")
+            if len(parts) == 2 and all(parts):
+                self._handle_run_status(unquote(parts[0]), unquote(parts[1]))
+                return
         if path.startswith("/api/training-configs/"):
             run_group = path[len("/api/training-configs/"):].strip("/")
             if run_group and "/" not in run_group:
@@ -5123,6 +5252,14 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/training-config/check-ready":
             self._handle_training_config_check_ready()
             return
+        if parsed.path == "/api/runs/start":
+            self._handle_start_training_run()
+            return
+        if parsed.path.startswith("/api/runs/") and parsed.path.endswith("/stop"):
+            parts = parsed.path[len("/api/runs/"):-len("/stop")].strip("/").split("/")
+            if len(parts) == 2 and all(parts):
+                self._handle_stop_training_run(unquote(parts[0]), unquote(parts[1]))
+                return
         if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/add-images"):
             album_id = parsed.path[len("/api/albums/"):-len("/add-images")].strip("/")
             if album_id and "/" not in album_id:
@@ -5417,6 +5554,70 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             "warnings": readiness.get("warnings") or [],
             "runs": readiness.get("runs") or [],
         })
+
+    def _default_run_dir(self, run_group: str, run_name: str) -> Path:
+        if "/" in run_group or "/" in run_name or not run_group or not run_name:
+            raise ValueError("invalid run identifier")
+        return pipeline.WORKSPACE_DIR / "runs" / run_group / run_name
+
+    def _handle_active_runs(self) -> None:
+        try:
+            runs = pipeline.list_active_training_runs(pipeline.WORKSPACE_DIR / "runs")
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "runs": runs})
+
+    def _handle_run_status(self, run_group: str, run_name: str) -> None:
+        try:
+            status = pipeline.training_status(self._default_run_dir(run_group, run_name))
+        except ValueError as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"ok": False, "error": str(exc)}, status=500)
+            return
+        self._respond_json({"ok": True, "result": status})
+
+    def _handle_start_training_run(self) -> None:
+        try:
+            payload = self._json_body()
+            config_path = str(payload.get("config_path") or payload.get("config") or "").strip()
+            if not config_path:
+                raise ValueError("config_path is required")
+            selection_path = str(payload.get("selection_path") or "").strip() or None
+            run_name = str(payload.get("run_name") or "").strip() or None
+            append_training_ui_interaction({"action": "training_start_api_attempted", "config_path": config_path, "selection_path": selection_path, "run_name": run_name})
+            result = pipeline.start_training_run(selection_path, config_path, run_name=run_name)
+        except pipeline.TrainingRunSelectionError as exc:
+            append_training_ui_interaction({"action": "training_start_api_failed", "error": str(exc), "available_run_names": exc.available_run_names})
+            self._respond_json({"ok": False, "error": str(exc), "available_run_names": exc.available_run_names}, status=400)
+            return
+        except Exception as exc:
+            append_training_ui_interaction({"action": "training_start_api_failed", "error": str(exc)})
+            self._respond_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        if result.get("state") == "blocked":
+            append_training_ui_interaction({"action": "training_start_api_blocked", "missing": result.get("missing") or []})
+            self._respond_json({"ok": True, "result": result})
+            return
+        append_training_ui_interaction({"action": "training_start_api_succeeded", "run_dir": result.get("run_dir"), "state": result.get("state")})
+        self._respond_json({"ok": True, "result": result}, status=202)
+
+    def _handle_stop_training_run(self, run_group: str, run_name: str) -> None:
+        try:
+            append_training_ui_interaction({"action": "training_stop_api_attempted", "run_group": run_group, "run_name": run_name})
+            result = pipeline.stop_training_run(self._default_run_dir(run_group, run_name))
+        except pipeline.TrainingRunStateError as exc:
+            append_training_ui_interaction({"action": "training_stop_api_failed", "run_group": run_group, "run_name": run_name, "error": str(exc)})
+            self._respond_json({"ok": False, "error": str(exc)}, status=409)
+            return
+        except Exception as exc:
+            append_training_ui_interaction({"action": "training_stop_api_failed", "run_group": run_group, "run_name": run_name, "error": str(exc)})
+            self._respond_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        append_training_ui_interaction({"action": "training_stop_api_succeeded", "run_group": run_group, "run_name": run_name})
+        self._respond_json({"ok": True, "result": result})
 
     def _handle_show_album(self, album_id: str) -> None:
         try:

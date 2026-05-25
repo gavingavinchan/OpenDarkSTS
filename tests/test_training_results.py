@@ -48,3 +48,11 @@ def test_load_training_results_series_skips_blank_or_non_numeric_values(tmp_path
         "val/box_loss": [[2, 0.3]],
         "metrics/recall(B)": [[2, 0.5]],
     }
+
+
+def test_read_log_tail_zero_lines_returns_empty(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    log_path = tmp_path / "train.log"
+    log_path.write_text("first\nsecond\n")
+
+    assert training_lib.read_log_tail(log_path, 0) == []
