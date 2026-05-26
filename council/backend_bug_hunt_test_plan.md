@@ -204,6 +204,7 @@ High-value tests:
 - Helper-level start with fake executable that exits nonzero; assert terminal `failed` state and useful log tail.
 - Detached fake long-running process; assert initial `running`, `training-status` reads log tail/results series, `stop-training` moves to `cancelled`, and active-run listing drops terminal runs.
 - Running process disappears without return code; assert lazy reconciliation marks `failed` with `process_missing` unless artifacts prove completion.
+- Detached training should eventually use a wrapper/reaper that records the exact YOLO process return code after the launching CLI exits. Until that exists, lazy reconciliation must mark artifact-inferred completed runs with `return_code_unavailable` so the missing return code is explicit rather than ambiguous.
 - Existing historical run with `weights/best.pt`, `weights/last.pt`, or `results.csv` but no `process.json`; assert status inference and warning.
 - PID reuse protection: mismatched `process_start_jiffies` means not live.
 - Multi-model configs require `--run-name`; valid chosen run starts only that run.

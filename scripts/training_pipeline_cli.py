@@ -410,7 +410,10 @@ def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any
 
 
 def command_training_status(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
-    result = pipeline.training_status(args.run_dir, log_lines=int(args.log_lines))
+    try:
+        result = pipeline.training_status(args.run_dir, log_lines=int(args.log_lines))
+    except ValueError as exc:
+        return 2, envelope("training-status", ok=False, errors=[str(exc)])
     add_diagnostics(result, args, "training_status", run_dir=args.run_dir)
     return 0, envelope("training-status", ok=True, result=result, warnings=list(result.get("warnings") or []))
 
@@ -418,6 +421,8 @@ def command_training_status(args: argparse.Namespace) -> tuple[int, dict[str, An
 def command_stop_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     try:
         result = pipeline.stop_training_run(args.run_dir)
+    except ValueError as exc:
+        return 2, envelope("stop-training", ok=False, errors=[str(exc)])
     except pipeline.TrainingRunStateError as exc:
         return 4, envelope("stop-training", ok=False, errors=[str(exc)])
     add_diagnostics(result, args, "stop_training_run", run_dir=args.run_dir)

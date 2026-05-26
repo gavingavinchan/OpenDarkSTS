@@ -86,6 +86,8 @@ REQUIRED_IMPORT_ENTRY_FIELDS = {
 }
 REVIEW_LABEL_TO_CLASS = {"ship_non_sts": 0, "ships_sts": 1}
 CLASS_ID_TO_NAME = {0: "ship", 1: "ships"}
+CLASS_NAME_PAIR_ALLOWLIST = {("ship", "ships")}
+LIKELY_DUPLICATE_CLASS_WARNING = "Class names may be singular/plural duplicates"
 RECOGNIZED_RESULTS_COLUMNS = {
     "train/box_loss",
     "train/cls_loss",
@@ -2422,9 +2424,48 @@ def count_dataset_labels(dataset_dir: Path) -> dict[str, int]:
     return counts
 
 
+def class_names_from_mapping(classes: dict[Any, Any]) -> list[str]:
+    names = []
+    for key in sorted(classes, key=lambda item: int(item) if str(item).isdigit() else str(item)):
+        value = str(classes[key]).strip()
+        if value:
+            names.append(value)
+    return names
+
+
+def likely_duplicate_class_name_warnings(class_names: list[str]) -> list[str]:
+    warnings: list[str] = []
+    normalized = [name.strip().lower() for name in class_names if name.strip()]
+    for index, left in enumerate(normalized):
+        for right in normalized[index + 1:]:
+            pair = tuple(sorted((left, right)))
+            if pair in CLASS_NAME_PAIR_ALLOWLIST:
+                warnings.append(f"{LIKELY_DUPLICATE_CLASS_WARNING}: {pair[0]!r} and {pair[1]!r}; allowed as intentional project classes")
+                continue
+            if left.rstrip("s") == right.rstrip("s") and left != right:
+                warnings.append(f"{LIKELY_DUPLICATE_CLASS_WARNING}: {left!r} and {right!r}")
+    return list(dict.fromkeys(warnings))
+
+
+def data_yaml_class_names(data_yaml: Path) -> list[str]:
+    if not data_yaml.exists():
+        return []
+    names: dict[int, str] = {}
+    for line in data_yaml.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        if key.strip().isdigit():
+            names[int(key.strip())] = value.strip().strip("'\"")
+    return [names[key] for key in sorted(names)]
+
+
 def dataset_unavailable_reason(dataset_dir: Path | None) -> str | None:
     if dataset_dir is None:
-        return "Selection is missing export.output_dir"
+        return "Dataset output dir is not configured"
+    if not dataset_dir.exists():
+        return "Dataset has not been exported yet"
     if not (dataset_dir / "dataset_manifest.json").is_file():
         return "Exported dataset is missing dataset_manifest.json"
     data_yaml = dataset_dir / "data.yaml"
@@ -2483,6 +2524,18 @@ def split_has_images(dataset_dir: Path, split: str) -> bool:
     if not image_dir.is_dir():
         return False
     return any(path.is_file() for path in image_dir.iterdir())
+
+
+def resolve_training_run_dir(run_dir: str | Path) -> Path:
+    resolved = repo_resolve(run_dir)
+    runs_root = repo_resolve(WORKSPACE_DIR / "runs")
+    try:
+        resolved_real = resolved.resolve()
+    except OSError:
+        resolved_real = resolved
+    if not path_is_relative_to(resolved_real, runs_root):
+        raise ValueError(f"run_dir must be inside {repo_relative(runs_root)}: {run_dir}")
+    return resolved
 
 
 def config_missing_items(config: dict[str, Any]) -> list[str]:
@@ -2684,6 +2737,8 @@ def check_training_readiness(
 
     if dataset_dir is not None and not split_has_images(dataset_dir, "test"):
         warnings.append("test split has no images; final test metrics will be unavailable")
+    if dataset_dir is not None:
+        warnings.extend(likely_duplicate_class_name_warnings(data_yaml_class_names(dataset_dir / "data.yaml")))
 
     missing.extend(config_missing_items(config))
     runs: list[dict[str, Any]] = []
@@ -3135,7 +3190,7 @@ def start_training_run(
 
 
 def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, Any]:
-    output_run_dir = repo_resolve(run_dir)
+    output_run_dir = resolve_training_run_dir(run_dir)
     process_path = process_metadata_path(output_run_dir)
     metadata_path = training_metadata_path(output_run_dir)
     warnings: list[str] = []
@@ -3161,7 +3216,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, An
         process_record["state"] = state
         process_record["ended_at"] = ended_at
         process_record.setdefault("return_code", None)
-        process_record["diagnostic_reason"] = None if state == "completed" else "process_missing"
+        process_record["diagnostic_reason"] = "return_code_unavailable" if state == "completed" else "process_missing"
         write_json(process_path, process_record)
         update_training_metadata_status(output_run_dir, state, ended_at=ended_at)
 
@@ -3197,7 +3252,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, An
 
 
 def stop_training_run(run_dir: str | Path, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
-    output_run_dir = repo_resolve(run_dir)
+    output_run_dir = resolve_training_run_dir(run_dir)
     process_path = process_metadata_path(output_run_dir)
     if not process_path.exists():
         raise TrainingRunStateError("process.json not found; no active process can be stopped")
@@ -3236,6 +3291,13 @@ def stop_training_run(run_dir: str | Path, *, timeout_seconds: float = 10.0) -> 
 
 def list_active_training_runs(runs_root: str | Path = WORKSPACE_DIR / "runs", *, log_lines: int = 20) -> list[dict[str, Any]]:
     root = repo_resolve(runs_root)
+    allowed_root = repo_resolve(WORKSPACE_DIR / "runs")
+    try:
+        root_real = root.resolve()
+    except OSError:
+        root_real = root
+    if not path_is_relative_to(root_real, allowed_root):
+        raise ValueError(f"runs_root must be inside {repo_relative(allowed_root)}: {runs_root}")
     runs: list[dict[str, Any]] = []
     if not root.exists():
         return runs
@@ -3490,6 +3552,7 @@ def export_dataset_selection(
 
     write_data_yaml(dataset_dir)
     exported_files.append(record_exported_file(dataset_dir, dataset_dir / "data.yaml"))
+    warnings.extend(likely_duplicate_class_name_warnings(class_names_from_mapping(CLASS_ID_TO_NAME)))
 
     manifest = {
         "schema_version": SCHEMA_VERSION,

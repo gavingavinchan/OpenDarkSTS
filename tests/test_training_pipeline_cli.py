@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -835,6 +836,9 @@ def test_cli_export_dataset_writes_yolo_layout_and_returns_paths_json(tmp_path: 
     assert envelope["result"]["dataset_manifest"] == str(output_dir / "dataset_manifest.json")
     assert (output_dir / "images" / "train" / "img_train.png").is_file()
     assert (output_dir / "labels" / "train" / "img_train.txt").is_file()
+    warning = "Class names may be singular/plural duplicates: 'ship' and 'ships'; allowed as intentional project classes"
+    assert warning in envelope["warnings"]
+    assert warning in json.loads((output_dir / "dataset_manifest.json").read_text())["warnings"]
 
 
 def test_cli_list_dataset_candidates_filters_by_album_and_label(tmp_path: Path) -> None:
@@ -994,7 +998,21 @@ def test_cli_list_exported_datasets_reports_availability(tmp_path: Path) -> None
     datasets = {Path(item["selection_path"]).name: item for item in parse_envelope(process)["result"]["datasets"]}
     assert datasets["ready.json"]["available"] is True
     assert datasets["missing.json"]["available"] is False
-    assert datasets["missing.json"]["unavailable_reason"]
+    assert datasets["missing.json"]["unavailable_reason"] == "Dataset has not been exported yet"
+
+
+def test_cli_list_exported_datasets_distinguishes_broken_export_dir(tmp_path: Path) -> None:
+    selections_dir = tmp_path / "dataset_selections"
+    broken_dir = tmp_path / "datasets" / "broken"
+    broken_dir.mkdir(parents=True)
+    write_selection(selections_dir / "broken.json", reviews_dir=tmp_path / "reviews", output_dir=broken_dir, items=[])
+
+    process = run_cli("list-exported-datasets", "--selections-dir", str(selections_dir))
+
+    assert process.returncode == 0
+    datasets = {Path(item["selection_path"]).name: item for item in parse_envelope(process)["result"]["datasets"]}
+    assert datasets["broken.json"]["available"] is False
+    assert datasets["broken.json"]["unavailable_reason"] == "Exported dataset is missing dataset_manifest.json"
 
 
 def test_cli_starting_weights_and_save_training_config_use_fixture_roots(tmp_path: Path) -> None:
@@ -1552,27 +1570,53 @@ def test_cli_start_training_run_name_ignores_other_existing_suite_runs(tmp_path:
     assert envelope["result"]["run_name"] == "yolo11n_fixture_group"
 
 
-def test_cli_training_status_infers_historical_run_without_process_json(tmp_path: Path) -> None:
-    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
-    (run_dir / "weights").mkdir(parents=True)
-    (run_dir / "weights" / "best.pt").write_bytes(b"fixture")
-    (run_dir / "results.csv").write_text("epoch,metrics/mAP50(B)\n1,0.42\n")
-    (run_dir / "train.log").write_text("finished\n")
+def test_cli_training_status_rejects_run_dir_outside_workspace() -> None:
+    process = run_cli("training-status", "--run-dir", "/etc/passwd")
 
-    process = run_cli("training-status", "--run-dir", str(run_dir), "--log-lines", "1")
-
-    assert process.returncode == 0
+    assert process.returncode == 2
     envelope = parse_envelope(process)
-    assert_envelope(envelope, command="training-status", ok=True)
-    result = envelope["result"]
-    assert result["state"] == "completed"
-    assert result["latest_metrics"] == {"metrics/mAP50(B)": 0.42}
-    assert result["log_tail"] == ["finished"]
-    assert envelope["warnings"] == ["process.json not found; inferred terminal state from run artifacts"]
+    assert_envelope(envelope, command="training-status", ok=False)
+    assert "run_dir must be inside workspace/runs" in envelope["errors"][0]
 
 
-def test_training_status_handles_corrupt_process_json(tmp_path: Path) -> None:
+def test_training_status_helper_rejects_run_dir_outside_workspace(tmp_path: Path, monkeypatch) -> None:
     pipeline = load_training_lib()
+    monkeypatch.setattr(pipeline, "WORKSPACE_DIR", tmp_path / "workspace")
+
+    try:
+        pipeline.training_status(tmp_path / "outside" / "run")
+    except ValueError as exc:
+        assert "run_dir must be inside" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("outside run_dir should fail")
+
+
+def test_cli_training_status_infers_historical_run_without_process_json() -> None:
+    run_dir = ROOT_DIR / "workspace" / "runs" / "pytest_fixture_group" / "fixture_run"
+    shutil.rmtree(run_dir.parent, ignore_errors=True)
+    try:
+        (run_dir / "weights").mkdir(parents=True)
+        (run_dir / "weights" / "best.pt").write_bytes(b"fixture")
+        (run_dir / "results.csv").write_text("epoch,metrics/mAP50(B)\n1,0.42\n")
+        (run_dir / "train.log").write_text("finished\n")
+
+        process = run_cli("training-status", "--run-dir", str(run_dir), "--log-lines", "1")
+
+        assert process.returncode == 0
+        envelope = parse_envelope(process)
+        assert_envelope(envelope, command="training-status", ok=True)
+        result = envelope["result"]
+        assert result["state"] == "completed"
+        assert result["latest_metrics"] == {"metrics/mAP50(B)": 0.42}
+        assert result["log_tail"] == ["finished"]
+        assert envelope["warnings"] == ["process.json not found; inferred terminal state from run artifacts"]
+    finally:
+        shutil.rmtree(run_dir.parent, ignore_errors=True)
+
+
+def test_training_status_handles_corrupt_process_json(tmp_path: Path, monkeypatch) -> None:
+    pipeline = load_training_lib()
+    monkeypatch.setattr(pipeline, "WORKSPACE_DIR", tmp_path)
     run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
     run_dir.mkdir(parents=True)
     (run_dir / "process.json").write_text('{"state": "runn')
@@ -1587,8 +1631,9 @@ def test_training_status_handles_corrupt_process_json(tmp_path: Path) -> None:
     assert "process.json could not be parsed; inferred terminal state from run artifacts" in status["warnings"]
 
 
-def test_training_status_does_not_read_log_path_outside_run_dir(tmp_path: Path) -> None:
+def test_training_status_does_not_read_log_path_outside_run_dir(tmp_path: Path, monkeypatch) -> None:
     pipeline = load_training_lib()
+    monkeypatch.setattr(pipeline, "WORKSPACE_DIR", tmp_path)
     run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
     outside_log = tmp_path / "outside.log"
     outside_log.write_text("secret outside log\n")
@@ -1617,7 +1662,9 @@ def test_training_status_does_not_read_log_path_outside_run_dir(tmp_path: Path) 
     assert "process log_path is outside the run directory; using default train.log" in status["warnings"]
 
 
-def test_cli_stop_training_exits_4_for_terminal_run(tmp_path: Path) -> None:
+def test_training_status_marks_completed_return_code_unavailable(tmp_path: Path, monkeypatch) -> None:
+    pipeline = load_training_lib()
+    monkeypatch.setattr(pipeline, "WORKSPACE_DIR", tmp_path)
     run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
     write_json(
         run_dir / "process.json",
@@ -1625,22 +1672,58 @@ def test_cli_stop_training_exits_4_for_terminal_run(tmp_path: Path) -> None:
             "schema_version": 1,
             "run_group": "fixture_group",
             "run_name": "fixture_run",
-            "pid": None,
-            "state": "completed",
+            "pid": 99999999,
+            "state": "running",
             "command_line": ["yolo", "detect", "train"],
             "log_path": str(run_dir / "train.log"),
+            "run_dir": str(run_dir),
             "started_at": "2026-05-25T00:00:00Z",
-            "ended_at": "2026-05-25T00:01:00Z",
-            "return_code": 0,
+            "ended_at": None,
+            "return_code": None,
         },
     )
+    (run_dir / "weights").mkdir(parents=True)
+    (run_dir / "weights" / "best.pt").write_bytes(b"fixture")
+    (run_dir / "results.csv").write_text("epoch,metrics/mAP50(B)\n1,0.42\n")
+    (run_dir / "train.log").write_text("finished\n")
 
-    process = run_cli("stop-training", "--run-dir", str(run_dir))
+    status = pipeline.training_status(run_dir, log_lines=1)
 
-    assert process.returncode == 4
-    envelope = parse_envelope(process)
-    assert_envelope(envelope, command="stop-training", ok=False)
-    assert "already terminal" in envelope["errors"][0]
+    process_record = json.loads((run_dir / "process.json").read_text())
+    assert status["state"] == "completed"
+    assert "return_code_unavailable" in status["warnings"]
+    assert process_record["return_code"] is None
+    assert process_record["diagnostic_reason"] == "return_code_unavailable"
+
+
+def test_cli_stop_training_exits_4_for_terminal_run() -> None:
+    run_dir = ROOT_DIR / "workspace" / "runs" / "pytest_fixture_group" / "fixture_run"
+    shutil.rmtree(run_dir.parent, ignore_errors=True)
+    try:
+        write_json(
+            run_dir / "process.json",
+            {
+                "schema_version": 1,
+                "run_group": "fixture_group",
+                "run_name": "fixture_run",
+                "pid": None,
+                "state": "completed",
+                "command_line": ["yolo", "detect", "train"],
+                "log_path": str(run_dir / "train.log"),
+                "started_at": "2026-05-25T00:00:00Z",
+                "ended_at": "2026-05-25T00:01:00Z",
+                "return_code": 0,
+            },
+        )
+
+        process = run_cli("stop-training", "--run-dir", str(run_dir))
+
+        assert process.returncode == 4
+        envelope = parse_envelope(process)
+        assert_envelope(envelope, command="stop-training", ok=False)
+        assert "already terminal" in envelope["errors"][0]
+    finally:
+        shutil.rmtree(run_dir.parent, ignore_errors=True)
 
 
 def test_cli_image_key_returns_stable_identity(tmp_path: Path) -> None:
