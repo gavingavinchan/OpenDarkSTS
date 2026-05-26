@@ -183,7 +183,16 @@ def load_json_or_dict(value: str | Path | dict[str, Any]) -> dict[str, Any]:
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     target = repo_resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    temp = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temp.write_text(content)
+    try:
+        temp.replace(target)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def load_import_manifest(manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH) -> dict[str, Any]:
@@ -2644,7 +2653,12 @@ def resolve_training_selection_path(selection_path: str | Path | None, training_
     raise ValueError("Dataset selection is required; pass --selection or include selection_path in the training config")
 
 
-def check_training_readiness(selection_path: str | Path | None, training_config: str | Path | dict[str, Any]) -> dict[str, Any]:
+def check_training_readiness(
+    selection_path: str | Path | None,
+    training_config: str | Path | dict[str, Any],
+    *,
+    run_name: str | None = None,
+) -> dict[str, Any]:
     resolved_selection = resolve_training_selection_path(selection_path, training_config)
     selection = load_json(resolved_selection)
     config = load_json_or_dict(training_config)
@@ -2688,8 +2702,9 @@ def check_training_readiness(selection_path: str | Path | None, training_config:
             if not weight_provenance(Path(str(run["model"])).name).get("documented"):
                 run_warnings.append(f"No recreation documentation found for {Path(str(run['model'])).name}")
             runs.append({"model": run["model"], "run_name": run["run_name"], "ready": not run_missing, "missing": run_missing, "warnings": run_warnings})
-            missing.extend(f"[{run['run_name']}] {item}" for item in run_missing)
-            warnings.extend(f"[{run['run_name']}] {item}" for item in run_warnings)
+            if run_name is None or str(run["run_name"]) == str(run_name):
+                missing.extend(f"[{run['run_name']}] {item}" for item in run_missing)
+                warnings.extend(f"[{run['run_name']}] {item}" for item in run_warnings)
 
     return {"ready": not missing, "missing": list(dict.fromkeys(missing)), "warnings": list(dict.fromkeys(warnings)), "runs": runs}
 
@@ -2893,6 +2908,8 @@ def process_is_live(process_record: dict[str, Any]) -> bool:
         pid_int = int(pid)
     except (TypeError, ValueError):
         return False
+    if pid_int <= 0:
+        return False
     try:
         os.kill(pid_int, 0)
     except ProcessLookupError:
@@ -2997,10 +3014,10 @@ def start_training_run(
     config_file = repo_resolve(training_config_path)
     config = load_json(config_file)
     resolved_selection = resolve_training_selection_path(selection_path, config)
-    readiness = check_training_readiness(resolved_selection, config)
+    run = select_training_run(config, run_name)
+    readiness = check_training_readiness(resolved_selection, config, run_name=str(run["run_name"]))
     if not readiness.get("ready"):
         return {"state": "blocked", "ready": False, "missing": readiness.get("missing") or [], "warnings": readiness.get("warnings") or []}
-    run = select_training_run(config, run_name)
     dataset_dir = repo_resolve(load_json(resolved_selection).get("export", {}).get("output_dir"))
     command = launch_command_line(build_single_yolo_train_command(run, dataset_dir))
     if not any(str(part).startswith("exist_ok=") for part in command):
@@ -3124,8 +3141,12 @@ def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, An
     warnings: list[str] = []
     process_record: dict[str, Any] | None = None
     if process_path.exists():
-        process_record = load_json(process_path)
-        state = str(process_record.get("state") or "unknown")
+        try:
+            process_record = load_json(process_path)
+            state = str(process_record.get("state") or "unknown")
+        except (OSError, json.JSONDecodeError, ValueError):
+            state = infer_terminal_state_from_artifacts(output_run_dir)
+            warnings.append("process.json could not be parsed; inferred terminal state from run artifacts")
     else:
         state = infer_terminal_state_from_artifacts(output_run_dir)
         warnings.append("process.json not found; inferred terminal state from run artifacts")
@@ -3144,7 +3165,13 @@ def training_status(run_dir: str | Path, *, log_lines: int = 80) -> dict[str, An
         write_json(process_path, process_record)
         update_training_metadata_status(output_run_dir, state, ended_at=ended_at)
 
-    log_path = Path(str(process_record.get("log_path"))) if process_record and process_record.get("log_path") else output_run_dir / "train.log"
+    log_path = output_run_dir / "train.log"
+    if process_record and process_record.get("log_path"):
+        safe_log_path = safe_file_in_roots(process_record.get("log_path"), [output_run_dir])
+        if safe_log_path is None:
+            warnings.append("process log_path is outside the run directory; using default train.log")
+        else:
+            log_path = safe_log_path
     if not repo_resolve(log_path).exists():
         warnings.append("train.log not found")
     results = load_training_results_series(output_run_dir / "results.csv")

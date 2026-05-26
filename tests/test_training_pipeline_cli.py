@@ -1411,6 +1411,38 @@ def test_process_is_live_accepts_real_python_subprocess() -> None:
             child.wait(timeout=5)
 
 
+def test_process_is_live_rejects_zero_and_negative_pids() -> None:
+    pipeline = load_training_lib()
+
+    assert pipeline.process_is_live({"pid": 0, "state": "running"}) is False
+    assert pipeline.process_is_live({"pid": -1, "state": "running"}) is False
+
+
+def test_write_json_preserves_existing_file_when_atomic_replace_fails(tmp_path: Path, monkeypatch) -> None:
+    pipeline = load_training_lib()
+    target = tmp_path / "payload.json"
+    target.write_text('{"old": true}\n')
+    original = target.read_text()
+    original_replace = Path.replace
+
+    def fail_temp_replace(self: Path, target_path: Path) -> Path:
+        if self.name.startswith(".payload.json."):
+            raise OSError("simulated replace failure")
+        return original_replace(self, target_path)
+
+    monkeypatch.setattr(Path, "replace", fail_temp_replace)
+
+    try:
+        pipeline.write_json(target, {"new": True})
+    except OSError as exc:
+        assert "simulated replace failure" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("replace failure should propagate")
+
+    assert target.read_text() == original
+    assert list(tmp_path.glob(".payload.json.*.tmp")) == []
+
+
 def write_ready_training_inputs(tmp_path: Path, *, multi_model: bool = False) -> tuple[Path, Path, Path]:
     pipeline = load_training_lib()
     reviews_dir = tmp_path / "reviews"
@@ -1498,6 +1530,28 @@ def test_cli_start_training_multi_model_requires_run_name(tmp_path: Path) -> Non
     assert envelope["result"]["available_run_names"] == ["yolov8n_fixture_group", "yolo11n_fixture_group"]
 
 
+def test_cli_start_training_run_name_ignores_other_existing_suite_runs(tmp_path: Path) -> None:
+    selection_path, config_path, _ = write_ready_training_inputs(tmp_path, multi_model=True)
+    (tmp_path / "runs" / "fixture_group" / "yolov8n_fixture_group").mkdir(parents=True)
+
+    process = run_cli(
+        "start-training",
+        "--selection",
+        str(selection_path),
+        "--config",
+        str(config_path),
+        "--run-name",
+        "yolo11n_fixture_group",
+        "--dry-run",
+    )
+
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="start-training", ok=True)
+    assert envelope["result"]["state"] == "dry_run"
+    assert envelope["result"]["run_name"] == "yolo11n_fixture_group"
+
+
 def test_cli_training_status_infers_historical_run_without_process_json(tmp_path: Path) -> None:
     run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
     (run_dir / "weights").mkdir(parents=True)
@@ -1515,6 +1569,52 @@ def test_cli_training_status_infers_historical_run_without_process_json(tmp_path
     assert result["latest_metrics"] == {"metrics/mAP50(B)": 0.42}
     assert result["log_tail"] == ["finished"]
     assert envelope["warnings"] == ["process.json not found; inferred terminal state from run artifacts"]
+
+
+def test_training_status_handles_corrupt_process_json(tmp_path: Path) -> None:
+    pipeline = load_training_lib()
+    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "process.json").write_text('{"state": "runn')
+    (run_dir / "results.csv").write_text("epoch,metrics/mAP50(B)\n1,0.42\n")
+    (run_dir / "train.log").write_text("finished\n")
+
+    status = pipeline.training_status(run_dir, log_lines=1)
+
+    assert status["state"] == "completed"
+    assert status["latest_metrics"] == {"metrics/mAP50(B)": 0.42}
+    assert status["log_tail"] == ["finished"]
+    assert "process.json could not be parsed; inferred terminal state from run artifacts" in status["warnings"]
+
+
+def test_training_status_does_not_read_log_path_outside_run_dir(tmp_path: Path) -> None:
+    pipeline = load_training_lib()
+    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run"
+    outside_log = tmp_path / "outside.log"
+    outside_log.write_text("secret outside log\n")
+    write_json(
+        run_dir / "process.json",
+        {
+            "schema_version": 1,
+            "run_group": "fixture_group",
+            "run_name": "fixture_run",
+            "pid": None,
+            "state": "completed",
+            "command_line": ["yolo", "detect", "train"],
+            "log_path": str(outside_log),
+            "run_dir": str(run_dir),
+            "started_at": "2026-05-25T00:00:00Z",
+            "ended_at": "2026-05-25T00:01:00Z",
+            "return_code": 0,
+        },
+    )
+    (run_dir / "train.log").write_text("safe run log\n")
+
+    status = pipeline.training_status(run_dir, log_lines=1)
+
+    assert status["log_tail"] == ["safe run log"]
+    assert "secret outside log" not in "\n".join(status["log_tail"])
+    assert "process log_path is outside the run directory; using default train.log" in status["warnings"]
 
 
 def test_cli_stop_training_exits_4_for_terminal_run(tmp_path: Path) -> None:
