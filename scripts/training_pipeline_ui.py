@@ -1350,7 +1350,7 @@ TRAIN_YOLO_HTML = """<!DOCTYPE html>
       const runGroupRaw = String(run.run_group || '');
       const runNameRaw = String(run.run_name || '');
       const metrics = Object.entries(run.latest_metrics || {}).map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(value)}`).join(' | ') || 'Waiting for metrics';
-      const log = (run.log_tail || []).join('\n') || 'No log output yet.';
+      const log = (run.log_tail || []).join('\\n') || 'No log output yet.';
       const stop = run.state === 'running' ? `<button class="danger" data-run-group="${escapeHtml(runGroupRaw)}" data-run-name="${escapeHtml(runNameRaw)}">Stop Training</button>` : '';
       return `<div class="run-card"><h3>${runName}</h3><div class="meta">state: ${runState} | pid: ${runPid}</div><div class="meta">${runDir}</div><div class="meta">${metrics}</div><pre>${escapeHtml(log)}</pre>${stop}</div>`;
     }
@@ -1863,7 +1863,7 @@ TRAINING_SETUP_HTML = """<!DOCTYPE html>
               <button class="primary" id="saveBtn" disabled>Save Config</button>
               <div class="secondary-row">
                 <button id="resetBtn">Reset</button>
-                <button id="continueBtn" disabled title="Available in Step 6">Continue to Train YOLO</button>
+                <button id="continueBtn" disabled>Continue to Train YOLO</button>
               </div>
               <p class="hint" id="savePathHint">Save a config to use it for training.</p>
             </div>
@@ -2363,7 +2363,7 @@ TRAINING_SETUP_HTML = """<!DOCTYPE html>
         await loadSavedConfigs();
         persistState();
         document.getElementById('continueBtn').disabled = false;
-        document.getElementById('continueBtn').title = 'Available in Step 6';
+        document.getElementById('continueBtn').title = '';
         renderActions();
         logAction('save_done', { run_group: state.lastSavedRunGroup, config_path: state.lastSavedConfigPath });
       } catch (error) {
@@ -2431,8 +2431,8 @@ TRAINING_SETUP_HTML = """<!DOCTYPE html>
       document.getElementById('saveBtn').onclick = saveConfig;
       document.getElementById('resetBtn').onclick = resetToDefaults;
       document.getElementById('continueBtn').onclick = () => {
-        logAction('continue_to_train_yolo_stub', { run_group: state.lastSavedRunGroup });
-        showToast('Train YOLO is the next stage and is not implemented yet.');
+        logAction('continue_to_train_yolo', { run_group: state.lastSavedRunGroup, config_path: state.lastSavedConfigPath });
+        window.location.href = '/train-yolo';
       };
     }
 

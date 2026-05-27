@@ -78,6 +78,8 @@ def test_train_yolo_page_route_renders() -> None:
     assert "Train <em>YOLO</em>" in html
     assert 'class="stage active" href="/train-yolo"' in html
     assert "/api/runs/active" in html
+    assert "join('\\n')" in html
+    assert "join('\n')" not in html
 
 
 def test_step6_run_apis_start_status_and_active(tmp_path: Path, monkeypatch) -> None:
@@ -275,6 +277,9 @@ def test_step5_training_setup_page_route() -> None:
     assert "/api/system/device-info" in html
     assert "training-ui-interaction" in html
     assert 'href="/training-setup"' in html  # stage rail self-link
+    assert "continue_to_train_yolo_stub" not in html
+    assert "Train YOLO is the next stage and is not implemented yet" not in html
+    assert "window.location.href = '/train-yolo'" in html
 
 
 def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> None:

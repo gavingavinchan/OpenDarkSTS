@@ -246,6 +246,49 @@ An intermediate smoke run before the `exist_ok=True` launch fix wrote YOLO artif
 
 Known gaps: these are 1-epoch CPU smoke tests intended to validate the backend export/config/readiness/launch/status path, not model quality. The first two smoke attempts intentionally remain as diagnostics for launch failure and Ultralytics auto-increment behavior discovered during testing.
 
+### Frontend Step 4-6 GPU E2E Smoke Run
+
+Purpose: browser-driven validation that the training pipeline frontend can save a dataset selection, export a YOLO dataset, save a training config, start training, monitor status, and complete a YOLO run using the GUI/API path only.
+
+Dataset: `workspace/datasets/frontend_e2e_real_20260526_gpu_b_v1/data.yaml`.
+
+Dataset manifest: `workspace/datasets/frontend_e2e_real_20260526_gpu_b_v1/dataset_manifest.json`.
+
+Dataset selection manifest: `workspace/dataset_selections/frontend_e2e_real_20260526_gpu_b_v1.json`.
+
+Training config: `workspace/training_configs/frontend_e2e_real_20260526_gpu_b.json`.
+
+Starting weights: `yolov8n.pt`.
+
+Run metadata: `workspace/runs/frontend_e2e_real_20260526_gpu_b/yolov8n_frontend_e2e_real_20260526_gpu_b/training_metadata.json`, `process.json`, and `args.yaml`.
+
+Recreate through the frontend validation harness with:
+
+```bash
+nohup .venv/bin/python -u scripts/training_pipeline_ui.py \
+  --port 8766 \
+  --reviews-dir workspace/reviews \
+  --reviewer gavin \
+  > workspace/reports/frontend_e2e/server_8766_20260526_after_train_yolo_js_fix.log 2>&1 < /dev/null &
+OPENDARKSTS_UI_URL=http://127.0.0.1:8766 \
+OPENDARKSTS_E2E_ID=frontend_e2e_real_20260526_gpu_b \
+OPENDARKSTS_E2E_REPORT_DIR=workspace/reports/frontend_e2e \
+NODE_PATH=/tmp/opencode/playwright-env/node_modules \
+/tmp/opencode/playwright-env/node_modules/.bin/playwright test \
+  --config=workspace/reports/frontend_e2e/playwright.config.js
+```
+
+Equivalent launched YOLO parameters: `model=yolov8n.pt`, `imgsz=320`, `epochs=1`, `batch=2`, `device=0`, `seed=42`, `patience=1`, `workers=0`, `mosaic=0`, `mixup=0`, `fliplr=0`, `flipud=0`, `degrees=0`, `scale=0`, `translate=0`, `hsv_h=0`, `hsv_s=0`, `hsv_v=0`, `shear=0`, `perspective=0`, `copy_paste=0`, `erasing=0`, `crop_fraction=0`, `exist_ok=True`.
+
+Covered weights:
+
+| Weight | Starting weights | Training config | Run metadata |
+|---|---|---|---|
+| `workspace/runs/frontend_e2e_real_20260526_gpu_b/yolov8n_frontend_e2e_real_20260526_gpu_b/weights/best.pt` | `yolov8n.pt` | `workspace/training_configs/frontend_e2e_real_20260526_gpu_b.json` | `workspace/runs/frontend_e2e_real_20260526_gpu_b/yolov8n_frontend_e2e_real_20260526_gpu_b/training_metadata.json`, `process.json`, `args.yaml` |
+| `workspace/runs/frontend_e2e_real_20260526_gpu_b/yolov8n_frontend_e2e_real_20260526_gpu_b/weights/last.pt` | `yolov8n.pt` | `workspace/training_configs/frontend_e2e_real_20260526_gpu_b.json` | `workspace/runs/frontend_e2e_real_20260526_gpu_b/yolov8n_frontend_e2e_real_20260526_gpu_b/training_metadata.json`, `process.json`, `args.yaml` |
+
+Known gaps: this is a 1-epoch GPU smoke test on an RTX 4070 Laptop GPU intended to validate frontend reachability and frontend/backend parity, not model quality. The initial frontend E2E attempt `frontend_e2e_real_20260526_gpu` produced partial selection/config/dataset artifacts while diagnosing a Step 6 JavaScript parse bug; the final successful run is the `_gpu_b` run documented above.
+
 ### Smoke Run
 
 Dataset: `workspace/datasets/manual_reviewed_gavin_v1/data.yaml`.
