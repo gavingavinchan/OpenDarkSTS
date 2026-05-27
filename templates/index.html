@@ -113,13 +113,25 @@ body {
   75% { content: '...'; }
 }
 
-/* ── STS ALERT FLASH ────────────────────────────── */
-@keyframes alert-flash {
-  0%,100% { box-shadow: 0 0 0px rgba(255,34,68,0); border-color: rgba(255,34,68,0.3); }
-  25%,75% { box-shadow: 0 0 30px rgba(255,34,68,0.5); border-color: rgba(255,34,68,0.9); }
-  50%      { box-shadow: 0 0 60px rgba(255,34,68,0.8); border-color: var(--red); }
+/* ── COLOR-CODED FLASH ANIMATIONS ───────────────── */
+@keyframes flash-red {
+  0%,100% { box-shadow: 0 0 0px rgba(255,34,68,0);    border-color: rgba(255,34,68,0.3); }
+  25%,75% { box-shadow: 0 0 40px rgba(255,34,68,0.6); border-color: rgba(255,34,68,0.8); }
+  50%     { box-shadow: 0 0 70px rgba(255,34,68,1);    border-color: var(--red); }
 }
-.sts-alert { animation: alert-flash 0.8s ease-in-out 3; }
+@keyframes flash-yellow {
+  0%,100% { box-shadow: 0 0 0px rgba(255,170,0,0);    border-color: rgba(255,170,0,0.3); }
+  25%,75% { box-shadow: 0 0 35px rgba(255,170,0,0.6); border-color: rgba(255,170,0,0.8); }
+  50%     { box-shadow: 0 0 60px rgba(255,170,0,1);    border-color: var(--orange); }
+}
+@keyframes flash-white {
+  0%,100% { box-shadow: 0 0 0px rgba(255,255,255,0);    border-color: rgba(255,255,255,0.2); }
+  25%,75% { box-shadow: 0 0 30px rgba(255,255,255,0.4); border-color: rgba(255,255,255,0.6); }
+  50%     { box-shadow: 0 0 50px rgba(255,255,255,0.7); border-color: rgba(255,255,255,0.9); }
+}
+.flash-red    { animation: flash-red    0.8s ease-in-out 3; }
+.flash-yellow { animation: flash-yellow 0.8s ease-in-out 3; }
+.flash-white  { animation: flash-white  0.8s ease-in-out 3; }
 
 /* STS warning banner */
 .sts-warning-banner {
@@ -728,6 +740,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
       <div class="nav-item" onclick="showTab('map',this)"><span class="nav-icon">🗺️</span> Live Map</div>
       <div class="nav-section">Data</div>
       <div class="nav-item" onclick="showTab('export',this)"><span class="nav-icon">📤</span> Export Report</div>
+      <div class="nav-item" onclick="showTab('ais-manager',this)"><span class="nav-icon">📡</span> AIS Manager</div>
     </div>
 
     <div id="dev-nav" style="display:none">
@@ -850,8 +863,12 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
             </div>
           </div>
 
-          <label>AIS Data Directory (optional — for vessel identification)</label>
-          <input type="text" id="scan-ais" placeholder="Leave blank to detect without AIS correlation">
+          <label>AIS Data Directory <span style="color:var(--accent)">(required for dark fleet confirmation)</span></label>
+          <input type="text" id="scan-ais" placeholder="C:\path\to\AIS_folder\ — leave blank for detection only">
+          <div style="margin-top:8px;padding:10px 14px;background:var(--bg3);border-radius:var(--r);border-left:3px solid var(--orange);font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7">
+            ⚠️ <strong style="color:var(--orange)">Without AIS data:</strong> Ships are marked as <span style="color:var(--text-dim)">⚪ DETECTED ONLY</span> — unverified<br>
+            ✅ <strong style="color:var(--green)">With AIS data:</strong> Ships are verified and classified as confirmed dark, suspicious, or legitimate
+          </div>
 
           <button class="btn btn-primary btn-full" onclick="runScan()">🛰️ LAUNCH SCAN</button>
           <div class="loading" id="scan-loading"><div class="spin"></div><span id="scan-prog">Scanning…</span></div>
@@ -885,10 +902,11 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
             <p>Upload images and run a scan<br>to see results here</p>
           </div>
           <div id="scan-stats-wrap" style="display:none">
-            <div class="stat-row" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:14px">
-              <div class="stat-card s-total" style="padding:14px"><div class="stat-val" id="sc-total" style="font-size:32px;color:var(--accent)">0</div><div class="stat-lbl">Images</div></div>
-              <div class="stat-card s-sts" style="padding:14px"><div class="stat-val" id="sc-sts" style="font-size:32px">0</div><div class="stat-lbl">STS Found</div></div>
-              <div class="stat-card s-safe" style="padding:14px"><div class="stat-val" id="sc-safe" style="font-size:32px">0</div><div class="stat-lbl">Clear</div></div>
+            <div class="stat-row" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:14px">
+              <div class="stat-card s-total" style="padding:14px"><div class="stat-val" id="sc-total" style="font-size:28px;color:var(--accent)">0</div><div class="stat-lbl">Images</div></div>
+              <div class="stat-card s-sts" style="padding:14px"><div class="stat-val" id="sc-sts" style="font-size:28px">0</div><div class="stat-lbl">🔴 Confirmed Dark</div></div>
+              <div class="stat-card s-dark" style="padding:14px"><div class="stat-val" id="sc-detected" style="font-size:28px;color:var(--text-dim)">0</div><div class="stat-lbl">⚪ Detected Only</div></div>
+              <div class="stat-card s-safe" style="padding:14px"><div class="stat-val" id="sc-safe" style="font-size:28px">0</div><div class="stat-lbl">🟢 Clear</div></div>
             </div>
             <div id="scan-msg" style="font-family:var(--mono);font-size:12px;color:var(--green)"></div>
           </div>
@@ -968,6 +986,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
           </p>
           <button class="btn btn-primary btn-full" onclick="exportFile('csv')" style="margin-bottom:8px">📊 DOWNLOAD CSV REPORT</button>
           <button class="btn btn-ghost btn-full" onclick="exportFile('json')">📄 DOWNLOAD JSON</button>
+          <button class="btn btn-ghost btn-full" onclick="clearScans()"
+            style="border-color:var(--red);color:var(--red);margin-top:8px">
+            🗑️ CLEAR ALL SCAN HISTORY
+          </button>
           <div id="export-msg" style="margin-top:10px;font-family:var(--mono);font-size:11px;color:var(--green)"></div>
         </div>
         <div class="card">
@@ -978,6 +1000,184 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
               <tbody id="export-tbody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ AIS MANAGER TAB ════════════════════════════ -->
+    <div id="tab-ais-manager" class="tab-panel">
+      <div class="page-hdr">
+        <div class="page-title">AIS DATA MANAGER</div>
+        <div class="page-sub">// download & manage Marine Cadastre AIS vessel traffic data</div>
+      </div>
+
+      <!-- Info banner -->
+      <div style="background:rgba(0,229,255,0.06);border:1px solid rgba(0,229,255,0.2);border-radius:var(--r);padding:14px 18px;margin-bottom:18px;font-family:var(--mono);font-size:11px;line-height:1.8;color:var(--text)">
+        📡 <strong style="color:var(--accent)">Marine Cadastre AIS Data</strong> — Official US Coast Guard vessel traffic data.<br>
+        ⚠️ <strong style="color:var(--orange)">File sizes:</strong> Each day ~150-200MB compressed, ~500MB-1GB decompressed.<br>
+        💡 <strong style="color:var(--green)">Tip:</strong> Install zstandard first: <code style="background:var(--bg);padding:2px 6px;border-radius:3px">pip install zstandard</code>
+      </div>
+
+      <div class="g2">
+        <div class="card">
+          <div class="card-title">⬇️ Download AIS Data</div>
+
+          <!-- Mode selector -->
+          <span class="conf-label">Download Mode</span>
+          <div class="conf-toggle" style="margin-bottom:14px">
+            <div class="conf-btn active" id="ais-mode-single" onclick="setAisMode('single')">
+              <span class="conf-name">📅 Single Date</span>
+            </div>
+            <div class="conf-btn" id="ais-mode-range" onclick="setAisMode('range')">
+              <span class="conf-name">📆 Date Range</span>
+            </div>
+            <div class="conf-btn" id="ais-mode-month" onclick="setAisMode('month')">
+              <span class="conf-name">🗓️ Full Month</span>
+            </div>
+            <div class="conf-btn" id="ais-mode-year" onclick="setAisMode('year')">
+              <span class="conf-name">📋 Full Year</span>
+            </div>
+          </div>
+
+          <!-- Single date -->
+          <div id="ais-single-inputs">
+            <label>Date</label>
+            <input type="date" id="ais-single-date" value="2025-01-03">
+          </div>
+
+          <!-- Date range -->
+          <div id="ais-range-inputs" style="display:none">
+            <div class="g2">
+              <div>
+                <label>From Date</label>
+                <input type="date" id="ais-range-from" value="2025-01-01">
+              </div>
+              <div>
+                <label>To Date</label>
+                <input type="date" id="ais-range-to" value="2025-01-07">
+              </div>
+            </div>
+            <div id="ais-range-info" style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--orange)"></div>
+          </div>
+
+          <!-- Month -->
+          <div id="ais-month-inputs" style="display:none">
+            <div class="g2">
+              <div>
+                <label>Year</label>
+                <input type="number" id="ais-month-year" value="2025" min="2015" max="2025">
+              </div>
+              <div>
+                <label>Month</label>
+                <select id="ais-month-month">
+                  <option value="1">January</option><option value="2">February</option>
+                  <option value="3">March</option><option value="4">April</option>
+                  <option value="5">May</option><option value="6">June</option>
+                  <option value="7">July</option><option value="8">August</option>
+                  <option value="9">September</option><option value="10">October</option>
+                  <option value="11">November</option><option value="12">December</option>
+                </select>
+              </div>
+            </div>
+            <div style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--orange)">⚠️ ~28-31 files, ~4-6GB compressed</div>
+          </div>
+
+          <!-- Year -->
+          <div id="ais-year-inputs" style="display:none">
+            <label>Year</label>
+            <input type="number" id="ais-year-year" value="2025" min="2015" max="2025">
+            <div style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--red)">⚠️ 365 files, ~65GB compressed. Ensure sufficient disk space!</div>
+          </div>
+
+          <hr>
+
+          <!-- ── REGION FILTER ── -->
+          <div class="card-title" style="margin-bottom:10px">📍 Region Filter <span style="color:var(--green);font-size:10px">(Recommended — reduces file size massively)</span></div>
+
+          <div style="margin-bottom:12px;padding:10px 14px;background:var(--bg3);border-radius:var(--r);border-left:3px solid var(--green);font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7">
+            ✅ Filter to your region → ~500MB becomes just <strong style="color:var(--green)">a few MB!</strong><br>
+            Leave blank to download full global dataset (~500MB/day).
+          </div>
+
+          <!-- Quick presets -->
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Quick Region Presets</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+            <button class="btn btn-ghost btn-sm" onclick="setRegion(20,35,-100,-80)">🌊 Gulf of Mexico</button>
+            <button class="btn btn-ghost btn-sm" onclick="setRegion(22,32,50,60)">🛢️ Persian Gulf</button>
+            <button class="btn btn-ghost btn-sm" onclick="setRegion(-5,25,-20,45)">🌍 West Africa</button>
+            <button class="btn btn-ghost btn-sm" onclick="setRegion(0,25,100,125)">🌏 S. China Sea</button>
+            <button class="btn btn-ghost btn-sm" onclick="setRegion(30,45,-10,40)">🌊 Mediterranean</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearRegion()" style="color:var(--red);border-color:rgba(255,34,68,0.3)">✕ Clear</button>
+          </div>
+
+          <!-- Coordinate inputs -->
+          <div class="g2">
+            <div>
+              <label>Min Latitude (South)</label>
+              <input type="number" id="ais-lat-min" step="0.01" placeholder="e.g. 20.0">
+            </div>
+            <div>
+              <label>Max Latitude (North)</label>
+              <input type="number" id="ais-lat-max" step="0.01" placeholder="e.g. 35.0">
+            </div>
+            <div>
+              <label>Min Longitude (West)</label>
+              <input type="number" id="ais-lon-min" step="0.01" placeholder="e.g. -100.0">
+            </div>
+            <div>
+              <label>Max Longitude (East)</label>
+              <input type="number" id="ais-lon-max" step="0.01" placeholder="e.g. -80.0">
+            </div>
+          </div>
+
+          <div id="ais-coord-display" style="margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--accent);display:none">
+            📍 Region set — data will be filtered to this bounding box
+          </div>
+
+          <button class="btn btn-primary btn-full" onclick="startAisDownload()" style="margin-top:16px">
+            📡 START DOWNLOAD
+          </button>
+          <button class="btn btn-ghost btn-full" onclick="refreshAisLog()" style="margin-top:8px">
+            🔄 REFRESH LOG
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">📟 Download Log</div>
+          <div class="log-box" id="ais-log">Waiting for download to start…</div>
+          <div style="margin-top:10px">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:6px">Progress</div>
+            <div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden">
+              <div id="ais-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 0.5s;border-radius:4px"></div>
+            </div>
+            <div id="ais-progress-text" style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:4px">0 / 0 files</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Downloaded files list -->
+      <div class="card" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="card-title" style="margin-bottom:0">📁 Downloaded AIS Files</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadAisFiles()">🔄 Refresh</button>
+        </div>
+        <div id="ais-files-empty" class="empty-state" style="padding:30px">
+          <div class="empty-icon">📡</div>
+          <p>No AIS files downloaded yet</p>
+        </div>
+        <div class="tbl-wrap" id="ais-files-wrap" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Filename</th>
+                <th>Size</th>
+                <th>Folder Path</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="ais-files-tbody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1264,7 +1464,7 @@ async function loadStats() {
 
   animateCounter(document.getElementById('s-scans'), d.total_scans || 0);
   animateCounter(document.getElementById('s-total'), d.total_detections || 0);
-  animateCounter(document.getElementById('s-sts'),   d.confirmed_sts || 0);
+  animateCounter(document.getElementById('s-sts'),   d.confirmed_dark || d.confirmed_sts || 0);
   animateCounter(document.getElementById('s-safe'),  d.ais_present || 0);
 
   const history = d.history || [];
@@ -1385,25 +1585,38 @@ async function runScan() {
 
     _scanResults = d.results || [];
 
-    animateCounter(document.getElementById('sc-total'), d.total_images);
-    animateCounter(document.getElementById('sc-sts'),   d.confirmed_sts);
-    animateCounter(document.getElementById('sc-safe'),  d.total_images - d.confirmed_sts);
+    animateCounter(document.getElementById('sc-total'),    d.total_images);
+    animateCounter(document.getElementById('sc-sts'),      d.confirmed_sts);
+    animateCounter(document.getElementById('sc-detected'), d.detected_only || 0);
+    animateCounter(document.getElementById('sc-safe'),     d.total_images - d.confirmed_sts - (d.detected_only||0));
     document.getElementById('scan-stats-wrap').style.display = 'block';
-    document.getElementById('scan-msg').textContent =
-      `✅ Scan complete — ${d.confirmed_sts} STS event(s) detected`;
+
+    // Message based on AIS availability
+    const hasAis = d.results?.some(r => r.ais_provided);
+    if (d.confirmed_sts > 0) {
+      document.getElementById('scan-msg').textContent =
+        `🚨 ${d.confirmed_sts} CONFIRMED dark fleet event(s) detected via AIS verification!`;
+    } else if (d.detected_only > 0) {
+      document.getElementById('scan-msg').innerHTML =
+        `⚪ ${d.detected_only} STS candidate(s) detected — <strong style="color:var(--orange)">provide AIS data to verify</strong>`;
+    } else {
+      document.getElementById('scan-msg').textContent = `✅ Scan complete — no STS activity detected`;
+    }
 
     buildStsCards(_scanResults);
     buildExportPreview(_scanResults);
     loadStats();
 
-    // Flash STS alert if events found
     if (d.confirmed_sts > 0) {
-      toast(`🚨 ${d.confirmed_sts} STS EVENTS DETECTED!`, 5000);
-      // Flash the scan summary card
-      document.querySelector('#tab-scan .card').classList.add('sts-alert');
-      setTimeout(() => document.querySelector('#tab-scan .card').classList.remove('sts-alert'), 2500);
+      toast(`🚨 ${d.confirmed_sts} CONFIRMED dark fleet event(s)!`, 5000);
+      document.querySelector('#tab-scan .card').classList.add('flash-red');
+      setTimeout(() => document.querySelector('#tab-scan .card').classList.remove('flash-red'), 2500);
+    } else if (d.detected_only > 0) {
+      toast(`⚪ ${d.detected_only} STS candidate(s) — add AIS data to confirm`, 4000);
+      document.querySelector('#tab-scan .card').classList.add('flash-white');
+      setTimeout(() => document.querySelector('#tab-scan .card').classList.remove('flash-white'), 2500);
     } else {
-      toast(`✅ Scan complete — no STS events detected`);
+      toast(`✅ Scan complete — all clear`);
     }
   } catch(e) {
     toast('❌ ' + e.message);
@@ -1419,37 +1632,72 @@ function buildStsCards(results) {
   const grid   = document.getElementById('sts-grid');
   const empty  = document.getElementById('results-empty');
   const banner = document.getElementById('sts-banner');
-  const confirmed = results.filter(r => r.is_confirmed_sts);
 
-  if (!confirmed.length) {
+  // Show all STS detections (both confirmed and detected-only)
+  const stsResults = results.filter(r => r.is_confirmed_sts || r.is_detected_only);
+
+  if (!stsResults.length) {
     grid.innerHTML = '';
     empty.style.display = 'block';
-    empty.querySelector('p').textContent = 'No STS events in this scan — all clear ✅';
+    empty.querySelector('p').textContent = 'No STS activity detected in this scan ✅';
     banner.classList.remove('show');
     return;
   }
   empty.style.display = 'none';
 
-  // Show alert banner
-  document.getElementById('sts-banner-text').textContent =
-    `⚠️ ${confirmed.length} STS TRANSFER EVENT${confirmed.length>1?'S':''} DETECTED — REPORT TO MARITIME AUTHORITIES`;
-  banner.classList.add('show');
+  const confirmed  = stsResults.filter(r => r.is_confirmed_sts);
+  const detOnly    = stsResults.filter(r => r.is_detected_only);
 
-  grid.innerHTML = confirmed.map((r, i) => {
-    const statusClass = r.dark_status==='FULLY_DARK' ? 'b-red' : r.dark_status==='PARTIALLY_DARK' ? 'b-orange' : 'b-blue';
+  // Show appropriate banner
+  if (confirmed.length > 0) {
+    document.getElementById('sts-banner-text').textContent =
+      `🚨 ${confirmed.length} CONFIRMED DARK FLEET EVENT${confirmed.length>1?'S':''} — REPORT TO MARITIME AUTHORITIES`;
+    banner.classList.add('show');
+  } else if (detOnly.length > 0) {
+    document.getElementById('sts-banner-text').innerHTML =
+      `⚪ ${detOnly.length} STS CANDIDATE${detOnly.length>1?'S':''} DETECTED — <span style="color:var(--orange)">PROVIDE AIS DATA TO VERIFY</span>`;
+    banner.classList.add('show');
+    banner.style.borderColor = 'rgba(255,170,0,0.4)';
+    banner.style.background  = 'rgba(255,170,0,0.08)';
+    banner.style.color       = 'var(--orange)';
+  }
+
+  grid.innerHTML = stsResults.map((r, i) => {
+    const isConfirmed = r.is_confirmed_sts;
+    const isDetOnly   = r.is_detected_only;
+
+    const statusClass = r.dark_status==='FULLY_DARK'     ? 'b-red'    :
+                        r.dark_status==='PARTIALLY_DARK' ? 'b-orange' :
+                        r.dark_status==='AIS_PRESENT'    ? 'b-green'  :
+                        r.dark_status==='DETECTED_ONLY'  ? 'b-purple' : 'b-blue';
+
+    const statusLabel = r.dark_status==='FULLY_DARK'     ? '🔴 CONFIRMED DARK'     :
+                        r.dark_status==='PARTIALLY_DARK' ? '🟡 PARTIALLY DARK'     :
+                        r.dark_status==='AIS_PRESENT'    ? '🟢 AIS PRESENT'        :
+                        r.dark_status==='DETECTED_ONLY'  ? '⚪ DETECTED — UNVERIFIED' :
+                        r.dark_status==='AIS_ERROR'      ? '⚠️ AIS ERROR'           : r.dark_status;
+
     const vessels = (r.ais_vessels||[]).map(v => `
       <div class="vessel-item">
         <div class="vessel-name">${v.VesselName||'Unknown Vessel'}</div>
         <div class="vessel-meta">MMSI: ${v.MMSI||'?'} · ${v.distance_m||'?'}m away</div>
-      </div>`).join('') || '<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">No AIS vessels detected (provide AIS directory for vessel ID)</div>';
+      </div>`).join('');
 
-    const coords = r.lat ? `${r.lat.toFixed(6)}°, ${r.lon.toFixed(6)}°` : 'Coordinates unavailable';
+    const aisNote = !r.ais_provided
+      ? `<div style="padding:8px 10px;background:rgba(255,170,0,0.08);border-radius:4px;border-left:2px solid var(--orange);font-family:var(--mono);font-size:10px;color:var(--orange)">
+          ⚠️ No AIS data provided — cannot verify dark fleet status.<br>
+          Rescan with AIS directory to confirm this detection.
+         </div>`
+      : vessels || `<div style="font-family:var(--mono);font-size:10px;color:var(--green)">✅ No AIS vessels nearby — this is a confirmed dark fleet transfer</div>`;
+
+    const coords = r.lat ? `${r.lat.toFixed(6)}°, ${r.lon.toFixed(6)}°` : 'Coordinates unavailable (requires AIS)';
+    const cardBorder = isConfirmed ? 'rgba(255,34,68,0.3)' : 'rgba(255,170,0,0.2)';
 
     return `
-    <div class="sts-card" id="sts-card-${i}">
+    <div class="sts-card" id="sts-card-${i}" style="border-color:${cardBorder}">
       <div class="sts-card-hdr">
-        <div class="sts-card-title">⚠️ STS EVENT #${i+1}</div>
-        <span class="badge ${statusClass}">${r.dark_status||'DETECTED'}</span>
+        <div class="sts-card-title">${isConfirmed ? '🚨' : '🔍'} STS ${isConfirmed ? 'EVENT' : 'CANDIDATE'} #${i+1}</div>
+        <span class="badge ${statusClass}">${statusLabel}</span>
       </div>
       <img class="sts-img" src="${r.result_image}?t=${Date.now()}" alt="${r.filename}" onerror="this.style.display='none'">
       <div class="sts-body">
@@ -1457,10 +1705,12 @@ function buildStsCards(results) {
           <div class="sts-meta-item"><div class="meta-lbl">File</div><div class="meta-val" style="font-size:10px">${r.filename}</div></div>
           <div class="sts-meta-item"><div class="meta-lbl">STS Count</div><div class="meta-val" style="color:var(--red)">${r.sts_count}</div></div>
           <div class="sts-meta-item"><div class="meta-lbl">Coordinates</div><div class="meta-val" style="font-size:10px">${coords}</div></div>
-          <div class="sts-meta-item"><div class="meta-lbl">Sensitivity</div><div class="meta-val">${r.preset||'medium'}</div></div>
+          <div class="sts-meta-item"><div class="meta-lbl">AIS Verified</div><div class="meta-val">${r.ais_provided ? '✅ Yes' : '❌ No'}</div></div>
         </div>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">AIS Vessels Nearby</div>
-        ${vessels}
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">
+          ${r.ais_provided ? 'AIS Vessels Nearby' : 'AIS Verification Required'}
+        </div>
+        ${aisNote}
       </div>
       <div class="sts-actions">
         ${r.lat ? `<button class="btn btn-primary btn-sm" onclick="flyTo(${r.lat},${r.lon})">📍 MAP</button>` : ''}
@@ -1469,12 +1719,18 @@ function buildStsCards(results) {
     </div>`;
   }).join('');
 
-  // Staggered flash animation on each card
-  confirmed.forEach((_, i) => {
+  // Flash each card with its own color based on status
+  stsResults.forEach((r, i) => {
+    const flashClass = r.dark_status === 'FULLY_DARK'     ? 'flash-red'    :
+                       r.dark_status === 'PARTIALLY_DARK' ? 'flash-yellow' :
+                       r.dark_status === 'DETECTED_ONLY'  ? 'flash-white'  : null;
+    if (!flashClass) return;
     setTimeout(() => {
       const card = document.getElementById(`sts-card-${i}`);
-      if (card) card.classList.add('sts-alert');
-      setTimeout(() => card && card.classList.remove('sts-alert'), 2500);
+      if (card) {
+        card.classList.add(flashClass);
+        setTimeout(() => card.classList.remove(flashClass), 2500);
+      }
     }, i * 400);
   });
 }
@@ -1621,6 +1877,182 @@ async function refreshLog() {
   document.getElementById('train-status').textContent = d.done ? '✅ Training complete!' : '⏳ In progress…';
 }
 
+// ── AIS MANAGER ──────────────────────────────────────────────
+let _aisMode = 'single';
+let _aisLogInterval = null;
+
+function setAisMode(mode) {
+  _aisMode = mode;
+  ['single','range','month','year'].forEach(m => {
+    document.getElementById(`ais-mode-${m}`).classList.toggle('active', m === mode);
+    document.getElementById(`ais-${m}-inputs`).style.display = m === mode ? 'block' : 'none';
+  });
+  // Update range warning
+  if (mode === 'range') updateRangeInfo();
+}
+
+function updateRangeInfo() {
+  const from = document.getElementById('ais-range-from').value;
+  const to   = document.getElementById('ais-range-to').value;
+  if (from && to) {
+    const days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
+    const gb   = (days * 0.18).toFixed(1);
+    document.getElementById('ais-range-info').textContent =
+      `⚠️ ${days} file(s), ~${gb}GB compressed`;
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const rf = document.getElementById('ais-range-from');
+  const rt = document.getElementById('ais-range-to');
+  if (rf) rf.addEventListener('change', updateRangeInfo);
+  if (rt) rt.addEventListener('change', updateRangeInfo);
+});
+
+function setRegion(latMin, latMax, lonMin, lonMax) {
+  document.getElementById('ais-lat-min').value = latMin;
+  document.getElementById('ais-lat-max').value = latMax;
+  document.getElementById('ais-lon-min').value = lonMin;
+  document.getElementById('ais-lon-max').value = lonMax;
+  document.getElementById('ais-coord-display').style.display = 'block';
+  document.getElementById('ais-coord-display').textContent =
+    `📍 Region: Lat ${latMin}°→${latMax}°, Lon ${lonMin}°→${lonMax}°`;
+}
+
+function clearRegion() {
+  ['ais-lat-min','ais-lat-max','ais-lon-min','ais-lon-max'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('ais-coord-display').style.display = 'none';
+}
+
+async function startAisDownload() {
+  const payload = { mode: _aisMode };
+
+  if (_aisMode === 'single') {
+    const d = document.getElementById('ais-single-date').value;
+    if (!d) { toast('⚠️ Select a date'); return; }
+    payload.single = d;
+  } else if (_aisMode === 'range') {
+    payload.date_from = document.getElementById('ais-range-from').value;
+    payload.date_to   = document.getElementById('ais-range-to').value;
+    if (!payload.date_from || !payload.date_to) { toast('⚠️ Select both dates'); return; }
+    if (payload.date_from > payload.date_to) { toast('⚠️ From date must be before To date'); return; }
+  } else if (_aisMode === 'month') {
+    payload.year  = document.getElementById('ais-month-year').value;
+    payload.month = document.getElementById('ais-month-month').value;
+  } else if (_aisMode === 'year') {
+    payload.year = document.getElementById('ais-year-year').value;
+    if (!confirm(`Download full year ${payload.year}? This may be 65GB+ of data.`)) return;
+  }
+
+  // Add coordinate filter if provided
+  const latMin = document.getElementById('ais-lat-min').value;
+  const latMax = document.getElementById('ais-lat-max').value;
+  const lonMin = document.getElementById('ais-lon-min').value;
+  const lonMax = document.getElementById('ais-lon-max').value;
+  if (latMin && latMax && lonMin && lonMax) {
+    payload.lat_min = parseFloat(latMin);
+    payload.lat_max = parseFloat(latMax);
+    payload.lon_min = parseFloat(lonMin);
+    payload.lon_max = parseFloat(lonMax);
+  }
+
+  const r = await fetch('/api/ais/download', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const d = await r.json();
+  if (d.error) { toast('❌ ' + d.error); return; }
+
+  toast(`📡 Download started — ${d.total} file(s)`);
+  document.getElementById('ais-log').textContent = 'Starting download…';
+
+  if (_aisLogInterval) clearInterval(_aisLogInterval);
+  _aisLogInterval = setInterval(refreshAisLog, 2000);
+}
+
+async function refreshAisLog() {
+  const d = await fetch('/api/ais/log').then(r => r.json());
+  const box = document.getElementById('ais-log');
+  box.textContent = d.log || 'No log yet.';
+  box.scrollTop = box.scrollHeight;
+
+  // Update progress bar
+  const pct = d.total > 0 ? Math.round((d.done_n / d.total) * 100) : 0;
+  document.getElementById('ais-progress-bar').style.width = pct + '%';
+  document.getElementById('ais-progress-text').textContent = `${d.done_n} / ${d.total} files (${pct}%)`;
+
+  if (d.done) {
+    clearInterval(_aisLogInterval);
+    _aisLogInterval = null;
+    loadAisFiles();
+    toast('✅ AIS download complete!');
+  }
+}
+
+async function loadAisFiles() {
+  const files = await fetch('/api/ais/files').then(r => r.json());
+  const empty = document.getElementById('ais-files-empty');
+  const wrap  = document.getElementById('ais-files-wrap');
+  const tbody = document.getElementById('ais-files-tbody');
+
+  if (!files.length) {
+    empty.style.display = 'block';
+    wrap.style.display  = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  wrap.style.display  = 'block';
+
+  tbody.innerHTML = files.map(f => `
+    <tr>
+      <td><span class="badge b-blue">${f.date}</span></td>
+      <td><code style="font-size:10px">${f.name}</code></td>
+      <td>${f.size_mb} MB</td>
+      <td><code style="font-size:9px;color:var(--text-dim)">${f.path}</code></td>
+      <td style="display:flex;gap:6px">
+        <button class="btn btn-primary btn-sm" onclick="useAisFile('${f.path}')">📡 Use</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteAisFile('${f.name}')">🗑️</button>
+      </td>
+    </tr>`).join('');
+}
+
+function useAisFile(path) {
+  // Auto-fill AIS directory in scan tab
+  document.getElementById('scan-ais').value = path;
+  showTab('scan', document.querySelector('#user-nav .nav-item:nth-child(4)'));
+  toast('📡 AIS directory set — now upload an image and scan!');
+}
+
+async function deleteAisFile(filename) {
+  if (!confirm(`Delete ${filename}?`)) return;
+  const r = await fetch('/api/ais/delete', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({filename})
+  });
+  const d = await r.json();
+  if (d.status === 'deleted') { toast('🗑️ File deleted'); loadAisFiles(); }
+  else toast('❌ ' + d.error);
+}
+
+// ── CLEAR SCANS ──────────────────────────────────────────────
+async function clearScans() {
+  if (!confirm('Clear all scan history and statistics? This cannot be undone.')) return;
+  await fetch('/api/scan/clear', { method: 'POST' });
+  await fetch('/api/stats/clear', { method: 'POST' });
+  _scanResults = [];
+  document.getElementById('sts-grid').innerHTML = '';
+  document.getElementById('results-empty').style.display = 'block';
+  document.getElementById('results-empty').querySelector('p').textContent = 'No STS events yet — run a scan to detect dark fleet activity';
+  document.getElementById('export-tbody').innerHTML = '';
+  document.getElementById('sts-banner').classList.remove('show');
+  document.getElementById('scan-stats-wrap').style.display = 'none';
+  document.getElementById('scan-empty').style.display = 'block';
+  ['s-scans','s-total','s-sts','s-safe'].forEach(id => document.getElementById(id).textContent = '0');
+  loadStats();
+  toast('🗑️ All scan history and statistics cleared');
+}
+
 // ── DROP ZONE ────────────────────────────────────────────────
 document.querySelectorAll('.drop-zone').forEach(z => {
   z.addEventListener('dragover',  e => { e.preventDefault(); z.classList.add('over'); });
@@ -1630,6 +2062,17 @@ document.querySelectorAll('.drop-zone').forEach(z => {
 
 // ── INIT ─────────────────────────────────────────────────────
 loadStats();
+loadAisFiles();
+
+// Load persisted scan history on startup
+fetch('/api/scan/history').then(r => r.json()).then(data => {
+  if (data && data.length) {
+    _scanResults = data;
+    buildStsCards(data);
+    buildExportPreview(data);
+    toast(`📂 Loaded ${data.length} previous scan result(s)`);
+  }
+});
 </script>
 </body>
 </html>
