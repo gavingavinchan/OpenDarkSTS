@@ -57,7 +57,7 @@ OUTPUT_DIR        = BASE_DIR / "runs"
 EXPORT_DIR        = OUTPUT_DIR / "exports"
 UPLOAD_DIR        = OUTPUT_DIR / "uploads"
 YAML_PATH         = BASE_DIR / "dataset.yaml"
-BEST_WEIGHTS      = Path(r"C:\Users\Lenovo\Documents\OpenDarkSTS\new2026\yolov8n_rectbbox_e150_img960\yolov8n_rectbbox_e150_img960\weights\best.pt")
+BEST_WEIGHTS      = Path(__file__).parent / "weights" / "best.pt"
 STATS_FILE        = EXPORT_DIR / "cumulative_stats.json"
 SCAN_HISTORY_FILE = EXPORT_DIR / "scan_history.json"
 
@@ -528,7 +528,7 @@ def serve_export(filename):
 # AIS DATA MANAGER ROUTES
 # ─────────────────────────────────────────────────────────────
 
-AIS_DIR         = BASE_DIR.parent / "AIS_Downloads"
+AIS_DIR         = Path(__file__).parent / "AIS_Downloads"
 AIS_DIR.mkdir(parents=True, exist_ok=True)
 
 _ais_download_log    = []

@@ -1,82 +1,20 @@
-.DS_Store
-Thumbs.db
-
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
-*.pyd
-*.so
-.python-version
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
 
-# Virtual environments
-.venv/
-venv/
-env/
+# Model weights (too large for GitHub)
+weights/*.pt
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Environment and secrets
-.env
-.env.*
-*.key
-*.pem
-*.secrets
-
-# Editors
-.idea/
-.vscode/
-.cursor/
-
-# OS and logs
-*.log
-
-# Build artifacts
-build/
-dist/
-
-# ML/CV datasets and outputs
+# Data and uploads
 data/
-datasets/
-images/
-labels/
-annotations/
-models/
-weights/
-checkpoints/
+AIS_Downloads/
 runs/
-outputs/
-predictions/
-artifacts/
-workspace/
-*.pt
 
-# Common archive and export formats
-*.zip
-*.tar
-*.gz
-*.bz2
-*.7z
-*.csv
-*.parquet
-*.sqlite
-*.db
+# Test files
+test_model_*.py
+bbox_preview/
 
-# Media generated during analysis
-*.tif
-*.tiff
-*.png
-*.jpg
-*.jpeg
-*.mp4
-*.pt
-runs/
-test_model.py
-*.pt
-runs/
-test_model.py
-test_model_2.py
+# Environment
+darkfleet_env/
+.env
