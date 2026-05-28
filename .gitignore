@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Model weights (too large for GitHub)
+weights/*.pt
+
+# Data and uploads
+data/
+AIS_Downloads/
+runs/
+
+# Test files
+test_model_*.py
+bbox_preview/
+
+# Environment
+darkfleet_env/
+.env
