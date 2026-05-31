@@ -21,3 +21,5 @@ Unless explicitly told otherwise, treat all prose writing (the paper, draft sect
 # Paper Audience Rule
 
 Most readers of the paper want to learn how to use the tool; only a minority read it to understand how the tool is implemented. Write accordingly: lead with the user-facing overview (what the tool does and how it is operated), and place implementation detail after it or in clearly secondary positions. When a section opens, prefer an overview-first ordering, with whole-tool implementation notes following the user-perspective material.
+
+The readership is the SNAME maritime and ocean-engineering community, not computer scientists. Use technical terms that an engineer from any background will understand, and avoid computer-science jargon: prefer "dataset" or "the reviewed images" over "corpus", and "a grid of image thumbnails" over "contact sheet". If a specialized term is unavoidable, explain it plainly on first use.
