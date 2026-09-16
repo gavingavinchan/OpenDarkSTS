@@ -14,6 +14,7 @@ from PIL import Image
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})")
+AIS_MATCH_FIELDS = ("MMSI", "VesselName", "BaseDateTime", "VesselType", "SOG", "COG", "Length")
 PIPELINE_CSV_FIELDS = [
     "date",
     "image_file",
@@ -24,11 +25,22 @@ PIPELINE_CSV_FIELDS = [
     "confidence",
     "ais_count",
     "dark_status",
+    "preview_png",
     "vessel_1_mmsi",
     "vessel_1_name",
+    "vessel_1_time",
+    "vessel_1_type",
+    "vessel_1_sog",
+    "vessel_1_cog",
+    "vessel_1_length",
     "vessel_1_dist_m",
     "vessel_2_mmsi",
     "vessel_2_name",
+    "vessel_2_time",
+    "vessel_2_type",
+    "vessel_2_sog",
+    "vessel_2_cog",
+    "vessel_2_length",
     "vessel_2_dist_m",
 ]
 
@@ -169,7 +181,7 @@ def flatten_pipeline_result(result: dict[str, Any]) -> dict[str, Any]:
     vessels = result.get("ais_vessels", [])
     vessel_1 = vessels[0] if len(vessels) >= 1 else {}
     vessel_2 = vessels[1] if len(vessels) >= 2 else {}
-    return {
+    row = {
         "date": result.get("date", ""),
         "image_file": Path(result.get("image_path", "")).name,
         "image_path": result.get("image_path", ""),
@@ -179,13 +191,18 @@ def flatten_pipeline_result(result: dict[str, Any]) -> dict[str, Any]:
         "confidence": result.get("confidence", ""),
         "ais_count": result.get("ais_count", 0),
         "dark_status": result.get("dark_status", ""),
-        "vessel_1_mmsi": vessel_1.get("MMSI", ""),
-        "vessel_1_name": vessel_1.get("VesselName", ""),
-        "vessel_1_dist_m": vessel_1.get("distance_m", ""),
-        "vessel_2_mmsi": vessel_2.get("MMSI", ""),
-        "vessel_2_name": vessel_2.get("VesselName", ""),
-        "vessel_2_dist_m": vessel_2.get("distance_m", ""),
+        "preview_png": result.get("preview_png", ""),
     }
+    for index, vessel in ((1, vessel_1), (2, vessel_2)):
+        row[f"vessel_{index}_mmsi"] = vessel.get("MMSI", "")
+        row[f"vessel_{index}_name"] = vessel.get("VesselName", "")
+        row[f"vessel_{index}_time"] = vessel.get("BaseDateTime", "")
+        row[f"vessel_{index}_type"] = vessel.get("VesselType", "")
+        row[f"vessel_{index}_sog"] = vessel.get("SOG", "")
+        row[f"vessel_{index}_cog"] = vessel.get("COG", "")
+        row[f"vessel_{index}_length"] = vessel.get("Length", "")
+        row[f"vessel_{index}_dist_m"] = vessel.get("distance_m", "")
+    return row
 
 
 def resolve_image_inputs(inputs: Sequence[str]) -> list[Path]:
@@ -210,6 +227,31 @@ def resolve_image_inputs(inputs: Sequence[str]) -> list[Path]:
 
     unique_paths = sorted({candidate.resolve() for candidate in resolved})
     return unique_paths
+
+
+def filter_readable_images(paths: Sequence[Path], warn: Any = None) -> list[Path]:
+    """Drop zero-byte or otherwise unreadable rasters instead of crashing the pipeline."""
+    emit = warn if warn is not None else (lambda message: print(f"WARNING: {message}"))
+    readable: list[Path] = []
+    for path in paths:
+        candidate = Path(path)
+        try:
+            if candidate.stat().st_size == 0:
+                emit(f"Skipping zero-byte image: {candidate}")
+                continue
+        except OSError as error:
+            emit(f"Skipping unreadable image {candidate}: {error}")
+            continue
+
+        try:
+            with Image.open(candidate) as image:
+                image.verify()
+        except Exception as error:  # noqa: BLE001 - any decoder failure means "skip it"
+            emit(f"Skipping unreadable image {candidate}: {error}")
+            continue
+
+        readable.append(candidate)
+    return readable
 
 
 def build_vessel_key(row: dict[str, str]) -> str:

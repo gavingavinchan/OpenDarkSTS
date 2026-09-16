@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ultralytics import YOLO
+if TYPE_CHECKING:  # pragma: no cover - import only for type checking
+    from ultralytics import YOLO
 
 try:
     from .sts_utils import load_image_size, parse_image_date, resolve_image_inputs, write_json
@@ -61,6 +62,8 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
 
 
 def detect_images(image_paths: list[str | Path], weights: str | Path, conf: float = 0.25) -> list[dict[str, Any]]:
+    from ultralytics import YOLO  # imported lazily so unit tests can run without torch
+
     model = YOLO(str(weights))
     detections: list[dict[str, Any]] = []
     for image_path in image_paths:

@@ -7,6 +7,7 @@ from typing import Any
 
 try:
     from .sts_utils import (
+        AIS_MATCH_FIELDS,
         build_vessel_key,
         classify_dark_status,
         coarse_degree_window,
@@ -17,6 +18,7 @@ try:
     )
 except ImportError:
     from sts_utils import (
+        AIS_MATCH_FIELDS,
         build_vessel_key,
         classify_dark_status,
         coarse_degree_window,
@@ -99,14 +101,10 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
                         continue
 
                     vessel_key = build_vessel_key(row)
-                    match_record = {
-                        "MMSI": (row.get("MMSI") or "").strip(),
-                        "VesselName": (row.get("VesselName") or "").strip(),
-                        "BaseDateTime": (row.get("BaseDateTime") or "").strip(),
-                        "LAT": row_lat,
-                        "LON": row_lon,
-                        "distance_m": round(distance_m, 3),
-                    }
+                    match_record = {field: (row.get(field) or "").strip() for field in AIS_MATCH_FIELDS}
+                    match_record["LAT"] = row_lat
+                    match_record["LON"] = row_lon
+                    match_record["distance_m"] = round(distance_m, 3)
 
                     existing = candidate["matches"].get(vessel_key)
                     if existing is None or match_record["distance_m"] < existing["distance_m"]:
