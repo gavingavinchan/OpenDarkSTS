@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -1281,3 +1282,403 @@ def test_cli_image_key_rejects_unknown_render_profile_kind(tmp_path: Path) -> No
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="image-key", ok=False)
     assert "Unknown render profile kind" in envelope["errors"][0]
+
+
+# ---------------------------------------------------------------------------
+# Steps 5-7: training setup, training runs, evaluation
+# ---------------------------------------------------------------------------
+
+FAKE_YOLO_TEMPLATE = """#!/usr/bin/env python3
+import sys, time
+from pathlib import Path
+
+args = dict(part.split("=", 1) for part in sys.argv[1:] if "=" in part)
+run_dir = Path(args["project"]) / args["name"]
+run_dir.mkdir(parents=True, exist_ok=True)
+{body}
+"""
+
+FAKE_YOLO_SUCCESS_BODY = """
+(run_dir / "results.csv").write_text(
+    "epoch,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B)\\n"
+    "1,0.5,0.6,0.7,0.4\\n"
+)
+(run_dir / "weights").mkdir(exist_ok=True)
+(run_dir / "weights" / "best.pt").write_bytes(b"fake-best")
+(run_dir / "weights" / "last.pt").write_bytes(b"fake-last")
+print("1 epochs completed in 0.001 hours.")
+print("Results saved to " + str(run_dir))
+"""
+
+FAKE_YOLO_CRASH_BODY = """
+print("Traceback: fake yolo exploded")
+sys.exit(1)
+"""
+
+FAKE_YOLO_SLEEP_BODY = """
+print("sleeping")
+sys.stdout.flush()
+time.sleep(120)
+"""
+
+
+def write_fake_yolo(path: Path, body: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(FAKE_YOLO_TEMPLATE.format(body=body))
+    path.chmod(0o755)
+    return path
+
+
+def prepare_exported_dataset(tmp_path: Path) -> Path:
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    output_dir = tmp_path / "datasets" / "fixture_dataset"
+    for image_key, split in (("img_train", "train"), ("img_val", "val")):
+        write_review(reviews_dir, cache_dir, reviewer="gavin", image_key=image_key, detections=[detection("auto-0001", "ship_non_sts")])
+    selection_path = write_selection(
+        tmp_path / "dataset_selections" / "fixture_dataset.json",
+        reviews_dir=reviews_dir,
+        output_dir=output_dir,
+        items=[
+            {"image_key": "img_train", "split": "train", "include_labels": "all_exportable", "selected_detection_ids": None},
+            {"image_key": "img_val", "split": "val", "include_labels": "all_exportable", "selected_detection_ids": None},
+        ],
+    )
+    export = run_cli("export-dataset", "--selection", str(selection_path))
+    assert export.returncode == 0, export.stdout + export.stderr
+    return selection_path
+
+
+def save_fixture_config(tmp_path: Path, selection_path: Path, *, run_group: str = "fixture_group", run_name: str = "fixture_run", extra: list[str] | None = None) -> dict:
+    process = run_cli(
+        "save-training-config",
+        "--dataset-name", "fixture_dataset",
+        "--dataset-version", "v1",
+        "--model", "yolov8n.pt",
+        "--run-group", run_group,
+        "--run-name", run_name,
+        "--image-size", "320",
+        "--epochs", "1",
+        "--batch", "2",
+        "--device", "cpu",
+        "--configs-dir", str(tmp_path / "training_configs"),
+        "--output-dir", str(tmp_path / "runs"),
+        "--selection", str(selection_path),
+        *(extra or []),
+    )
+    assert process.returncode == 0, process.stdout + process.stderr
+    return parse_envelope(process)
+
+
+def test_cli_save_training_config_writes_config_and_reports_readiness(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+
+    envelope = save_fixture_config(tmp_path, selection_path, extra=["--aug", "fliplr=0.5", "--aug", "mosaic=0.0"])
+
+    assert_envelope(envelope, command="save-training-config", ok=True)
+    result = envelope["result"]
+    assert result["ready"] is True
+    assert result["missing"] == []
+    config_path = Path(result["config_path"])
+    saved = json.loads((ROOT_DIR / config_path).read_text())
+    assert saved["run_group"] == "fixture_group"
+    assert saved["run_name"] == "fixture_run"
+    assert saved["augmentation"] == {"fliplr": 0.5, "mosaic": 0.0}
+    assert saved["image_size"] == 320
+    assert saved["schema_version"] == 1
+
+
+def test_cli_save_training_config_rejects_unknown_augmentation_key(tmp_path: Path) -> None:
+    process = run_cli(
+        "save-training-config",
+        "--dataset-name", "fixture_dataset",
+        "--model", "yolov8n.pt",
+        "--run-group", "fixture_group",
+        "--run-name", "fixture_run",
+        "--aug", "not_a_real_arg=1",
+        "--configs-dir", str(tmp_path / "training_configs"),
+    )
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="save-training-config", ok=False)
+    assert "not_a_real_arg" in envelope["errors"][0]
+    assert not (tmp_path / "training_configs").exists()
+
+
+def test_cli_list_training_configs_and_exported_datasets(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+    save_fixture_config(tmp_path, selection_path)
+
+    configs = run_cli("list-training-configs", "--configs-dir", str(tmp_path / "training_configs"))
+    datasets = run_cli("list-exported-datasets", "--datasets-dir", str(tmp_path / "datasets"))
+
+    assert configs.returncode == 0
+    configs_envelope = parse_envelope(configs)
+    assert_envelope(configs_envelope, command="list-training-configs", ok=True)
+    assert configs_envelope["result"]["config_count"] == 1
+    assert configs_envelope["result"]["configs"][0]["run_name"] == "fixture_run"
+    assert configs_envelope["result"]["configs"][0]["missing"] == []
+
+    assert datasets.returncode == 0
+    datasets_envelope = parse_envelope(datasets)
+    assert_envelope(datasets_envelope, command="list-exported-datasets", ok=True)
+    assert datasets_envelope["result"]["dataset_count"] == 1
+    dataset = datasets_envelope["result"]["datasets"][0]
+    assert dataset["split_counts"] == {"train": 1, "val": 1, "test": 0}
+    assert dataset["data_yaml_exists"] is True
+
+
+def test_cli_list_starting_weights_warns_about_undocumented_weight(tmp_path: Path) -> None:
+    weights_dir = tmp_path / "model_weights"
+    weights_dir.mkdir(parents=True)
+    (weights_dir / "documented_fixture.pt").write_bytes(b"x")
+    (weights_dir / "undocumented_fixture.pt").write_bytes(b"x")
+    doc_path = tmp_path / "doc.md"
+    doc_path.write_text("Recreation notes for `documented_fixture.pt`.\n")
+    training_lib = load_training_lib()
+
+    weights = training_lib.list_starting_weights(
+        root_dir=tmp_path / "empty_root",
+        model_weights_dir=weights_dir,
+        runs_dir=tmp_path / "empty_runs",
+        doc_path=doc_path,
+    )
+
+    by_name = {entry["name"]: entry for entry in weights}
+    assert by_name["documented_fixture.pt"]["documented"] is True
+    assert by_name["documented_fixture.pt"]["provenance_warning"] is None
+    assert by_name["undocumented_fixture.pt"]["documented"] is False
+    assert "yolo_weight_recreation.md" in by_name["undocumented_fixture.pt"]["provenance_warning"]
+
+    process = run_cli(
+        "list-starting-weights",
+        "--root-dir", str(tmp_path / "empty_root"),
+        "--model-weights-dir", str(weights_dir),
+        "--runs-dir", str(tmp_path / "empty_runs"),
+    )
+    assert process.returncode == 0
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="list-starting-weights", ok=True)
+    assert envelope["result"]["weight_count"] == 2
+
+
+def test_cli_start_training_exits_3_when_not_ready(tmp_path: Path) -> None:
+    selection_path = write_selection(
+        tmp_path / "dataset_selections" / "fixture_dataset.json",
+        reviews_dir=tmp_path / "reviews",
+        output_dir=tmp_path / "datasets" / "never_exported",
+        items=[],
+    )
+    config_path = write_training_config(tmp_path / "training_configs" / "fixture.json", output_dir=tmp_path / "runs")
+
+    process = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path))
+
+    assert process.returncode == 3
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="start-training", ok=False)
+    assert envelope["result"]["ready"] is False
+    assert envelope["errors"] == ["Training is not ready"]
+    assert not (tmp_path / "runs").exists()
+
+
+def test_cli_start_training_status_and_evaluation_round_trip(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+    config_envelope = save_fixture_config(tmp_path, selection_path)
+    config_path = ROOT_DIR / config_envelope["result"]["config_path"]
+    fake_yolo = write_fake_yolo(tmp_path / "bin" / "yolo", FAKE_YOLO_SUCCESS_BODY)
+
+    started = run_cli(
+        "start-training",
+        "--selection", str(selection_path),
+        "--config", str(config_path),
+        "--yolo-executable", str(fake_yolo),
+    )
+    assert started.returncode == 0, started.stdout + started.stderr
+    start_envelope = parse_envelope(started)
+    assert_envelope(start_envelope, command="start-training", ok=True)
+    run_dir = ROOT_DIR / start_envelope["result"]["run_dir"]
+    assert start_envelope["result"]["status"] == "running"
+    assert (run_dir / "process.json").is_file()
+    assert (run_dir / "train.log").is_file()
+    process_record = json.loads((run_dir / "process.json").read_text())
+    assert process_record["pid"] == start_envelope["result"]["pid"]
+    assert process_record["start_ticks"] is not None
+    assert json.loads((run_dir / "training_metadata.json").read_text())["status"] == "running"
+
+    status_envelope = None
+    for _ in range(100):
+        status = run_cli("training-status", "--run-dir", str(run_dir))
+        status_envelope = parse_envelope(status)
+        if status_envelope["result"]["terminal"]:
+            break
+        time.sleep(0.1)
+    assert status_envelope is not None
+    assert_envelope(status_envelope, command="training-status", ok=True)
+    result = status_envelope["result"]
+    assert result["status"] == "completed"
+    assert result["alive"] is False
+    assert result["current_epoch"] == 1
+    assert result["best_metrics"]["metrics/mAP50(B)"]["value"] == 0.7
+    assert result["best_weights_path"].endswith("weights/best.pt")
+    assert any("Results saved to" in line for line in result["log_tail"])
+    assert json.loads((run_dir / "training_metadata.json").read_text())["status"] == "completed"
+
+    active = run_cli("list-active-runs", "--runs-dir", str(tmp_path / "runs"))
+    assert parse_envelope(active)["result"]["run_count"] == 0
+    all_runs = run_cli("list-active-runs", "--runs-dir", str(tmp_path / "runs"), "--all")
+    assert parse_envelope(all_runs)["result"]["run_count"] == 1
+
+    report = run_cli(
+        "write-evaluation-report",
+        "--run-group", "fixture_group",
+        "--runs-dir", str(tmp_path / "runs"),
+        "--reports-dir", str(tmp_path / "reports"),
+    )
+    assert report.returncode == 0
+    report_envelope = parse_envelope(report)
+    assert_envelope(report_envelope, command="write-evaluation-report", ok=True)
+    assert report_envelope["result"]["run_count"] == 1
+    assert report_envelope["result"]["promoted_run_name"] == "fixture_run"
+    assert (tmp_path / "reports" / "fixture_group_evaluation.json").is_file()
+    assert "fixture_run" in (tmp_path / "reports" / "fixture_group_evaluation.md").read_text()
+
+
+def test_cli_training_status_marks_crashed_run_failed(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+    config_envelope = save_fixture_config(tmp_path, selection_path, run_name="crash_run")
+    config_path = ROOT_DIR / config_envelope["result"]["config_path"]
+    fake_yolo = write_fake_yolo(tmp_path / "bin" / "yolo", FAKE_YOLO_CRASH_BODY)
+
+    started = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path), "--yolo-executable", str(fake_yolo))
+    assert started.returncode == 0
+    run_dir = ROOT_DIR / parse_envelope(started)["result"]["run_dir"]
+
+    envelope = None
+    for _ in range(100):
+        status = run_cli("training-status", "--run-dir", str(run_dir))
+        envelope = parse_envelope(status)
+        if envelope["result"]["terminal"]:
+            break
+        time.sleep(0.1)
+    assert envelope is not None
+    assert envelope["ok"] is False
+    assert envelope["result"]["status"] == "failed"
+    assert envelope["result"]["reason"] == "process_missing"
+    assert envelope["errors"]
+    assert json.loads((run_dir / "training_metadata.json").read_text())["status"] == "failed"
+
+
+def test_cli_stop_training_cancels_running_run(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+    config_envelope = save_fixture_config(tmp_path, selection_path, run_name="sleepy_run")
+    config_path = ROOT_DIR / config_envelope["result"]["config_path"]
+    fake_yolo = write_fake_yolo(tmp_path / "bin" / "yolo", FAKE_YOLO_SLEEP_BODY)
+
+    started = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path), "--yolo-executable", str(fake_yolo))
+    assert started.returncode == 0
+    run_dir = ROOT_DIR / parse_envelope(started)["result"]["run_dir"]
+
+    active = run_cli("list-active-runs", "--runs-dir", str(tmp_path / "runs"))
+    assert parse_envelope(active)["result"]["run_count"] == 1
+
+    stopped = run_cli("stop-training", "--run-dir", str(run_dir), "--grace-seconds", "3")
+    assert stopped.returncode == 0
+    stop_envelope = parse_envelope(stopped)
+    assert_envelope(stop_envelope, command="stop-training", ok=True)
+    assert stop_envelope["result"]["status"] == "cancelled"
+    assert stop_envelope["result"]["stopped"] is True
+    assert json.loads((run_dir / "process.json").read_text())["status"] == "cancelled"
+    assert json.loads((run_dir / "training_metadata.json").read_text())["status"] == "cancelled"
+    assert parse_envelope(run_cli("training-status", "--run-dir", str(run_dir)))["result"]["status"] == "cancelled"
+
+
+def test_cli_training_status_requires_pipeline_managed_run(tmp_path: Path) -> None:
+    process = run_cli("training-status", "--run-dir", str(tmp_path / "nowhere"))
+
+    assert process.returncode == 1
+    envelope = parse_envelope(process)
+    assert_envelope(envelope, command="training-status", ok=False)
+    assert "No pipeline-managed training run" in envelope["errors"][0]
+
+
+def test_cli_promote_weight_requires_acknowledgement_and_documentation(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run" / "weights"
+    run_dir.mkdir(parents=True)
+    (run_dir / "best.pt").write_bytes(b"fake-best")
+    weights_dir = tmp_path / "model_weights"
+
+    without_flag = run_cli(
+        "promote-weight",
+        "--run-group", "fixture_group",
+        "--run-name", "fixture_run",
+        "--target-name", "fixture_promoted.pt",
+        "--runs-dir", str(tmp_path / "runs"),
+        "--model-weights-dir", str(weights_dir),
+    )
+    assert without_flag.returncode == 2
+    envelope = parse_envelope(without_flag)
+    assert_envelope(envelope, command="promote-weight", ok=False)
+    assert "--recreation-doc-updated" in envelope["errors"][0]
+    assert not weights_dir.exists()
+
+    undocumented = run_cli(
+        "promote-weight",
+        "--run-group", "fixture_group",
+        "--run-name", "fixture_run",
+        "--target-name", "definitely_not_documented_fixture.pt",
+        "--recreation-doc-updated",
+        "--runs-dir", str(tmp_path / "runs"),
+        "--model-weights-dir", str(weights_dir),
+    )
+    assert undocumented.returncode == 2
+    envelope = parse_envelope(undocumented)
+    assert_envelope(envelope, command="promote-weight", ok=False)
+    assert "yolo_weight_recreation.md" in envelope["errors"][0]
+    assert not weights_dir.exists()
+
+
+def test_promote_weight_copies_documented_target(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    weights = tmp_path / "runs" / "fixture_group" / "fixture_run" / "weights"
+    weights.mkdir(parents=True)
+    (weights / "best.pt").write_bytes(b"fake-best")
+    doc_path = tmp_path / "doc.md"
+    doc_path.write_text("| `workspace/model_weights/fixture_promoted.pt` | documented |\n")
+
+    result = training_lib.promote_weight(
+        run_group="fixture_group",
+        run_name="fixture_run",
+        target_name="fixture_promoted",
+        recreation_doc_updated=True,
+        runs_dir=tmp_path / "runs",
+        model_weights_dir=tmp_path / "model_weights",
+        doc_path=doc_path,
+    )
+
+    promoted = tmp_path / "model_weights" / "fixture_promoted.pt"
+    assert promoted.read_bytes() == b"fake-best"
+    assert result["documented"] is True
+    assert result["sha256"].startswith("sha256:")
+
+
+def test_start_training_forces_exist_ok_so_yolo_reuses_the_pipeline_run_dir(tmp_path: Path) -> None:
+    selection_path = prepare_exported_dataset(tmp_path)
+    config_envelope = save_fixture_config(tmp_path, selection_path, run_name="exist_ok_run")
+    config_path = ROOT_DIR / config_envelope["result"]["config_path"]
+    fake_yolo = write_fake_yolo(tmp_path / "bin" / "yolo", FAKE_YOLO_SUCCESS_BODY)
+
+    started = run_cli("start-training", "--selection", str(selection_path), "--config", str(config_path), "--yolo-executable", str(fake_yolo))
+
+    assert started.returncode == 0
+    result = parse_envelope(started)["result"]
+    assert "exist_ok=True" in result["command_line"]
+    assert "exist_ok=True" in result["argv"]
+    run_dir = ROOT_DIR / result["run_dir"]
+    for _ in range(100):
+        if parse_envelope(run_cli("training-status", "--run-dir", str(run_dir)))["result"]["terminal"]:
+            break
+        time.sleep(0.1)
+    # Ultralytics would have written to `<run_name>2` if the directory had not been reused.
+    assert not (run_dir.parent / "exist_ok_run2").exists()
+    assert (run_dir / "results.csv").is_file()

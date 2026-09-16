@@ -473,6 +473,194 @@ def command_remove_images(args: argparse.Namespace) -> tuple[int, dict[str, Any]
     return 0, envelope("remove-images", ok=True, result=result)
 
 
+def parse_augmentation_args(values: list[str] | None) -> dict[str, float]:
+    if not values:
+        return {}
+    parsed: dict[str, float] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError("Augmentation settings must be provided as key=value")
+        key, raw = value.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError("Augmentation settings must be provided as key=value")
+        parsed[key] = float(raw.strip())
+    return parsed
+
+
+def resolved_run_dir(args: argparse.Namespace) -> str:
+    run_dir = getattr(args, "run_dir", None)
+    if run_dir:
+        return str(run_dir)
+    run_group = getattr(args, "run_group", None)
+    run_name = getattr(args, "run_name", None)
+    if not run_group or not run_name:
+        raise ValueError("Provide --run-dir, or both --run-group and --run-name")
+    runs_dir = getattr(args, "runs_dir", None) or pipeline.DEFAULT_RUNS_DIR
+    return str(pipeline.repo_resolve(runs_dir) / str(run_group) / str(run_name))
+
+
+def command_save_training_config(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.save_training_config(
+        dataset_name=args.dataset_name,
+        dataset_version=args.dataset_version,
+        model=args.model,
+        run_group=args.run_group,
+        run_name=args.run_name,
+        image_size=int(args.image_size),
+        epochs=int(args.epochs),
+        batch=int(args.batch),
+        patience=None if args.patience is None else int(args.patience),
+        seed=int(args.seed),
+        device=args.device,
+        workers=None if args.workers is None else int(args.workers),
+        augmentation=parse_augmentation_args(args.aug),
+        overwrite=bool(args.overwrite),
+        output_dir=args.output_dir,
+        configs_dir=args.configs_dir,
+        config_name=args.config_name,
+        selection_path=args.selection,
+    )
+    readiness = result.get("readiness") or {}
+    payload = {
+        "config_path": result["config_path"],
+        "run_group": result["config"]["run_group"],
+        "run_name": result["config"]["run_name"],
+        "model": result["config"]["model"],
+        "ready": bool(readiness.get("ready")),
+        "missing": list(readiness.get("missing") or []),
+        "config": result["config"],
+    }
+    add_diagnostics(payload, args, "save_training_config", configs_dir=args.configs_dir)
+    return 0, envelope("save-training-config", ok=True, result=payload, warnings=list(result.get("warnings") or []))
+
+
+def command_list_training_configs(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    configs = pipeline.list_training_configs(args.configs_dir)
+    result = {"config_count": len(configs), "configs": configs}
+    add_diagnostics(result, args, "list_training_configs", configs_dir=args.configs_dir)
+    return 0, envelope("list-training-configs", ok=True, result=result)
+
+
+def command_list_exported_datasets(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    datasets = pipeline.list_exported_datasets(args.datasets_dir)
+    result = {"dataset_count": len(datasets), "datasets": datasets}
+    add_diagnostics(result, args, "list_exported_datasets", datasets_dir=args.datasets_dir)
+    return 0, envelope("list-exported-datasets", ok=True, result=result)
+
+
+def command_list_starting_weights(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    weights = pipeline.list_starting_weights(
+        root_dir=args.root_dir,
+        model_weights_dir=args.model_weights_dir,
+        runs_dir=args.runs_dir,
+    )
+    warnings = [entry["provenance_warning"] for entry in weights if entry.get("provenance_warning")]
+    result = {
+        "weight_count": len(weights),
+        "undocumented_count": len(warnings),
+        "weights": weights,
+    }
+    add_diagnostics(result, args, "list_starting_weights", model_weights_dir=args.model_weights_dir)
+    return 0, envelope("list-starting-weights", ok=True, result=result, warnings=warnings)
+
+
+def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    readiness = pipeline.check_training_readiness(args.selection, args.config)
+    if not readiness["ready"]:
+        result = {"ready": False, "missing": list(readiness["missing"])}
+        return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["Training is not ready"])
+    result = pipeline.start_training_run(
+        args.selection,
+        args.config,
+        yolo_executable=args.yolo_executable,
+    )
+    warnings = list(result.pop("warnings", []) or [])
+    add_diagnostics(result, args, "start_training_run", selection_path=args.selection, config_path=args.config)
+    return 0, envelope("start-training", ok=True, result=result, warnings=warnings)
+
+
+def command_training_status(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    run_dir = resolved_run_dir(args)
+    result = pipeline.training_status(run_dir, log_lines=int(args.log_lines))
+    if not bool(args.include_series):
+        result.pop("results", None)
+    add_diagnostics(result, args, "training_status", run_dir=run_dir)
+    ok = result["status"] != "failed"
+    errors = [] if ok else [f"Training run is failed ({result.get('reason') or 'unknown reason'})"]
+    return (0 if ok else 4), envelope("training-status", ok=ok, result=result, errors=errors)
+
+
+def command_stop_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    run_dir = resolved_run_dir(args)
+    result = pipeline.stop_training_run(run_dir, grace_seconds=float(args.grace_seconds))
+    add_diagnostics(result, args, "stop_training_run", run_dir=run_dir)
+    return 0, envelope("stop-training", ok=True, result=result)
+
+
+def command_list_active_runs(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    runs = pipeline.list_training_runs(args.runs_dir, active_only=not bool(args.all))
+    result = {"run_count": len(runs), "runs": runs}
+    add_diagnostics(result, args, "list_training_runs", runs_dir=args.runs_dir)
+    return 0, envelope("list-active-runs", ok=True, result=result)
+
+
+def command_write_evaluation_report(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.build_run_group_evaluation_report(
+        run_group=args.run_group,
+        runs_dir=args.runs_dir,
+        reports_dir=args.reports_dir,
+        baseline=pipeline.load_json(args.baseline) if args.baseline else None,
+        promoted_run_name=args.promote_run_name,
+        promotion_reason=args.promotion_reason,
+    )
+    runs = result.pop("runs", [])
+    result["run_names"] = [str(run.get("run_name")) for run in runs]
+    if bool(args.include_runs):
+        result["runs"] = runs
+    add_diagnostics(result, args, "build_run_group_evaluation_report", runs_dir=args.runs_dir, reports_dir=args.reports_dir)
+    warnings = [] if result.get("run_count") else ["Run group contains no runs with results.csv"]
+    return 0, envelope("write-evaluation-report", ok=True, result=result, warnings=warnings)
+
+
+def command_run_test_split(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    run_dir = resolved_run_dir(args)
+    result = pipeline.run_test_split(
+        run_dir,
+        dataset_dir=args.dataset_dir,
+        device=args.device,
+        image_size=None if args.image_size is None else int(args.image_size),
+        python_executable=args.python_executable,
+    )
+    add_diagnostics(result, args, "run_test_split", run_dir=run_dir)
+    return 0, envelope("run-test-split", ok=True, result=result)
+
+
+def command_promote_weight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    if not bool(args.recreation_doc_updated):
+        return 2, envelope(
+            "promote-weight",
+            ok=False,
+            errors=[
+                "Refusing to promote without --recreation-doc-updated; document the weight in docs/yolo_weight_recreation.md first"
+            ],
+        )
+    try:
+        result = pipeline.promote_weight(
+            run_group=args.run_group,
+            run_name=args.run_name,
+            target_name=args.target_name,
+            recreation_doc_updated=True,
+            runs_dir=args.runs_dir,
+            model_weights_dir=args.model_weights_dir,
+            overwrite=bool(args.overwrite),
+        )
+    except ValueError as exc:
+        return 2, envelope("promote-weight", ok=False, errors=[str(exc)])
+    add_diagnostics(result, args, "promote_weight", runs_dir=args.runs_dir, model_weights_dir=args.model_weights_dir)
+    return 0, envelope("promote-weight", ok=True, result=result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Training pipeline automation CLI")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
@@ -636,6 +824,100 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("--filter", choices=["inactive-review"])
     remove_parser.add_argument("--dry-run", action="store_true")
     remove_parser.set_defaults(handler=command_remove_images)
+
+    save_config_parser = subparsers.add_parser("save-training-config")
+    save_config_parser.add_argument("--dataset-name", required=True)
+    save_config_parser.add_argument("--dataset-version", default="v1")
+    save_config_parser.add_argument("--model", required=True, help="Starting weights path or Ultralytics model name")
+    save_config_parser.add_argument("--run-group", required=True)
+    save_config_parser.add_argument("--run-name", required=True)
+    save_config_parser.add_argument("--image-size", type=int, default=960)
+    save_config_parser.add_argument("--epochs", type=int, default=150)
+    save_config_parser.add_argument("--batch", type=int, default=8)
+    save_config_parser.add_argument("--patience", type=int, default=30)
+    save_config_parser.add_argument("--seed", type=int, default=42)
+    save_config_parser.add_argument("--device", default="cpu")
+    save_config_parser.add_argument("--workers", type=int, default=4)
+    save_config_parser.add_argument("--aug", action="append", help="Augmentation setting as key=value; repeatable")
+    save_config_parser.add_argument("--overwrite", action="store_true")
+    save_config_parser.add_argument("--output-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    save_config_parser.add_argument("--configs-dir", default=str(pipeline.DEFAULT_TRAINING_CONFIGS_DIR))
+    save_config_parser.add_argument("--config-name", help="Override the saved config filename stem (defaults to run group)")
+    save_config_parser.add_argument("--selection", help="Dataset selection manifest used to validate readiness")
+    save_config_parser.set_defaults(handler=command_save_training_config)
+
+    list_configs_parser = subparsers.add_parser("list-training-configs")
+    list_configs_parser.add_argument("--configs-dir", default=str(pipeline.DEFAULT_TRAINING_CONFIGS_DIR))
+    list_configs_parser.set_defaults(handler=command_list_training_configs)
+
+    list_datasets_parser = subparsers.add_parser("list-exported-datasets")
+    list_datasets_parser.add_argument("--datasets-dir", default=str(pipeline.DEFAULT_DATASETS_DIR))
+    list_datasets_parser.set_defaults(handler=command_list_exported_datasets)
+
+    list_weights_parser = subparsers.add_parser("list-starting-weights")
+    list_weights_parser.add_argument("--root-dir", default=str(pipeline.ROOT_DIR))
+    list_weights_parser.add_argument("--model-weights-dir", default=str(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
+    list_weights_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    list_weights_parser.set_defaults(handler=command_list_starting_weights)
+
+    start_training_parser = subparsers.add_parser("start-training")
+    start_training_parser.add_argument("--selection", required=True)
+    start_training_parser.add_argument("--config", required=True)
+    start_training_parser.add_argument("--yolo-executable", help="Override the yolo executable (defaults to .venv/bin/yolo)")
+    start_training_parser.set_defaults(handler=command_start_training)
+
+    status_parser = subparsers.add_parser("training-status")
+    status_parser.add_argument("--run-dir")
+    status_parser.add_argument("--run-group")
+    status_parser.add_argument("--run-name")
+    status_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    status_parser.add_argument("--log-lines", type=int, default=40)
+    status_parser.add_argument("--include-series", action="store_true", help="Include the full results.csv series")
+    status_parser.set_defaults(handler=command_training_status)
+
+    stop_parser = subparsers.add_parser("stop-training")
+    stop_parser.add_argument("--run-dir")
+    stop_parser.add_argument("--run-group")
+    stop_parser.add_argument("--run-name")
+    stop_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    stop_parser.add_argument("--grace-seconds", type=float, default=10.0)
+    stop_parser.set_defaults(handler=command_stop_training)
+
+    active_runs_parser = subparsers.add_parser("list-active-runs")
+    active_runs_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    active_runs_parser.add_argument("--all", action="store_true", help="Include terminal runs as well")
+    active_runs_parser.set_defaults(handler=command_list_active_runs)
+
+    evaluation_parser = subparsers.add_parser("write-evaluation-report")
+    evaluation_parser.add_argument("--run-group", required=True)
+    evaluation_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    evaluation_parser.add_argument("--reports-dir", default=str(pipeline.WORKSPACE_DIR / "reports"))
+    evaluation_parser.add_argument("--baseline", help="Path to a baseline metrics JSON file")
+    evaluation_parser.add_argument("--promote-run-name", help="Force the promoted run instead of picking the best mAP50")
+    evaluation_parser.add_argument("--promotion-reason")
+    evaluation_parser.add_argument("--include-runs", action="store_true")
+    evaluation_parser.set_defaults(handler=command_write_evaluation_report)
+
+    test_split_parser = subparsers.add_parser("run-test-split")
+    test_split_parser.add_argument("--run-dir")
+    test_split_parser.add_argument("--run-group")
+    test_split_parser.add_argument("--run-name")
+    test_split_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    test_split_parser.add_argument("--dataset-dir")
+    test_split_parser.add_argument("--device", default="cpu")
+    test_split_parser.add_argument("--image-size", type=int)
+    test_split_parser.add_argument("--python-executable")
+    test_split_parser.set_defaults(handler=command_run_test_split)
+
+    promote_parser = subparsers.add_parser("promote-weight")
+    promote_parser.add_argument("--run-group", required=True)
+    promote_parser.add_argument("--run-name", required=True)
+    promote_parser.add_argument("--target-name", required=True, help="Destination filename under workspace/model_weights/")
+    promote_parser.add_argument("--recreation-doc-updated", action="store_true", help="Acknowledge docs/yolo_weight_recreation.md is already updated")
+    promote_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    promote_parser.add_argument("--model-weights-dir", default=str(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
+    promote_parser.add_argument("--overwrite", action="store_true")
+    promote_parser.set_defaults(handler=command_promote_weight)
 
     return parser
 

@@ -5,13 +5,16 @@ import csv
 import copy
 import json
 import math
+import os
 import platform
 import random
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -2743,3 +2746,892 @@ def utcnow_iso_for_training() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+# ---------------------------------------------------------------------------
+# Step 5: training setup
+# ---------------------------------------------------------------------------
+
+DEFAULT_TRAINING_CONFIGS_DIR = WORKSPACE_DIR / "training_configs"
+DEFAULT_RUNS_DIR = WORKSPACE_DIR / "runs"
+DEFAULT_MODEL_WEIGHTS_DIR = WORKSPACE_DIR / "model_weights"
+WEIGHT_RECREATION_DOC = ROOT_DIR / "docs" / "yolo_weight_recreation.md"
+ALLOWED_AUGMENTATION_KEYS = (
+    "hsv_h",
+    "hsv_s",
+    "hsv_v",
+    "degrees",
+    "translate",
+    "scale",
+    "shear",
+    "perspective",
+    "flipud",
+    "fliplr",
+    "mosaic",
+    "mixup",
+    "copy_paste",
+    "erasing",
+    "crop_fraction",
+)
+
+
+def normalize_augmentation(augmentation: dict[str, Any] | None) -> dict[str, Any]:
+    values = augmentation or {}
+    if not isinstance(values, dict):
+        raise ValueError("augmentation must be an object of Ultralytics train args")
+    unknown = sorted(str(key) for key in values if str(key) not in ALLOWED_AUGMENTATION_KEYS)
+    if unknown:
+        raise ValueError(
+            "Unknown augmentation key(s): " + ", ".join(unknown) + ". Allowed keys: " + ", ".join(ALLOWED_AUGMENTATION_KEYS)
+        )
+    normalized: dict[str, Any] = {}
+    for key, value in values.items():
+        parsed = parse_float(value)
+        if parsed is None:
+            raise ValueError(f"augmentation value for {key} must be numeric")
+        normalized[str(key)] = parsed
+    return normalized
+
+
+def weight_recreation_doc_text(doc_path: str | Path = WEIGHT_RECREATION_DOC) -> str:
+    target = repo_resolve(doc_path)
+    if not target.is_file():
+        return ""
+    return target.read_text()
+
+
+def weight_is_documented(weight_path: str | Path, *, doc_text: str | None = None, doc_path: str | Path = WEIGHT_RECREATION_DOC) -> bool:
+    text = weight_recreation_doc_text(doc_path) if doc_text is None else doc_text
+    if not text:
+        return False
+    candidate = Path(str(weight_path))
+    needles = {repo_relative(repo_resolve(candidate)), str(candidate)}
+    if candidate.name not in {"best.pt", "last.pt"}:
+        # Generic checkpoint names would match unrelated rows, so only match them by path.
+        needles.add(candidate.name)
+    relative = repo_relative(repo_resolve(candidate))
+    parts = Path(relative).parts
+    if len(parts) >= 5 and parts[0] == "workspace" and parts[1] == "runs" and parts[-2] == "weights":
+        # The recreation doc documents whole run groups with a `<run_name>` placeholder.
+        needles.add(str(Path(*parts[:3], "<run_name>", *parts[-2:])))
+    return any(needle and needle in text for needle in needles)
+
+
+def starting_weight_entry(path: Path, source: str, doc_text: str) -> dict[str, Any]:
+    documented = weight_is_documented(path, doc_text=doc_text)
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        size_bytes = None
+    entry: dict[str, Any] = {
+        "path": repo_relative(path),
+        "name": path.name,
+        "source": source,
+        "size_bytes": size_bytes,
+        "documented": documented,
+        "provenance_warning": None,
+    }
+    if not documented:
+        entry["provenance_warning"] = (
+            f"{repo_relative(path)} is not mentioned in docs/yolo_weight_recreation.md; document it before promoting or reusing it"
+        )
+    return entry
+
+
+def list_starting_weights(
+    *,
+    root_dir: str | Path = ROOT_DIR,
+    model_weights_dir: str | Path = DEFAULT_MODEL_WEIGHTS_DIR,
+    runs_dir: str | Path = DEFAULT_RUNS_DIR,
+    doc_path: str | Path = WEIGHT_RECREATION_DOC,
+) -> list[dict[str, Any]]:
+    doc_text = weight_recreation_doc_text(doc_path)
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(path: Path, source: str) -> None:
+        resolved = path.resolve()
+        key = str(resolved)
+        if key in seen or not resolved.is_file():
+            return
+        seen.add(key)
+        entries.append(starting_weight_entry(resolved, source, doc_text))
+
+    root = repo_resolve(root_dir)
+    for path in sorted(root.glob("*.pt")):
+        add(path, "repo_root")
+    weights_root = repo_resolve(model_weights_dir)
+    if weights_root.is_dir():
+        for path in sorted(weights_root.glob("*.pt")):
+            add(path, "model_weights")
+    runs_root = repo_resolve(runs_dir)
+    if runs_root.is_dir():
+        for path in sorted(runs_root.glob("**/weights/best.pt")):
+            add(path, "run_best")
+    return entries
+
+
+def list_exported_datasets(datasets_dir: str | Path = DEFAULT_DATASETS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(datasets_dir)
+    datasets: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return datasets
+    for manifest_path in sorted(root.glob("*/dataset_manifest.json")):
+        dataset_dir = manifest_path.parent
+        try:
+            manifest = load_json(manifest_path)
+        except Exception:
+            continue
+        split_counts = {}
+        for split in SPLITS:
+            image_dir = dataset_dir / "images" / split
+            split_counts[split] = sum(1 for path in image_dir.iterdir() if path.is_file()) if image_dir.is_dir() else 0
+        datasets.append({
+            "dataset_dir": repo_relative(dataset_dir),
+            "dataset_name": manifest.get("dataset_name"),
+            "dataset_version": manifest.get("dataset_version"),
+            "dataset_manifest": repo_relative(manifest_path),
+            "data_yaml": repo_relative(dataset_dir / "data.yaml"),
+            "data_yaml_exists": (dataset_dir / "data.yaml").is_file(),
+            "image_count": len(manifest.get("exported_image_keys") or []),
+            "split_counts": split_counts,
+            "warnings": list(manifest.get("warnings") or []),
+        })
+    datasets.sort(key=lambda item: str(item.get("dataset_dir") or ""))
+    return datasets
+
+
+def training_config_filename(run_group: str, config_name: str | None = None) -> str:
+    slug = slugify(config_name or run_group, "training_config")
+    return f"{slug}.json"
+
+
+def save_training_config(
+    *,
+    dataset_name: str,
+    dataset_version: str | int,
+    model: str,
+    run_group: str,
+    run_name: str,
+    image_size: int = 960,
+    epochs: int = 150,
+    batch: int = 8,
+    patience: int | None = 30,
+    seed: int = 42,
+    device: str | int = "cpu",
+    workers: int | None = 4,
+    augmentation: dict[str, Any] | None = None,
+    overwrite: bool = False,
+    output_dir: str | Path = DEFAULT_RUNS_DIR,
+    configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR,
+    config_name: str | None = None,
+    selection_path: str | Path | None = None,
+    doc_path: str | Path = WEIGHT_RECREATION_DOC,
+) -> dict[str, Any]:
+    clean_group = str(run_group or "").strip()
+    clean_run_name = str(run_name or "").strip()
+    clean_model = str(model or "").strip()
+    if not clean_group:
+        raise ValueError("run_group is required")
+    if not clean_run_name:
+        raise ValueError("run_name is required")
+    if not clean_model:
+        raise ValueError("model (starting weights) is required")
+    if not str(dataset_name or "").strip():
+        raise ValueError("dataset_name is required")
+
+    config = {
+        "schema_version": SCHEMA_VERSION,
+        "created_at": utcnow_iso_for_training(),
+        "dataset_name": str(dataset_name).strip(),
+        "dataset_version": dataset_version,
+        "model": clean_model,
+        "image_size": int(image_size),
+        "epochs": int(epochs),
+        "batch": int(batch),
+        "patience": None if patience is None else int(patience),
+        "seed": int(seed),
+        "device": device,
+        "workers": None if workers is None else int(workers),
+        "augmentation": normalize_augmentation(augmentation),
+        "run_group": clean_group,
+        "run_name": clean_run_name,
+        "output_dir": repo_relative(repo_resolve(output_dir)),
+        "overwrite": bool(overwrite),
+    }
+
+    warnings: list[str] = []
+    model_path = repo_resolve(clean_model)
+    if model_path.is_file():
+        if not weight_is_documented(model_path, doc_path=doc_path):
+            warnings.append(
+                f"Starting weights {repo_relative(model_path)} are not mentioned in docs/yolo_weight_recreation.md"
+            )
+    elif clean_model.endswith(".pt"):
+        warnings.append(f"Starting weights {clean_model} were not found in the repository; Ultralytics will try to resolve them")
+
+    readiness: dict[str, Any] | None = None
+    if selection_path is not None:
+        readiness = check_training_readiness(selection_path, config)
+        warnings.extend(readiness.get("warnings") or [])
+    else:
+        missing = config_missing_items(config)
+        readiness = {"ready": not missing, "missing": missing, "warnings": []}
+
+    target = repo_resolve(configs_dir) / training_config_filename(clean_group, config_name)
+    write_json(target, config)
+    return {
+        "config_path": repo_relative(target),
+        "config": config,
+        "readiness": readiness,
+        "warnings": warnings,
+    }
+
+
+def list_training_configs(configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR) -> list[dict[str, Any]]:
+    root = repo_resolve(configs_dir)
+    configs: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return configs
+    for path in sorted(root.glob("*.json")):
+        try:
+            config = load_json(path)
+        except Exception:
+            continue
+        configs.append({
+            "config_path": repo_relative(path),
+            "dataset_name": config.get("dataset_name"),
+            "dataset_version": config.get("dataset_version"),
+            "model": config.get("model"),
+            "run_group": config.get("run_group"),
+            "run_name": config.get("run_name"),
+            "image_size": config.get("image_size"),
+            "epochs": config.get("epochs"),
+            "batch": config.get("batch"),
+            "device": config.get("device"),
+            "seed": config.get("seed"),
+            "overwrite": bool(config.get("overwrite")),
+            "missing": config_missing_items(config),
+        })
+    configs.sort(key=lambda item: str(item.get("config_path") or ""))
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# Step 6: launching and monitoring training runs
+# ---------------------------------------------------------------------------
+
+PROCESS_RECORD_FILENAME = "process.json"
+TRAINING_LOG_FILENAME = "train.log"
+TRAINING_METADATA_FILENAME = "training_metadata.json"
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
+TRAINING_COMPLETION_MARKERS = ("Results saved to", "epochs completed in")
+
+
+def read_process_start_ticks(pid: int) -> int | None:
+    """Linux-specific process start time, used to guard against PID reuse."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_text()
+    except (OSError, ValueError):
+        return None
+    tail = raw.rpartition(")")[2].split()
+    # /proc stat field 22 (1-indexed) is starttime; after `comm` it is offset 19.
+    if len(tail) < 20:
+        return None
+    try:
+        return int(tail[19])
+    except ValueError:
+        return None
+
+
+def process_state(pid: int) -> str | None:
+    """Single-character Linux process state, e.g. `R`, `S`, `Z`."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_text()
+    except (OSError, ValueError):
+        return None
+    tail = raw.rpartition(")")[2].split()
+    return tail[0] if tail else None
+
+
+def reap_if_child(pid: int) -> None:
+    """Best-effort reap so a terminated direct child does not linger as a zombie."""
+    try:
+        os.waitpid(int(pid), os.WNOHANG)
+    except (ChildProcessError, OSError, ValueError):
+        pass
+
+
+def process_is_alive(pid: int | None, start_ticks: int | None = None) -> bool:
+    if not pid:
+        return False
+    if process_state(int(pid)) == "Z":
+        reap_if_child(int(pid))
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except (OSError, ValueError):
+        return False
+    if start_ticks is None:
+        return True
+    current = read_process_start_ticks(int(pid))
+    if current is None:
+        return True
+    return current == int(start_ticks)
+
+
+def resolve_yolo_executable(executable: str | Path | None = None) -> str:
+    if executable:
+        return str(executable)
+    venv_yolo = ROOT_DIR / ".venv" / "bin" / "yolo"
+    if venv_yolo.is_file():
+        return str(venv_yolo)
+    found = shutil.which("yolo")
+    if found:
+        return found
+    raise FileNotFoundError("Could not find a `yolo` executable; pass yolo_executable explicitly")
+
+
+def run_dir_for_config(config: dict[str, Any]) -> Path:
+    run_group = str(config_value(config, "run_group", "default"))
+    run_name = str(config["run_name"])
+    output_root = repo_resolve(config_value(config, "output_dir", DEFAULT_RUNS_DIR))
+    return output_root / run_group / run_name
+
+
+def read_log_tail(log_path: Path, max_lines: int = 40) -> list[str]:
+    if not log_path.is_file():
+        return []
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return lines[-max_lines:]
+
+
+def start_training_run(
+    selection_path: str | Path,
+    training_config_path: str | Path,
+    *,
+    yolo_executable: str | Path | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    config_file = repo_resolve(training_config_path)
+    config = load_json(config_file)
+    readiness = check_training_readiness(selection_path, config)
+    if not readiness["ready"]:
+        raise ValueError("Training is not ready: " + "; ".join(readiness["missing"]))
+
+    selection = load_json(selection_path)
+    dataset_dir = repo_resolve(selection.get("export", {}).get("output_dir"))
+    command_line = build_yolo_train_command(config, dataset_dir)
+    if "exist_ok=True" not in command_line:
+        # The pipeline owns and pre-creates the run directory for train.log/process.json, so
+        # Ultralytics must reuse it instead of auto-incrementing the run name to `<run_name>2`.
+        command_line.append("exist_ok=True")
+    argv = [resolve_yolo_executable(yolo_executable), *command_line[1:]]
+
+    run_dir = run_dir_for_config(config)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / TRAINING_LOG_FILENAME
+    started_at = utcnow_iso_for_training()
+
+    env = dict(os.environ)
+    env.update(extra_env or {})
+    with log_path.open("a", encoding="utf-8") as log_handle:
+        log_handle.write(f"# start_training_run {started_at}\n# {' '.join(argv)}\n")
+        log_handle.flush()
+        process = subprocess.Popen(
+            argv,
+            cwd=str(ROOT_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=env,
+        )
+
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "running",
+        "pid": process.pid,
+        "pgid": process.pid,
+        "start_ticks": read_process_start_ticks(process.pid),
+        "started_at": started_at,
+        "ended_at": None,
+        "return_code": None,
+        "reason": None,
+        "command_line": list(command_line),
+        "argv": list(argv),
+        "cwd": str(ROOT_DIR),
+        "log_path": repo_relative(log_path),
+        "run_dir": repo_relative(run_dir),
+        "training_config_path": repo_relative(config_file),
+        "selection_path": repo_relative(repo_resolve(selection_path)),
+        "expected_epochs": int(config.get("epochs") or 0),
+    }
+    write_json(run_dir / PROCESS_RECORD_FILENAME, record)
+    write_training_metadata(
+        run_dir=run_dir,
+        training_config_path=config_file,
+        dataset_manifest_path=dataset_dir / "dataset_manifest.json",
+        command_line=command_line,
+        status="running",
+        started_at=started_at,
+    )
+    return {
+        "run_dir": repo_relative(run_dir),
+        "log_path": repo_relative(log_path),
+        "process_path": repo_relative(run_dir / PROCESS_RECORD_FILENAME),
+        "training_metadata_path": repo_relative(run_dir / TRAINING_METADATA_FILENAME),
+        "pid": process.pid,
+        "status": "running",
+        "started_at": started_at,
+        "command_line": list(command_line),
+        "argv": list(argv),
+        "warnings": list(readiness.get("warnings") or []),
+    }
+
+
+def update_training_metadata_status(run_dir: Path, status: str, *, ended_at: str | None = None, reason: str | None = None) -> None:
+    metadata_path = run_dir / TRAINING_METADATA_FILENAME
+    if not metadata_path.is_file():
+        return
+    try:
+        metadata = load_json(metadata_path)
+    except Exception:
+        return
+    metadata["status"] = status
+    if ended_at is not None:
+        metadata["ended_at"] = ended_at
+    if reason is not None:
+        metadata["status_reason"] = reason
+    weights_dir = run_dir / "weights"
+    metadata["best_weights_path"] = repo_relative(weights_dir / "best.pt") if (weights_dir / "best.pt").is_file() else None
+    metadata["last_weights_path"] = repo_relative(weights_dir / "last.pt") if (weights_dir / "last.pt").is_file() else None
+    write_json(metadata_path, metadata)
+
+
+def results_summary(series: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    data = series.get("series") or {}
+    epochs = [point[0] for points in data.values() for point in points]
+    current_epoch = max(epochs) if epochs else 0
+    best: dict[str, Any] = {}
+    for key in ("metrics/mAP50(B)", "metrics/mAP50-95(B)", "metrics/precision(B)", "metrics/recall(B)"):
+        points = data.get(key) or []
+        if points:
+            best_point = max(points, key=lambda point: point[1])
+            best[key] = {"epoch": best_point[0], "value": best_point[1]}
+    latest: dict[str, Any] = {}
+    for key, points in data.items():
+        if points:
+            latest[key] = points[-1][1]
+    return {
+        "current_epoch": current_epoch,
+        "best_metrics": best,
+        "latest_metrics": latest,
+        "results_csv": repo_relative(run_dir / "results.csv") if (run_dir / "results.csv").is_file() else None,
+    }
+
+
+def training_completed_successfully(run_dir: Path, log_lines: list[str], summary: dict[str, Any], expected_epochs: int) -> bool:
+    if any(marker in line for line in log_lines for marker in TRAINING_COMPLETION_MARKERS):
+        return True
+    best_weights = run_dir / "weights" / "best.pt"
+    if best_weights.is_file() and expected_epochs and int(summary.get("current_epoch") or 0) >= int(expected_epochs):
+        return True
+    return False
+
+
+def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, Any]:
+    target = repo_resolve(run_dir)
+    process_path = target / PROCESS_RECORD_FILENAME
+    if not process_path.is_file():
+        raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
+    record = load_json(process_path)
+
+    log_path = target / TRAINING_LOG_FILENAME
+    # A completion check needs the whole log, but only a tail is returned.
+    all_lines = read_log_tail(log_path, max_lines=100000)
+    tail = all_lines[-log_lines:] if log_lines else []
+    series = load_training_results_series(target / "results.csv")
+    summary = results_summary(series, target)
+
+    status = str(record.get("status") or "running")
+    alive = process_is_alive(record.get("pid"), record.get("start_ticks"))
+    changed = False
+    if status == "running" and not alive:
+        expected_epochs = int(record.get("expected_epochs") or 0)
+        if training_completed_successfully(target, all_lines, summary, expected_epochs):
+            status = "completed"
+            record["reason"] = "training_process_finished"
+        else:
+            status = "failed"
+            record["reason"] = "process_missing"
+        record["status"] = status
+        record["ended_at"] = record.get("ended_at") or utcnow_iso_for_training()
+        changed = True
+    if changed:
+        write_json(process_path, record)
+        update_training_metadata_status(target, status, ended_at=record.get("ended_at"), reason=record.get("reason"))
+
+    weights_dir = target / "weights"
+    return {
+        "run_dir": repo_relative(target),
+        "run_group": target.parent.name,
+        "run_name": target.name,
+        "status": status,
+        "terminal": status in TERMINAL_RUN_STATUSES,
+        "alive": alive,
+        "pid": record.get("pid"),
+        "reason": record.get("reason"),
+        "started_at": record.get("started_at"),
+        "ended_at": record.get("ended_at"),
+        "expected_epochs": record.get("expected_epochs"),
+        "command_line": list(record.get("command_line") or []),
+        "log_path": repo_relative(log_path) if log_path.is_file() else None,
+        "log_tail": tail,
+        "results": series,
+        "current_epoch": summary["current_epoch"],
+        "best_metrics": summary["best_metrics"],
+        "latest_metrics": summary["latest_metrics"],
+        "results_csv": summary["results_csv"],
+        "best_weights_path": repo_relative(weights_dir / "best.pt") if (weights_dir / "best.pt").is_file() else None,
+        "last_weights_path": repo_relative(weights_dir / "last.pt") if (weights_dir / "last.pt").is_file() else None,
+        "training_metadata_path": repo_relative(target / TRAINING_METADATA_FILENAME) if (target / TRAINING_METADATA_FILENAME).is_file() else None,
+    }
+
+
+def stop_training_run(run_dir: str | Path, *, grace_seconds: float = 10.0) -> dict[str, Any]:
+    target = repo_resolve(run_dir)
+    process_path = target / PROCESS_RECORD_FILENAME
+    if not process_path.is_file():
+        raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
+    record = load_json(process_path)
+    pid = record.get("pid")
+    status = str(record.get("status") or "running")
+    if status in TERMINAL_RUN_STATUSES:
+        return {"run_dir": repo_relative(target), "status": status, "stopped": False, "reason": "run already terminal"}
+    if not process_is_alive(pid, record.get("start_ticks")):
+        record["status"] = "failed"
+        record["reason"] = "process_missing"
+        record["ended_at"] = record.get("ended_at") or utcnow_iso_for_training()
+        write_json(process_path, record)
+        update_training_metadata_status(target, "failed", ended_at=record["ended_at"], reason="process_missing")
+        return {"run_dir": repo_relative(target), "status": "failed", "stopped": False, "reason": "process_missing"}
+
+    escalated = False
+    try:
+        os.killpg(int(pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + float(grace_seconds)
+    while time.monotonic() < deadline:
+        if not process_is_alive(pid, record.get("start_ticks")):
+            break
+        time.sleep(0.2)
+    if process_is_alive(pid, record.get("start_ticks")):
+        escalated = True
+        try:
+            os.killpg(int(pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.5)
+
+    ended_at = utcnow_iso_for_training()
+    record["status"] = "cancelled"
+    record["reason"] = "stopped_by_user"
+    record["ended_at"] = ended_at
+    write_json(process_path, record)
+    update_training_metadata_status(target, "cancelled", ended_at=ended_at, reason="stopped_by_user")
+    return {
+        "run_dir": repo_relative(target),
+        "status": "cancelled",
+        "stopped": True,
+        "escalated_to_sigkill": escalated,
+        "pid": pid,
+        "ended_at": ended_at,
+    }
+
+
+def list_training_runs(runs_dir: str | Path = DEFAULT_RUNS_DIR, *, active_only: bool = False) -> list[dict[str, Any]]:
+    root = repo_resolve(runs_dir)
+    runs: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return runs
+    for process_path in sorted(root.glob("*/*/" + PROCESS_RECORD_FILENAME)):
+        try:
+            status = training_status(process_path.parent, log_lines=5)
+        except Exception:
+            continue
+        if active_only and status["terminal"]:
+            continue
+        runs.append({
+            "run_dir": status["run_dir"],
+            "run_group": status["run_group"],
+            "run_name": status["run_name"],
+            "status": status["status"],
+            "alive": status["alive"],
+            "pid": status["pid"],
+            "started_at": status["started_at"],
+            "ended_at": status["ended_at"],
+            "current_epoch": status["current_epoch"],
+            "expected_epochs": status["expected_epochs"],
+        })
+    runs.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+    return runs
+
+
+# ---------------------------------------------------------------------------
+# Step 7: evaluation and weight promotion
+# ---------------------------------------------------------------------------
+
+TEST_METRICS_FILENAME = "test_metrics.json"
+RESULTS_METRIC_ALIASES = {
+    "metrics/precision(B)": "precision",
+    "metrics/recall(B)": "recall",
+    "metrics/mAP50(B)": "mAP50",
+    "metrics/mAP50-95(B)": "mAP50-95",
+}
+VAL_METRICS_SNIPPET = """
+import json, sys
+from ultralytics import YOLO
+
+weights, data_yaml, imgsz, device, split, output = sys.argv[1:7]
+metrics = YOLO(weights).val(data=data_yaml, imgsz=int(imgsz), device=device, split=split, verbose=False)
+results = {}
+for key, value in (getattr(metrics, "results_dict", {}) or {}).items():
+    try:
+        results[str(key)] = float(value)
+    except (TypeError, ValueError):
+        results[str(key)] = str(value)
+payload = {
+    "split": split,
+    "weights": weights,
+    "data_yaml": data_yaml,
+    "imgsz": int(imgsz),
+    "device": device,
+    "results_dict": results,
+    "metrics": {
+        "precision": results.get("metrics/precision(B)"),
+        "recall": results.get("metrics/recall(B)"),
+        "mAP50": results.get("metrics/mAP50(B)"),
+        "mAP50-95": results.get("metrics/mAP50-95(B)"),
+    },
+}
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\\n")
+"""
+
+
+def final_results_row(results_csv: str | Path) -> dict[str, float]:
+    target = repo_resolve(results_csv)
+    if not target.is_file():
+        return {}
+    last: dict[str, Any] | None = None
+    with target.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            last = row
+    if not last:
+        return {}
+    metrics: dict[str, float] = {}
+    for column, alias in RESULTS_METRIC_ALIASES.items():
+        value = parse_float({str(key).strip(): item for key, item in last.items()}.get(column))
+        if value is not None:
+            metrics[alias] = value
+    return metrics
+
+
+def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
+    target = repo_resolve(run_dir)
+    weights = target / "weights" / "best.pt"
+    test_metrics_path = target / TEST_METRICS_FILENAME
+    test_metrics = None
+    if test_metrics_path.is_file():
+        try:
+            test_metrics = (load_json(test_metrics_path).get("metrics") or None)
+        except Exception:
+            test_metrics = None
+    return {
+        "run_name": target.name,
+        "run_dir": repo_relative(target),
+        "weights_path": repo_relative(weights) if weights.is_file() else None,
+        "validation_metrics": final_results_row(target / "results.csv"),
+        "test_metrics": test_metrics,
+        "training_metadata_path": repo_relative(target / TRAINING_METADATA_FILENAME) if (target / TRAINING_METADATA_FILENAME).is_file() else None,
+    }
+
+
+def collect_run_group_summaries(run_group: str, runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, Any]]:
+    group_dir = repo_resolve(runs_dir) / str(run_group)
+    if not group_dir.is_dir():
+        raise ValueError(f"Run group not found: {repo_relative(group_dir)}")
+    summaries = []
+    for child in sorted(group_dir.iterdir()):
+        if child.is_dir() and (child / "results.csv").is_file():
+            summaries.append(run_evaluation_summary(child))
+    return summaries
+
+
+def best_run_by_metric(runs: list[dict[str, Any]]) -> tuple[str | None, str]:
+    def score(run: dict[str, Any]) -> tuple[int, float]:
+        test = (run.get("test_metrics") or {}).get("mAP50")
+        if test is not None:
+            return (1, float(test))
+        validation = (run.get("validation_metrics") or {}).get("mAP50")
+        return (0, float(validation)) if validation is not None else (0, -1.0)
+
+    scored = [(score(run), run) for run in runs]
+    scored = [item for item in scored if item[0][1] >= 0.0]
+    if not scored:
+        return None, "No run in this group reported mAP50 metrics."
+    best = max(scored, key=lambda item: item[0])
+    basis = "test mAP50" if best[0][0] == 1 else "validation mAP50"
+    return str(best[1]["run_name"]), f"Highest {basis} ({best[0][1]:.4f}) in run group."
+
+
+def build_run_group_evaluation_report(
+    *,
+    run_group: str,
+    runs_dir: str | Path = DEFAULT_RUNS_DIR,
+    reports_dir: str | Path = WORKSPACE_DIR / "reports",
+    baseline: dict[str, Any] | None = None,
+    promoted_run_name: str | None = None,
+    promotion_reason: str | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    runs = collect_run_group_summaries(run_group, runs_dir)
+    if promoted_run_name is None:
+        promoted_run_name, auto_reason = best_run_by_metric(runs)
+    else:
+        auto_reason = f"Run {promoted_run_name} selected by the caller."
+    paths = write_evaluation_report(
+        run_group=run_group,
+        runs=runs,
+        reports_dir=reports_dir,
+        baseline=baseline,
+        promoted_run_name=promoted_run_name,
+        promotion_reason=promotion_reason or auto_reason,
+        generated_at=generated_at,
+    )
+    return {
+        "run_group": run_group,
+        "run_count": len(runs),
+        "runs": runs,
+        "promoted_run_name": promoted_run_name,
+        "promotion_reason": promotion_reason or auto_reason,
+        "report_path": repo_relative(paths["json_path"]),
+        "report_markdown_path": repo_relative(paths["markdown_path"]),
+    }
+
+
+def run_test_split(
+    run_dir: str | Path,
+    *,
+    dataset_dir: str | Path | None = None,
+    device: str | int = "cpu",
+    image_size: int | None = None,
+    python_executable: str | Path | None = None,
+    timeout_seconds: float | None = 3600.0,
+) -> dict[str, Any]:
+    target = repo_resolve(run_dir)
+    weights = target / "weights" / "best.pt"
+    if not weights.is_file():
+        raise ValueError(f"Run has no best.pt to evaluate: {repo_relative(weights)}")
+    metadata_path = target / TRAINING_METADATA_FILENAME
+    if dataset_dir is not None:
+        data_yaml = repo_resolve(dataset_dir) / "data.yaml"
+        imgsz = image_size or 640
+    else:
+        if not metadata_path.is_file():
+            raise ValueError(f"Run is missing {TRAINING_METADATA_FILENAME}; pass dataset_dir explicitly")
+        metadata = load_json(metadata_path)
+        data_yaml = repo_resolve(metadata["data_yaml_path"])
+        imgsz = image_size or int((metadata.get("training_config") or {}).get("image_size") or 640)
+    if not data_yaml.is_file():
+        raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
+
+    interpreter = str(python_executable or (ROOT_DIR / ".venv" / "bin" / "python"))
+    output_path = target / TEST_METRICS_FILENAME
+    log_path = target / "test_eval.log"
+    argv = [interpreter, "-c", VAL_METRICS_SNIPPET, str(weights), str(data_yaml), str(imgsz), str(device), "test", str(output_path)]
+    with log_path.open("a", encoding="utf-8") as log_handle:
+        log_handle.write(f"# run_test_split {utcnow_iso_for_training()}\n")
+        log_handle.flush()
+        completed = subprocess.run(
+            argv,
+            cwd=str(ROOT_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+        )
+    if completed.returncode != 0 or not output_path.is_file():
+        raise RuntimeError(f"Test-split evaluation failed (exit {completed.returncode}); see {repo_relative(log_path)}")
+    payload = load_json(output_path)
+    return {
+        "run_dir": repo_relative(target),
+        "test_metrics_path": repo_relative(output_path),
+        "log_path": repo_relative(log_path),
+        "metrics": payload.get("metrics") or {},
+    }
+
+
+def promote_weight(
+    *,
+    run_group: str,
+    run_name: str,
+    target_name: str,
+    recreation_doc_updated: bool,
+    runs_dir: str | Path = DEFAULT_RUNS_DIR,
+    model_weights_dir: str | Path = DEFAULT_MODEL_WEIGHTS_DIR,
+    doc_path: str | Path = WEIGHT_RECREATION_DOC,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    clean_target = str(target_name or "").strip()
+    if not clean_target:
+        raise ValueError("target_name is required")
+    if not clean_target.endswith(".pt"):
+        clean_target += ".pt"
+    if "/" in clean_target or "\\" in clean_target:
+        raise ValueError("target_name must be a bare filename, not a path")
+
+    source = repo_resolve(runs_dir) / str(run_group) / str(run_name) / "weights" / "best.pt"
+    if not source.is_file():
+        raise ValueError(f"Run weights not found: {repo_relative(source)}")
+
+    destination = repo_resolve(model_weights_dir) / clean_target
+    if not recreation_doc_updated:
+        raise ValueError(
+            "Refusing to promote: pass recreation_doc_updated after documenting the weight in docs/yolo_weight_recreation.md"
+        )
+    doc_text = weight_recreation_doc_text(doc_path)
+    if clean_target not in doc_text:
+        raise ValueError(
+            f"Refusing to promote: {clean_target} is not mentioned in docs/yolo_weight_recreation.md; document it first"
+        )
+    if destination.exists() and not overwrite:
+        raise ValueError(f"Refusing to overwrite existing weight {repo_relative(destination)}; pass overwrite to replace it")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    return {
+        "run_group": str(run_group),
+        "run_name": str(run_name),
+        "source_path": repo_relative(source),
+        "promoted_path": repo_relative(destination),
+        "sha256": file_hash(destination),
+        "size_bytes": destination.stat().st_size,
+        "documented": True,
+    }

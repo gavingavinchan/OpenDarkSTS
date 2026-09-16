@@ -40,7 +40,8 @@ Exit codes:
 - `0`: command succeeded.
 - `1`: pipeline failure, such as missing files or invalid manifests.
 - `2`: command-line usage error.
-- `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`.
+- `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`. `start-training` also exits `3` when readiness blocks the launch, but with `ok: false`.
+- `4`: `training-status` ran successfully and observed a `failed` run.
 
 `ok` means the CLI command ran and returned a valid response. It does not always mean the domain condition is positive. For example, `check-training-ready` exits `3` with `ok: true` when it successfully reports training blockers.
 
@@ -262,6 +263,156 @@ To run the command manually, use the project virtualenv's `yolo` executable or p
 
 For long training runs, start them detached and log under `workspace/runs/` or `workspace/reports/` so the LLM session remains usable.
 
+### `save-training-config`
+
+Writes a Step 5 training config to `workspace/training_configs/<run-group>.json` and reports readiness.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty save-training-config \
+  --dataset-name manual_reviewed_gavin_balanced_1to1 \
+  --dataset-version v1 \
+  --model yolov8n.pt \
+  --run-group manual_reviewed_gavin_balanced_1to1_v1_e150_img960 \
+  --run-name yolov8n_e150_img960 \
+  --image-size 960 --epochs 150 --batch 8 --patience 30 --seed 42 \
+  --device 0 --workers 4 \
+  --aug fliplr=0.5 --aug mosaic=1.0 \
+  --selection workspace/dataset_selections/manual_reviewed_gavin_balanced_1to1_v1.json
+```
+
+Options:
+
+- `--config-name`: override the saved filename stem (defaults to the run group).
+- `--configs-dir`, `--output-dir`: override the config directory and the run output root.
+- `--selection`: validate the config against an exported dataset with `check_training_readiness`.
+- `--overwrite`: allow the run directory to be reused.
+- `--aug key=value`: repeatable augmentation setting.
+
+Only these Ultralytics augmentation args are accepted; anything else is rejected with exit `1`:
+
+`hsv_h`, `hsv_s`, `hsv_v`, `degrees`, `translate`, `scale`, `shear`, `perspective`, `flipud`, `fliplr`, `mosaic`, `mixup`, `copy_paste`, `erasing`, `crop_fraction`.
+
+The result includes `config_path`, `ready`, `missing`, and the saved `config`. Warnings call out starting weights that are not mentioned in `docs/yolo_weight_recreation.md`.
+
+### `list-training-configs`
+
+Lists saved training configs with run group/name, model, key hyperparameters, and any missing required fields.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-training-configs
+```
+
+### `list-exported-datasets`
+
+Lists exported YOLO datasets under `workspace/datasets/` with per-split image counts and `data.yaml` presence.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-exported-datasets
+```
+
+### `list-starting-weights`
+
+Lists usable starting weights from the repository root, `workspace/model_weights/`, and `workspace/runs/**/weights/best.pt`.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-starting-weights
+```
+
+Each entry reports `path`, `source` (`repo_root`, `model_weights`, `run_best`), `documented`, and `provenance_warning`. A weight counts as documented when `docs/yolo_weight_recreation.md` mentions its repo-relative path, its filename, or the matching `<run_name>` run-group row. Undocumented weights are also surfaced in the envelope `warnings`.
+
+### `start-training`
+
+Launches the exact `build-train-command` command as a detached process. This is the supported way to retrain; do not run `yolo detect train ...` by hand.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty start-training \
+  --selection workspace/dataset_selections/manual_reviewed_gavin_balanced_1to1_v1.json \
+  --config workspace/training_configs/manual_reviewed_gavin_balanced_1to1_v1_e150_img960.json
+```
+
+Readiness is checked first; blockers exit `3` with `ok: false` and nothing is launched. On success the run directory receives:
+
+- `train.log`: combined stdout/stderr of the YOLO process.
+- `process.json`: pid, process-group id, `start_ticks` from `/proc` for PID-reuse protection, command line, argv, and launch time.
+- `training_metadata.json`: written by `write_training_metadata` with `status: running`.
+
+`--yolo-executable` overrides the resolved `yolo` binary (default `.venv/bin/yolo`, then `PATH`).
+
+### `training-status`
+
+Reports live status for a pipeline-managed run and lazily reconciles terminal state; there is no watcher daemon.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty training-status \
+  --run-dir workspace/runs/<run_group>/<run_name>
+```
+
+Accepts `--run-dir`, or `--run-group` plus `--run-name` (with optional `--runs-dir`). Other options: `--log-lines` (default 40) and `--include-series` to include the full `results.csv` series from `load_training_results_series`.
+
+The result includes `status`, `terminal`, `alive`, `pid`, `reason`, `current_epoch`, `latest_metrics`, `best_metrics`, `log_tail`, `best_weights_path`, and `last_weights_path`.
+
+State transitions happen on read. When `process.json` says `running` but the recorded process is gone, the run becomes `completed` if the log shows a completion marker (or `best.pt` plus the configured epoch count is present), and otherwise `failed` with `reason: process_missing`. Terminal state is written back to both `process.json` and `training_metadata.json`. A `failed` run exits `4` with `ok: false`.
+
+### `stop-training`
+
+Terminates a run's process group (SIGTERM, then SIGKILL after `--grace-seconds`, default 10) and marks it `cancelled`. Partial artifacts are left in place for debugging.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty stop-training \
+  --run-dir workspace/runs/<run_group>/<run_name> --grace-seconds 10
+```
+
+### `list-active-runs`
+
+Lists pipeline-managed runs under `workspace/runs/<run_group>/<run_name>/process.json`, reconciling each one's state.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-active-runs
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-active-runs --all
+```
+
+By default only non-terminal runs are returned; `--all` includes completed, failed, and cancelled runs.
+
+### `write-evaluation-report`
+
+Writes `workspace/reports/<run_group>_evaluation.json` and `.md` for every run in a run group that has a `results.csv`.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty write-evaluation-report \
+  --run-group manual_reviewed_gavin_balanced_1to1_v1_e150_img960
+```
+
+Validation metrics come from the final `results.csv` row. Test metrics come from `test_metrics.json` in the run directory when `run-test-split` has been used. The promoted run defaults to the highest test mAP50, falling back to validation mAP50; override with `--promote-run-name` and `--promotion-reason`. `--baseline` accepts a JSON file of baseline metrics, and `--include-runs` embeds the full per-run detail in the envelope.
+
+### `run-test-split`
+
+Evaluates a run's `best.pt` against the dataset `test` split and stores `test_metrics.json` next to the run.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty run-test-split \
+  --run-group <run_group> --run-name <run_name> --device cpu
+```
+
+The dataset and image size are read from the run's `training_metadata.json` unless `--dataset-dir` and `--image-size` are given. Ultralytics output is appended to `test_eval.log` in the run directory. This command runs synchronously and can take a while on CPU.
+
+### `promote-weight`
+
+Copies a run's `best.pt` to `workspace/model_weights/<target-name>.pt`.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty promote-weight \
+  --run-group <run_group> --run-name <run_name> \
+  --target-name yolov8n_example_2026-05-20_best.pt \
+  --recreation-doc-updated
+```
+
+The command enforces the repository YOLO weight reproducibility rule and exits `2` without copying anything when either check fails:
+
+- `--recreation-doc-updated` must be passed, acknowledging that `docs/yolo_weight_recreation.md` is already updated.
+- `--target-name` must already be mentioned in `docs/yolo_weight_recreation.md`.
+
+Document the weight first, then promote. `--overwrite` is required to replace an existing promoted weight.
+
 ### `image-key`
 
 Computes the stable image key for a source image and render profile.
@@ -398,6 +549,43 @@ Expected import responsibilities:
 - Report conflicts without overwriting local work by default.
 - Treat exported source paths as provenance only; imported cache images are the portable review/dataset source.
 - Require explicit opt-in before importing bundled `*.pt` weights.
+
+## Retraining Runbook
+
+The full pipeline-managed retraining loop, with no hand-written YOLO shell commands:
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py export-dataset --selection workspace/dataset_selections/<dataset>.json
+.venv/bin/python scripts/training_pipeline_cli.py save-training-config --dataset-name <name> --model yolov8n.pt --run-group <group> --run-name <run> --selection workspace/dataset_selections/<dataset>.json
+.venv/bin/python scripts/training_pipeline_cli.py check-training-ready --selection workspace/dataset_selections/<dataset>.json --config workspace/training_configs/<group>.json
+.venv/bin/python scripts/training_pipeline_cli.py build-train-command --selection workspace/dataset_selections/<dataset>.json --config workspace/training_configs/<group>.json
+.venv/bin/python scripts/training_pipeline_cli.py start-training --selection workspace/dataset_selections/<dataset>.json --config workspace/training_configs/<group>.json
+.venv/bin/python scripts/training_pipeline_cli.py training-status --run-group <group> --run-name <run>
+.venv/bin/python scripts/training_pipeline_cli.py run-test-split --run-group <group> --run-name <run> --device cpu
+.venv/bin/python scripts/training_pipeline_cli.py write-evaluation-report --run-group <group>
+```
+
+## Training API Routes
+
+`scripts/training_pipeline_ui.py` exposes the same behavior over HTTP for the upcoming Step 5-7 GUI pages:
+
+| Method | Route | Backend helper |
+|---|---|---|
+| GET | `/api/training/exported-datasets` | `list_exported_datasets` |
+| GET | `/api/training/configs` | `list_training_configs` |
+| POST | `/api/training/configs` | `save_training_config` |
+| GET | `/api/training/starting-weights` | `list_starting_weights` |
+| POST | `/api/training/readiness` | `check_training_readiness` |
+| POST | `/api/training/command-preview` | `build_yolo_train_command` |
+| POST | `/api/training/runs/start` | `start_training_run` |
+| GET | `/api/training/runs/active` | `list_training_runs` |
+| GET | `/api/training/runs/<run_group>/<run_name>/status` | `training_status` |
+| POST | `/api/training/runs/<run_group>/<run_name>/stop` | `stop_training_run` |
+| POST | `/api/training/runs/<run_group>/<run_name>/test-split` | `run_test_split` |
+| POST | `/api/training/evaluation-report` | `build_run_group_evaluation_report` |
+| POST | `/api/training/promote-weight` | `promote_weight` |
+
+Mutating training routes log to `workspace/reports/training_pipeline_ui_interactions.jsonl` through the existing interaction-logging path.
 
 ## Selection Manifest Shape
 

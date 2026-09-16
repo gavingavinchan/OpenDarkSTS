@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -209,3 +210,198 @@ def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> Non
     assert (output_dir / "dataset_manifest.json").is_file()
     assert (output_dir / "images" / "train" / "img_export.png").is_file()
     assert (output_dir / "labels" / "train" / "img_export.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Steps 5-7 API smoke tests
+# ---------------------------------------------------------------------------
+
+
+def post_json_capture(url: str, payload: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
+def prepare_training_workspace(tmp_path: Path, monkeypatch) -> tuple[object, Path]:
+    from scripts import training_pipeline_ui as ui
+
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    images = {}
+    for image_key in ("img_train", "img_val"):
+        write_review(reviews_dir, cache_dir, reviewer="tester", image_key=image_key, detections=[detection("auto-0001", "ship_non_sts")])
+        images[image_key] = {"image_key": image_key, "original_filename": f"{image_key}.png", "cache_path": str(cache_dir / f"{image_key}.png"), "album_ids": []}
+    write_json(
+        manifest_path,
+        {
+            "schema_version": 1,
+            "manifest_type": "training_import",
+            "created_at": "2026-05-19T00:00:00Z",
+            "updated_at": "2026-05-19T00:00:00Z",
+            "cache_dir": str(cache_dir),
+            "images": images,
+        },
+    )
+    monkeypatch.setattr(ui, "IMPORT_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(ui, "REVIEWS_DIR", reviews_dir)
+    monkeypatch.setattr(ui, "IMPORT_REVIEWER", "tester")
+    monkeypatch.setattr(ui, "TRAINING_UI_INTERACTION_LOG_PATH", tmp_path / "reports" / "interactions.jsonl")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASET_SELECTIONS_DIR", tmp_path / "dataset_selections")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASETS_DIR", tmp_path / "datasets")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_TRAINING_CONFIGS_DIR", tmp_path / "training_configs")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_MODEL_WEIGHTS_DIR", tmp_path / "model_weights")
+    return ui, reviews_dir
+
+
+def save_and_export_selection(base_url: str) -> dict:
+    saved = post_json(
+        base_url + "/api/dataset-selections",
+        {"dataset_name": "API Training Fixture", "dataset_version": "v1", "image_keys": ["img_train", "img_val"], "split_ratios": {"train": 0.5, "val": 0.5, "test": 0.0}},
+    )
+    post_json(base_url + "/api/dataset-selections/export", {"selection_path": saved["selection_path"]})
+    return saved
+
+
+def test_step5_api_saves_training_config_and_lists_setup_inputs(tmp_path: Path, monkeypatch) -> None:
+    ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        saved_selection = save_and_export_selection(server.base_url)
+        status, saved_config = post_json_capture(
+            server.base_url + "/api/training/configs",
+            {
+                "dataset_name": "API Training Fixture",
+                "dataset_version": "v1",
+                "model": "yolov8n.pt",
+                "run_group": "api_fixture_group",
+                "run_name": "api_fixture_run",
+                "image_size": 320,
+                "epochs": 1,
+                "batch": 2,
+                "device": "cpu",
+                "augmentation": {"fliplr": 0.5},
+                "selection_path": saved_selection["selection_path"],
+            },
+        )
+        configs = get_json(server.base_url + "/api/training/configs")
+        datasets = get_json(server.base_url + "/api/training/exported-datasets")
+        weights = get_json(server.base_url + "/api/training/starting-weights")
+        readiness = post_json(
+            server.base_url + "/api/training/readiness",
+            {"selection_path": saved_selection["selection_path"], "config_path": saved_config["config_path"]},
+        )
+        preview = post_json(
+            server.base_url + "/api/training/command-preview",
+            {"selection_path": saved_selection["selection_path"], "config_path": saved_config["config_path"]},
+        )
+        bad_aug_status, bad_aug = post_json_capture(
+            server.base_url + "/api/training/configs",
+            {"dataset_name": "x", "model": "yolov8n.pt", "run_group": "g", "run_name": "r", "augmentation": {"not_real": 1}},
+        )
+
+    assert status == 201
+    assert saved_config["config"]["augmentation"] == {"fliplr": 0.5}
+    assert configs["configs"][0]["run_name"] == "api_fixture_run"
+    assert datasets["datasets"][0]["split_counts"]["train"] == 1
+    assert isinstance(weights["weights"], list)
+    assert readiness["ready"] is True
+    assert preview["command_line"][:3] == ["yolo", "detect", "train"]
+    assert "imgsz=320" in preview["command_line"]
+    assert bad_aug_status == 400
+    assert "not_real" in bad_aug["error"]
+    interactions = (tmp_path / "reports" / "interactions.jsonl").read_text()
+    assert "save_training_config" in interactions
+
+
+def test_step6_api_starts_polls_and_stops_training_run(tmp_path: Path, monkeypatch) -> None:
+    ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
+    fake_yolo = tmp_path / "bin" / "yolo"
+    fake_yolo.parent.mkdir(parents=True)
+    fake_yolo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "args = dict(part.split('=', 1) for part in sys.argv[1:] if '=' in part)\n"
+        "run_dir = Path(args['project']) / args['name']\n"
+        "run_dir.mkdir(parents=True, exist_ok=True)\n"
+        "print('starting')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(120)\n"
+    )
+    fake_yolo.chmod(0o755)
+    monkeypatch.setattr(ui.pipeline, "resolve_yolo_executable", lambda executable=None: str(fake_yolo))
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        saved_selection = save_and_export_selection(server.base_url)
+        _, saved_config = post_json_capture(
+            server.base_url + "/api/training/configs",
+            {
+                "dataset_name": "API Training Fixture", "dataset_version": "v1", "model": "yolov8n.pt",
+                "run_group": "api_fixture_group", "run_name": "api_fixture_run", "image_size": 320,
+                "epochs": 1, "batch": 2, "device": "cpu",
+                "selection_path": saved_selection["selection_path"],
+            },
+        )
+        start_status, started = post_json_capture(
+            server.base_url + "/api/training/runs/start",
+            {"selection_path": saved_selection["selection_path"], "config_path": saved_config["config_path"]},
+        )
+        active = get_json(server.base_url + "/api/training/runs/active")
+        run_status = get_json(server.base_url + "/api/training/runs/api_fixture_group/api_fixture_run/status")
+        _, stopped = post_json_capture(server.base_url + "/api/training/runs/api_fixture_group/api_fixture_run/stop", {})
+        after_stop = get_json(server.base_url + "/api/training/runs/active")
+        missing_status, missing = post_json_capture(server.base_url + "/api/training/runs/no_group/no_run/stop", {})
+
+    assert start_status == 202
+    assert started["status"] == "running"
+    assert active["runs"][0]["run_name"] == "api_fixture_run"
+    assert run_status["status"] == "running"
+    assert run_status["alive"] is True
+    assert stopped["status"] == "cancelled"
+    assert after_stop["runs"] == []
+    assert missing_status == 404
+    assert "No pipeline-managed training run" in missing["error"]
+    interactions = (tmp_path / "reports" / "interactions.jsonl").read_text()
+    assert "start_training" in interactions and "stop_training" in interactions
+
+
+def test_step7_api_writes_evaluation_report_and_refuses_undocumented_promotion(tmp_path: Path, monkeypatch) -> None:
+    ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
+    run_dir = tmp_path / "runs" / "api_eval_group" / "api_eval_run"
+    (run_dir / "weights").mkdir(parents=True)
+    (run_dir / "weights" / "best.pt").write_bytes(b"fake-best")
+    (run_dir / "results.csv").write_text(
+        "epoch,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B)\n1,0.5,0.6,0.7,0.4\n"
+    )
+    monkeypatch.setattr(ui.pipeline, "WORKSPACE_DIR", tmp_path)
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        report_status, report = post_json_capture(server.base_url + "/api/training/evaluation-report", {"run_group": "api_eval_group"})
+        missing_status, missing = post_json_capture(server.base_url + "/api/training/evaluation-report", {"run_group": "no_such_group"})
+        refuse_status, refused = post_json_capture(
+            server.base_url + "/api/training/promote-weight",
+            {"run_group": "api_eval_group", "run_name": "api_eval_run", "target_name": "definitely_not_documented_fixture.pt"},
+        )
+
+    assert report_status == 201
+    assert report["run_count"] == 1
+    assert report["promoted_run_name"] == "api_eval_run"
+    assert Path(report["report_path"]).name == "api_eval_group_evaluation.json"
+    assert missing_status == 400
+    assert "Run group not found" in missing["error"]
+    assert refuse_status == 400
+    assert "recreation_doc_updated" in refused["error"]
+    assert not (tmp_path / "model_weights").exists()
+    interactions = (tmp_path / "reports" / "interactions.jsonl").read_text()
+    assert "promote_weight_refused" in interactions

@@ -3214,6 +3214,23 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/dataset-selections":
             self._handle_list_dataset_selections()
             return
+        if path == "/api/training/exported-datasets":
+            self._handle_list_exported_datasets()
+            return
+        if path == "/api/training/configs":
+            self._handle_list_training_configs()
+            return
+        if path == "/api/training/starting-weights":
+            self._handle_list_starting_weights()
+            return
+        if path == "/api/training/runs/active":
+            self._handle_list_active_runs(parsed)
+            return
+        if path.startswith("/api/training/runs/") and path.endswith("/status"):
+            run_ref = self._training_run_ref(path[len("/api/training/runs/"):-len("/status")])
+            if run_ref:
+                self._handle_training_run_status(*run_ref, parsed)
+                return
         if path.startswith("/api/albums/"):
             album_id = path[len("/api/albums/"):].strip("/")
             if album_id and "/" not in album_id:
@@ -3251,6 +3268,34 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/dataset-selections/export":
             self._handle_export_dataset_selection()
             return
+        if parsed.path == "/api/training/configs":
+            self._handle_save_training_config()
+            return
+        if parsed.path == "/api/training/readiness":
+            self._handle_training_readiness()
+            return
+        if parsed.path == "/api/training/command-preview":
+            self._handle_training_command_preview()
+            return
+        if parsed.path == "/api/training/runs/start":
+            self._handle_start_training_run()
+            return
+        if parsed.path == "/api/training/evaluation-report":
+            self._handle_write_evaluation_report()
+            return
+        if parsed.path == "/api/training/promote-weight":
+            self._handle_promote_weight()
+            return
+        if parsed.path.startswith("/api/training/runs/") and parsed.path.endswith("/stop"):
+            run_ref = self._training_run_ref(parsed.path[len("/api/training/runs/"):-len("/stop")])
+            if run_ref:
+                self._handle_stop_training_run(*run_ref)
+                return
+        if parsed.path.startswith("/api/training/runs/") and parsed.path.endswith("/test-split"):
+            run_ref = self._training_run_ref(parsed.path[len("/api/training/runs/"):-len("/test-split")])
+            if run_ref:
+                self._handle_run_test_split(*run_ref)
+                return
         if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/add-images"):
             album_id = parsed.path[len("/api/albums/"):-len("/add-images")].strip("/")
             if album_id and "/" not in album_id:
@@ -3577,6 +3622,239 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json(payload, status=400)
             return
         self._respond_json(result)
+
+    def _training_run_ref(self, raw: str) -> tuple[str, str] | None:
+        parts = [part for part in raw.strip("/").split("/") if part]
+        if len(parts) != 2 or any(part in {".", ".."} for part in parts):
+            return None
+        return parts[0], parts[1]
+
+    def _log_training_action(self, action: str, details: dict) -> None:
+        try:
+            append_training_ui_interaction({"source": "training_api", "action": action, **details})
+        except Exception:
+            pass
+
+    def _handle_list_exported_datasets(self) -> None:
+        try:
+            datasets = pipeline.list_exported_datasets(pipeline.DEFAULT_DATASETS_DIR)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"datasets": datasets})
+
+    def _handle_list_training_configs(self) -> None:
+        try:
+            configs = pipeline.list_training_configs(pipeline.DEFAULT_TRAINING_CONFIGS_DIR)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"configs": configs})
+
+    def _handle_list_starting_weights(self) -> None:
+        try:
+            weights = pipeline.list_starting_weights(
+                root_dir=pipeline.ROOT_DIR,
+                model_weights_dir=pipeline.DEFAULT_MODEL_WEIGHTS_DIR,
+                runs_dir=pipeline.DEFAULT_RUNS_DIR,
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        warnings = [entry["provenance_warning"] for entry in weights if entry.get("provenance_warning")]
+        self._respond_json({"weights": weights, "warnings": warnings})
+
+    def _handle_save_training_config(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.save_training_config(
+                dataset_name=str(payload.get("dataset_name") or "").strip(),
+                dataset_version=payload.get("dataset_version") or "v1",
+                model=str(payload.get("model") or "").strip(),
+                run_group=str(payload.get("run_group") or "").strip(),
+                run_name=str(payload.get("run_name") or "").strip(),
+                image_size=int(payload.get("image_size") or 960),
+                epochs=int(payload.get("epochs") or 150),
+                batch=int(payload.get("batch") or 8),
+                patience=payload.get("patience"),
+                seed=int(payload.get("seed") or 42),
+                device=payload.get("device", "cpu"),
+                workers=payload.get("workers"),
+                augmentation=payload.get("augmentation") or {},
+                overwrite=bool(payload.get("overwrite")),
+                selection_path=payload.get("selection_path"),
+                config_name=payload.get("config_name"),
+                configs_dir=pipeline.DEFAULT_TRAINING_CONFIGS_DIR,
+                output_dir=pipeline.DEFAULT_RUNS_DIR,
+            )
+        except (ValueError, TypeError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("save_training_config", {
+            "config_path": result["config_path"],
+            "run_group": result["config"]["run_group"],
+            "run_name": result["config"]["run_name"],
+            "warnings": result.get("warnings") or [],
+        })
+        self._respond_json(result, status=201)
+
+    def _handle_training_readiness(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.check_training_readiness(payload["selection_path"], payload["config_path"])
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
+
+    def _handle_training_command_preview(self) -> None:
+        try:
+            payload = self._json_body()
+            config = pipeline.load_json(payload["config_path"])
+            missing = pipeline.config_missing_items(config)
+            if missing:
+                self._respond_json({"error": "; ".join(missing), "missing": missing}, status=400)
+                return
+            selection = pipeline.load_json(payload["selection_path"])
+            dataset_dir = pipeline.repo_resolve(selection.get("export", {}).get("output_dir"))
+            command_line = pipeline.build_yolo_train_command(config, dataset_dir)
+            run_dir = pipeline.run_dir_for_config(config)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json({
+            "command_line": command_line,
+            "run_dir": pipeline.repo_relative(run_dir),
+            "data_yaml": pipeline.repo_relative(dataset_dir / "data.yaml"),
+        })
+
+    def _handle_start_training_run(self) -> None:
+        try:
+            payload = self._json_body()
+            selection_path = payload["selection_path"]
+            config_path = payload["config_path"]
+            readiness = pipeline.check_training_readiness(selection_path, config_path)
+            if not readiness["ready"]:
+                self._log_training_action("start_training_blocked", {"config_path": str(config_path), "missing": readiness["missing"]})
+                self._respond_json({"error": "Training is not ready", "missing": readiness["missing"]}, status=409)
+                return
+            result = pipeline.start_training_run(selection_path, config_path)
+        except (KeyError, ValueError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("start_training", {"run_dir": result["run_dir"], "pid": result["pid"]})
+        self._respond_json(result, status=202)
+
+    def _handle_training_run_status(self, run_group: str, run_name: str, parsed) -> None:
+        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
+        try:
+            result = pipeline.training_status(run_dir)
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json(result)
+
+    def _handle_stop_training_run(self, run_group: str, run_name: str) -> None:
+        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
+        try:
+            result = pipeline.stop_training_run(run_dir)
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("stop_training", {"run_dir": result["run_dir"], "status": result["status"]})
+        self._respond_json(result)
+
+    def _handle_list_active_runs(self, parsed) -> None:
+        try:
+            runs = pipeline.list_training_runs(pipeline.DEFAULT_RUNS_DIR, active_only=not query_bool(parsed, "all", False))
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"runs": runs})
+
+    def _handle_run_test_split(self, run_group: str, run_name: str) -> None:
+        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
+        try:
+            payload = self._json_body()
+            result = pipeline.run_test_split(
+                run_dir,
+                dataset_dir=payload.get("dataset_dir"),
+                device=payload.get("device", "cpu"),
+                image_size=payload.get("image_size"),
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("run_test_split", {"run_dir": result["run_dir"]})
+        self._respond_json(result)
+
+    def _handle_write_evaluation_report(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.build_run_group_evaluation_report(
+                run_group=str(payload.get("run_group") or "").strip(),
+                runs_dir=pipeline.DEFAULT_RUNS_DIR,
+                promoted_run_name=payload.get("promoted_run_name"),
+                promotion_reason=payload.get("promotion_reason"),
+            )
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("write_evaluation_report", {
+            "run_group": result["run_group"],
+            "report_path": result["report_path"],
+            "run_count": result["run_count"],
+        })
+        self._respond_json(result, status=201)
+
+    def _handle_promote_weight(self) -> None:
+        payload: dict = {}
+        try:
+            payload = self._json_body()
+            result = pipeline.promote_weight(
+                run_group=str(payload.get("run_group") or "").strip(),
+                run_name=str(payload.get("run_name") or "").strip(),
+                target_name=str(payload.get("target_name") or "").strip(),
+                recreation_doc_updated=bool(payload.get("recreation_doc_updated")),
+                overwrite=bool(payload.get("overwrite")),
+                runs_dir=pipeline.DEFAULT_RUNS_DIR,
+                model_weights_dir=pipeline.DEFAULT_MODEL_WEIGHTS_DIR,
+            )
+        except ValueError as exc:
+            self._log_training_action("promote_weight_refused", {
+                "run_group": str(payload.get("run_group") or ""),
+                "target_name": str(payload.get("target_name") or ""),
+                "error": str(exc),
+            })
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._log_training_action("promote_weight", {
+            "run_group": result["run_group"],
+            "run_name": result["run_name"],
+            "promoted_path": result["promoted_path"],
+        })
+        self._respond_json(result, status=201)
 
     def _handle_remove_preview(self) -> None:
         try:
