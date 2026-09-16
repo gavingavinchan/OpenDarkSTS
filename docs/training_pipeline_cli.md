@@ -373,6 +373,24 @@ Lists pipeline-managed runs under `workspace/runs/<run_group>/<run_name>/process
 
 By default only non-terminal runs are returned; `--all` includes completed, failed, and cancelled runs.
 
+### `list-run-groups`
+
+Lists every run group under `workspace/runs/` that holds at least one run with a `results.csv`, including
+legacy runs that predate `process.json`. This is what the step 7 GUI page uses to populate its run-group picker.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty list-run-groups
+```
+
+### `show-run-group`
+
+Returns the per-run validation/test metric summaries for one run group plus the suggested promotion target,
+without writing anything. The step 7 results table is this command's output rendered as a table.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty show-run-group --run-group manual_reviewed_gavin_v1_smoke
+```
+
 ### `write-evaluation-report`
 
 Writes `workspace/reports/<run_group>_evaluation.json` and `.md` for every run in a run group that has a `results.csv`.
@@ -567,7 +585,7 @@ The full pipeline-managed retraining loop, with no hand-written YOLO shell comma
 
 ## Training API Routes
 
-`scripts/training_pipeline_ui.py` exposes the same behavior over HTTP for the upcoming Step 5-7 GUI pages:
+`scripts/training_pipeline_ui.py` exposes the same behavior over HTTP for the Step 4-7 GUI pages:
 
 | Method | Route | Backend helper |
 |---|---|---|
@@ -584,8 +602,37 @@ The full pipeline-managed retraining loop, with no hand-written YOLO shell comma
 | POST | `/api/training/runs/<run_group>/<run_name>/test-split` | `run_test_split` |
 | POST | `/api/training/evaluation-report` | `build_run_group_evaluation_report` |
 | POST | `/api/training/promote-weight` | `promote_weight` |
+| GET | `/api/training/run-groups` | `list_run_groups` |
+| GET | `/api/training/run-groups/<run_group>` | `collect_run_group_summaries` + `best_run_by_metric` |
+| GET | `/api/training/evaluation-report?run_group=<run_group>` | reads `workspace/reports/<run_group>_evaluation.md` |
+| GET | `/api/jobs/<job_id>` | status of a detached GUI job (currently test-split) |
 
 Mutating training routes log to `workspace/reports/training_pipeline_ui_interactions.jsonl` through the existing interaction-logging path.
+
+### GUI Pages And Their CLI Equivalents
+
+| GUI page | Stage | CLI equivalents |
+|---|---|---|
+| `/import` (alias `/`) | 1 | `import-data`, `list-albums`, `create-album`, `add-to-album`, `rename-album`, `remove-from-album`, `remove-images` |
+| `/manual-review` | 2 | `run-auto-detect`, `image-key` |
+| `/bbox-overview` | 3 | `list-dataset-candidates` |
+| `/datasets` (alias `/dataset-selection`) | 4 | `list-dataset-candidates`, `save-dataset-selection`, `list-dataset-selections`, `export-dataset` |
+| `/training-setup` | 5 | `list-exported-datasets`, `list-starting-weights`, `save-training-config`, `list-training-configs`, `check-training-ready`, `build-train-command` |
+| `/training` (alias `/train-yolo`) | 6 | `start-training`, `training-status`, `stop-training`, `list-active-runs` |
+| `/evaluation` (alias `/evaluate`) | 7 | `list-run-groups`, `show-run-group`, `run-test-split`, `write-evaluation-report`, `promote-weight` |
+
+Known GUI/CLI parity gaps, tracked here rather than solved with GUI-only behavior:
+
+- Test-split evaluation runs synchronously in the CLI (`run-test-split`) but as a detached polled job in the
+  GUI (`POST .../test-split` with `{"background": true}` then `GET /api/jobs/<job_id>`). The work performed is
+  identical; only the wait is different.
+- The GUI reads the generated markdown report back through `GET /api/training/evaluation-report?run_group=...`.
+  The CLI equivalent is reading `workspace/reports/<run_group>_evaluation.md` directly; no command wraps that.
+- Step 4's split ratio boxes preview counts client-side before saving. The authoritative split assignment is
+  always the one returned by `save-dataset-selection` / `POST /api/dataset-selections`.
+
+`scripts/verify_training_gui.py` drives steps 1-7 in a headless browser against the real workspace and prints a
+pass/fail summary; it is the browser-side counterpart to the CLI retraining runbook.
 
 ## Selection Manifest Shape
 

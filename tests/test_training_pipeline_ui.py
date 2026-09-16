@@ -416,16 +416,16 @@ def test_template_loader_reads_every_page_template() -> None:
     from scripts import training_pipeline_ui as ui
 
     templates = ui.load_templates()
-    for name in ("bbox_overview", "import"):
+    for name in ("bbox_overview", "import", "datasets", "training_setup", "training", "evaluation"):
         assert name in templates, f"missing template {name}"
         assert templates[name].lstrip().startswith("<!DOCTYPE html>")
-    assert ui.template_text("import") is templates["import"]
+    assert ui.template_text("datasets") is templates["datasets"]
 
 
 def test_render_template_substitutes_placeholders() -> None:
     from scripts import training_pipeline_ui as ui
 
-    html = ui.render_template("import", stage_nav="<nav id='probe'></nav>")
+    html = ui.render_template("datasets", stage_nav="<nav id='probe'></nav>")
     assert "__STAGE_NAV__" not in html
     assert "<nav id='probe'></nav>" in html
 
@@ -440,13 +440,41 @@ def test_stage_nav_covers_all_seven_stages_and_marks_current() -> None:
     assert nav.count("data-stage=") == 7
 
 
-def test_shared_static_assets_are_served(tmp_path: Path, monkeypatch) -> None:
+def test_every_pipeline_page_renders_200_with_nav(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    monkeypatch.setattr(ui, "REVIEWS_DIR", tmp_path / "reviews")
+    monkeypatch.setattr(ui, "IMPORT_MANIFEST_PATH", tmp_path / "manifests" / "training_import_manifest.json")
+
+    pages = {
+        "/import": "Intake",
+        "/bbox-overview": "BBox Overview",
+        "/datasets": "Dataset Selection",
+        "/training-setup": "Training Setup",
+        "/training": "Train YOLO",
+        "/evaluation": "Evaluate",
+    }
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        for path, marker in pages.items():
+            status, content_type, body = get_text(f"{server.base_url}{path}")
+            assert status == 200, path
+            assert "text/html" in content_type, path
+            assert marker in body, path
+            assert 'aria-label="Training pipeline stages"' in body, path
+            assert 'href="/evaluation"' in body, path
+            assert "__STAGE_NAV__" not in body, path
+
+
+def test_new_pages_serve_shared_static_assets(tmp_path: Path, monkeypatch) -> None:
     from scripts import training_pipeline_ui as ui
 
     with UiServer(ui.TrainingPipelineHandler) as server:
         status, content_type, css = get_text(f"{server.base_url}/static/pipeline.css")
         assert status == 200 and "css" in content_type
         assert ".stage.active" in css
+        status, _, js = get_text(f"{server.base_url}/static/pipeline.js")
+        assert status == 200
+        assert "training-ui-interaction" in js
         try:
             get_text(f"{server.base_url}/static/../training_pipeline_ui.py")
             raise AssertionError("path traversal should not be served")
@@ -454,20 +482,37 @@ def test_shared_static_assets_are_served(tmp_path: Path, monkeypatch) -> None:
             assert exc.code == 404
 
 
-
-
-def test_dataset_selection_page_renders_200_with_nav(tmp_path: Path, monkeypatch) -> None:
+def test_page_aliases_match_the_plan_route_names(tmp_path: Path, monkeypatch) -> None:
     from scripts import training_pipeline_ui as ui
 
     with UiServer(ui.TrainingPipelineHandler) as server:
-        for path in ("/datasets", "/dataset-selection"):
-            status, content_type, body = get_text(f"{server.base_url}{path}")
-            assert status == 200 and "text/html" in content_type
-            assert "Dataset Selection" in body
-            assert 'aria-label="Training pipeline stages"' in body
-            assert "__STAGE_NAV__" not in body
-        status, _, js = get_text(f"{server.base_url}/static/pipeline.js")
-        assert status == 200 and "training-ui-interaction" in js
+        for alias, marker in (("/dataset-selection", "Dataset Selection"), ("/train-yolo", "Train YOLO"), ("/evaluate", "Evaluate")):
+            status, _, body = get_text(f"{server.base_url}{alias}")
+            assert status == 200 and marker in body
+
+
+def test_run_group_routes_back_the_evaluation_page(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_lib as pipeline
+    from scripts import training_pipeline_ui as ui
+
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "group_a" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "results.csv").write_text(
+        "epoch,train/box_loss,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B)\n"
+        "1,0.5,0.8,0.7,0.6,0.3\n"
+    )
+    monkeypatch.setattr(pipeline, "DEFAULT_RUNS_DIR", runs_dir)
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        groups = get_json(f"{server.base_url}/api/training/run-groups")
+        assert [item["run_group"] for item in groups["run_groups"]] == ["group_a"]
+        detail = get_json(f"{server.base_url}/api/training/run-groups/group_a")
+        assert detail["run_count"] == 1
+        assert detail["suggested_run_name"] == "run_1"
+        assert detail["runs"][0]["validation_metrics"]["mAP50"] == 0.6
+        report = get_json(f"{server.base_url}/api/training/evaluation-report?run_group=group_a")
+        assert report["exists"] is False
 
 
 def test_unknown_job_id_returns_404(tmp_path: Path) -> None:

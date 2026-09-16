@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Training Setup</title>
+  <link rel="stylesheet" href="/static/pipeline.css">
+</head>
+<body data-page="training-setup">
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">05<sup>/07</sup></div>
+        <div>
+          <h1>Training Setup</h1>
+          <p class="subtitle">Choose an exported dataset and starting weights, set training and augmentation fields, check readiness, and preview the exact YOLO command.</p>
+        </div>
+      </div>
+      __STAGE_NAV__
+    </header>
+
+    <main>
+      <div class="cols">
+        <section class="card">
+          <h2>Dataset &amp; Weights</h2>
+          <label class="field"><span>Exported dataset</span>
+            <select id="datasetSelect"></select>
+          </label>
+          <p class="hint" id="datasetHint">—</p>
+          <label class="field"><span>Starting weights</span>
+            <select id="weightSelect"></select>
+          </label>
+          <p class="hint" id="weightHint">—</p>
+
+          <h3>Training fields</h3>
+          <div class="grid2">
+            <label class="field"><span>Run group</span><input id="runGroup" placeholder="run group"></label>
+            <label class="field"><span>Run name</span><input id="runName" placeholder="run name"></label>
+            <label class="field"><span>Image size</span><input id="imageSize" type="number" value="960"></label>
+            <label class="field"><span>Epochs</span><input id="epochs" type="number" value="150"></label>
+            <label class="field"><span>Batch</span><input id="batch" type="number" value="8"></label>
+            <label class="field"><span>Patience</span><input id="patience" type="number" value="30"></label>
+            <label class="field"><span>Seed</span><input id="seed" type="number" value="42"></label>
+            <label class="field"><span>Device</span><input id="device" value="cpu"></label>
+            <label class="field"><span>Workers</span><input id="workers" type="number" value="4"></label>
+            <label class="field"><span>Config filename</span><input id="configName" placeholder="&lt;run_group&gt;_&lt;run_name&gt;"></label>
+          </div>
+          <label class="row check" style="font-size:12px;">
+            <input id="overwrite" type="checkbox"> Overwrite an existing run directory with this run name
+          </label>
+
+          <h3>Augmentation</h3>
+          <p class="hint">Only the Ultralytics train args whitelisted by the backend are accepted. Leave a field blank to omit it.</p>
+          <div class="grid3" id="augFields"></div>
+          <div class="row">
+            <button id="augDefaults" type="button">Fill Default Augmentation</button>
+            <button id="augClear" type="button">Clear Augmentation</button>
+          </div>
+
+          <div class="row">
+            <button id="saveConfig" class="primary" type="button">Save Training Config</button>
+            <button id="checkReadiness" type="button" disabled>Check Readiness</button>
+            <button id="previewCommand" type="button" disabled>Preview Command</button>
+            <button id="goTrain" type="button" disabled>Go To Train YOLO</button>
+          </div>
+          <div class="status" id="setupStatus"></div>
+        </section>
+
+        <div style="display:grid; gap:18px;">
+          <section class="card">
+            <h2>Readiness Checklist</h2>
+            <p class="hint" id="readinessSummary">Save a config to evaluate readiness.</p>
+            <ul class="checklist" id="readinessList"></ul>
+            <h3>Warnings</h3>
+            <ul class="checklist" id="warningList"><li class="empty">None</li></ul>
+          </section>
+
+          <section class="card">
+            <h2>Command Preview</h2>
+            <pre class="code" id="commandPreview">Save a config and press Preview Command.</pre>
+            <dl class="kv" id="commandMeta"></dl>
+          </section>
+        </div>
+      </div>
+
+      <section class="card">
+        <h2>Saved Training Configs</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Config</th><th>Run group</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead>
+            <tbody id="configBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/pipeline.js"></script>
+  <script>
+    const P = window.Pipeline;
+    const AUG_KEYS = ['hsv_h', 'hsv_s', 'hsv_v', 'degrees', 'translate', 'scale', 'shear',
+                      'perspective', 'flipud', 'fliplr', 'mosaic', 'mixup', 'copy_paste',
+                      'erasing', 'crop_fraction'];
+    const AUG_DEFAULTS = { hsv_h: 0.015, hsv_s: 0.7, hsv_v: 0.4, degrees: 10, translate: 0.1,
+                           scale: 0.5, fliplr: 0.5, mosaic: 1.0 };
+    const state = { datasets: [], selections: [], weights: [], configPath: null, ready: false };
+
+    function renderAugFields() {
+      document.getElementById('augFields').innerHTML = AUG_KEYS.map(function (key) {
+        return '<label class="field"><span>' + key + '</span>' +
+          '<input class="aug" data-key="' + key + '" type="number" step="0.01" placeholder="—"></label>';
+      }).join('');
+    }
+
+    function augmentationPayload() {
+      const payload = {};
+      document.querySelectorAll('input.aug').forEach(function (input) {
+        const raw = input.value.trim();
+        if (raw !== '') { payload[input.dataset.key] = Number(raw); }
+      });
+      return payload;
+    }
+
+    async function loadDatasets() {
+      const [datasets, selections] = await Promise.all([
+        P.api('/api/training/exported-datasets'),
+        P.api('/api/dataset-selections'),
+      ]);
+      state.datasets = datasets.datasets || [];
+      state.selections = selections.selections || [];
+      const options = state.datasets.map(function (dataset, index) {
+        const match = state.selections.find(function (item) {
+          return item.export_output_dir && String(item.export_output_dir).replace(/\/$/, '') === String(dataset.dataset_dir).replace(/\/$/, '');
+        });
+        dataset.selection_path = match ? match.selection_path : null;
+        return '<option value="' + index + '">' + P.esc(dataset.dataset_name || dataset.dataset_dir) +
+          ' ' + P.esc(dataset.dataset_version || '') + ' (' + (dataset.image_count || 0) + ' images)</option>';
+      });
+      document.getElementById('datasetSelect').innerHTML = options.join('') ||
+        '<option value="">No exported datasets — export one in step 4</option>';
+      onDatasetChange();
+    }
+
+    function currentDataset() {
+      const index = Number(document.getElementById('datasetSelect').value);
+      return state.datasets[index] || null;
+    }
+
+    function onDatasetChange() {
+      const dataset = currentDataset();
+      const hint = document.getElementById('datasetHint');
+      if (!dataset) { hint.textContent = 'No exported dataset available.'; return; }
+      const counts = dataset.split_counts || {};
+      hint.textContent = dataset.dataset_dir + ' · train ' + (counts.train || 0) + ' / val ' + (counts.val || 0) +
+        ' / test ' + (counts.test || 0) +
+        (dataset.selection_path ? ' · selection ' + dataset.selection_path : ' · NO MATCHING SELECTION MANIFEST');
+      const nameField = document.getElementById('runGroup');
+      if (!nameField.value) { nameField.value = String(dataset.dataset_name || 'run_group'); }
+    }
+
+    async function loadWeights() {
+      const data = await P.api('/api/training/starting-weights');
+      state.weights = data.weights || [];
+      document.getElementById('weightSelect').innerHTML = state.weights.map(function (weight, index) {
+        return '<option value="' + index + '">' + P.esc(weight.path) + (weight.documented ? '' : '  [undocumented]') + '</option>';
+      }).join('') || '<option value="">No .pt weights found</option>';
+      onWeightChange();
+    }
+
+    function currentWeight() {
+      const index = Number(document.getElementById('weightSelect').value);
+      return state.weights[index] || null;
+    }
+
+    function onWeightChange() {
+      const weight = currentWeight();
+      const hint = document.getElementById('weightHint');
+      if (!weight) { hint.textContent = 'No starting weights found.'; return; }
+      if (weight.documented) {
+        hint.textContent = 'Provenance documented in docs/yolo_weight_recreation.md (' + weight.source + ').';
+        hint.style.color = '';
+      } else {
+        hint.textContent = 'WARNING: ' + weight.provenance_warning;
+        hint.style.color = 'var(--amber)';
+      }
+      const runName = document.getElementById('runName');
+      if (!runName.value) { runName.value = weight.name.replace(/\.pt$/, '') + '_run'; }
+    }
+
+    function numberOrNull(id) {
+      const raw = document.getElementById(id).value.trim();
+      return raw === '' ? null : Number(raw);
+    }
+
+    async function saveConfig() {
+      const dataset = currentDataset();
+      const weight = currentWeight();
+      if (!dataset || !weight) { P.setStatus('setupStatus', 'Pick an exported dataset and a starting weight first.', 'err'); return; }
+      const runGroup = document.getElementById('runGroup').value.trim();
+      const runName = document.getElementById('runName').value.trim();
+      const explicitName = document.getElementById('configName').value.trim();
+      const payload = {
+        dataset_name: dataset.dataset_name,
+        dataset_version: dataset.dataset_version || 'v1',
+        model: weight.path,
+        run_group: runGroup,
+        run_name: runName,
+        image_size: numberOrNull('imageSize') || 960,
+        epochs: numberOrNull('epochs') || 1,
+        batch: numberOrNull('batch') || 1,
+        patience: numberOrNull('patience'),
+        seed: numberOrNull('seed') || 42,
+        device: document.getElementById('device').value.trim() || 'cpu',
+        workers: numberOrNull('workers'),
+        augmentation: augmentationPayload(),
+        overwrite: document.getElementById('overwrite').checked,
+        selection_path: dataset.selection_path,
+        config_name: explicitName || (runGroup + '_' + runName),
+      };
+      P.setStatus('setupStatus', 'Saving training config…');
+      try {
+        const data = await P.api('/api/training/configs', { method: 'POST', body: payload });
+        state.configPath = data.config_path;
+        P.setStatus('setupStatus', 'Saved ' + data.config_path + '.', 'ok');
+        document.getElementById('checkReadiness').disabled = false;
+        document.getElementById('previewCommand').disabled = false;
+        renderReadiness(data.readiness || {}, data.warnings || []);
+        await loadConfigs();
+      } catch (error) {
+        P.setStatus('setupStatus', 'Save failed: ' + error.message, 'err');
+      }
+    }
+
+    function renderReadiness(readiness, warnings) {
+      const missing = readiness.missing || [];
+      state.ready = Boolean(readiness.ready);
+      document.getElementById('readinessSummary').textContent = state.ready
+        ? 'Ready to train.'
+        : missing.length + ' blocking item(s) must be fixed before training can start.';
+      const items = [];
+      if (state.ready) { items.push('<li>All backend readiness checks passed</li>'); }
+      missing.forEach(function (item) { items.push('<li class="miss">' + P.esc(item) + '</li>'); });
+      document.getElementById('readinessList').innerHTML = items.join('') || '<li class="empty">No readiness result yet.</li>';
+      const allWarnings = (warnings || []).concat(readiness.warnings || []);
+      document.getElementById('warningList').innerHTML = allWarnings.length
+        ? allWarnings.map(function (item) { return '<li class="miss">' + P.esc(item) + '</li>'; }).join('')
+        : '<li class="empty">None</li>';
+      document.getElementById('goTrain').disabled = !state.ready;
+    }
+
+    async function checkReadiness() {
+      const dataset = currentDataset();
+      if (!state.configPath || !dataset || !dataset.selection_path) {
+        P.setStatus('setupStatus', 'Need a saved config and an exported dataset with a selection manifest.', 'err');
+        return;
+      }
+      try {
+        const data = await P.api('/api/training/readiness', {
+          method: 'POST',
+          body: { selection_path: dataset.selection_path, config_path: state.configPath },
+        });
+        renderReadiness(data, []);
+        P.setStatus('setupStatus', data.ready ? 'Readiness: ready.' : 'Readiness: blocked.', data.ready ? 'ok' : 'err');
+      } catch (error) {
+        P.setStatus('setupStatus', 'Readiness check failed: ' + error.message, 'err');
+      }
+    }
+
+    async function previewCommand() {
+      const dataset = currentDataset();
+      if (!state.configPath || !dataset || !dataset.selection_path) {
+        P.setStatus('setupStatus', 'Need a saved config and an exported dataset with a selection manifest.', 'err');
+        return;
+      }
+      try {
+        const data = await P.api('/api/training/command-preview', {
+          method: 'POST',
+          body: { selection_path: dataset.selection_path, config_path: state.configPath },
+        });
+        document.getElementById('commandPreview').textContent = (data.command_line || []).join(' \\\n  ');
+        document.getElementById('commandMeta').innerHTML =
+          '<dt>run dir</dt><dd>' + P.esc(data.run_dir) + '</dd>' +
+          '<dt>data.yaml</dt><dd>' + P.esc(data.data_yaml) + '</dd>' +
+          '<dt>config</dt><dd>' + P.esc(state.configPath) + '</dd>' +
+          '<dt>selection</dt><dd>' + P.esc(dataset.selection_path) + '</dd>';
+        P.setStatus('setupStatus', 'Command preview generated.', 'ok');
+      } catch (error) {
+        document.getElementById('commandPreview').textContent = 'Preview failed: ' + error.message;
+        P.setStatus('setupStatus', 'Command preview failed: ' + error.message, 'err');
+      }
+    }
+
+    async function loadConfigs() {
+      const data = await P.api('/api/training/configs');
+      const configs = data.configs || [];
+      const body = document.getElementById('configBody');
+      if (!configs.length) {
+        body.innerHTML = '<tr><td colspan="9" class="empty">No saved training configs yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = configs.map(function (config) {
+        const complete = !(config.missing || []).length;
+        return '<tr><td>' + P.esc(config.config_path) + '</td><td>' + P.esc(config.run_group) + '</td>' +
+          '<td>' + P.esc(config.run_name) + '</td><td>' + P.esc(config.model) + '</td>' +
+          '<td>' + P.esc(config.epochs) + '</td><td>' + P.esc(config.batch) + '</td><td>' + P.esc(config.device) + '</td>' +
+          '<td><span class="pill ' + (complete ? 'ok' : 'bad') + '">' + (complete ? 'complete' : 'incomplete') + '</span></td>' +
+          '<td><button type="button" class="ghost use-config" data-path="' + P.esc(config.config_path) + '">Use</button></td></tr>';
+      }).join('');
+      body.querySelectorAll('button.use-config').forEach(function (button) {
+        button.addEventListener('click', function () {
+          state.configPath = button.dataset.path;
+          document.getElementById('checkReadiness').disabled = false;
+          document.getElementById('previewCommand').disabled = false;
+          P.logInteraction('click', { control: 'use_config', config_path: button.dataset.path });
+          P.setStatus('setupStatus', 'Using config ' + button.dataset.path + '.', 'ok');
+          checkReadiness();
+        });
+      });
+    }
+
+    function wire() {
+      renderAugFields();
+      document.getElementById('datasetSelect').addEventListener('change', onDatasetChange);
+      document.getElementById('weightSelect').addEventListener('change', onWeightChange);
+      document.getElementById('augDefaults').addEventListener('click', function () {
+        document.querySelectorAll('input.aug').forEach(function (input) {
+          input.value = AUG_DEFAULTS[input.dataset.key] === undefined ? '' : AUG_DEFAULTS[input.dataset.key];
+        });
+      });
+      document.getElementById('augClear').addEventListener('click', function () {
+        document.querySelectorAll('input.aug').forEach(function (input) { input.value = ''; });
+      });
+      document.getElementById('saveConfig').addEventListener('click', saveConfig);
+      document.getElementById('checkReadiness').addEventListener('click', checkReadiness);
+      document.getElementById('previewCommand').addEventListener('click', previewCommand);
+      document.getElementById('goTrain').addEventListener('click', function () {
+        const dataset = currentDataset();
+        const params = new URLSearchParams();
+        if (state.configPath) { params.set('config_path', state.configPath); }
+        if (dataset && dataset.selection_path) { params.set('selection_path', dataset.selection_path); }
+        window.location.href = '/training?' + params.toString();
+      });
+      P.autoLogControls(document);
+      P.captureConsoleErrors();
+    }
+
+    wire();
+    Promise.all([loadDatasets(), loadWeights(), loadConfigs()]).catch(function (error) {
+      P.setStatus('setupStatus', 'Load failed: ' + error.message, 'err');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Train YOLO</title>
+  <link rel="stylesheet" href="/static/pipeline.css">
+</head>
+<body data-page="training">
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">06<sup>/07</sup></div>
+        <div>
+          <h1>Train YOLO</h1>
+          <p class="subtitle">Launch a pipeline-managed detached training run and watch its state, epoch progress, metrics, and log tail live.</p>
+        </div>
+      </div>
+      __STAGE_NAV__
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Start A Run</h2>
+        <div class="grid2">
+          <label class="field"><span>Training config</span><select id="configSelect"></select></label>
+          <label class="field"><span>Dataset selection manifest</span><select id="selectionSelect"></select></label>
+        </div>
+        <div class="row">
+          <button id="refreshReadiness" type="button">Check Readiness</button>
+          <button id="startRun" class="primary" type="button" disabled>Start Training</button>
+          <button id="refreshRuns" type="button">Refresh Runs</button>
+          <label class="row check" style="font-size:12px;"><input id="showAll" type="checkbox" checked> Show finished runs too</label>
+        </div>
+        <ul class="checklist" id="startReadiness"><li class="empty">Press Check Readiness.</li></ul>
+        <div class="status" id="startStatus"></div>
+      </section>
+
+      <div class="cols">
+        <section class="card">
+          <h2>Runs</h2>
+          <div id="runCards" style="display:grid; gap:10px;"></div>
+        </section>
+
+        <div style="display:grid; gap:18px;">
+          <section class="card">
+            <h2>Selected Run</h2>
+            <p class="hint" id="detailTitle">Pick a run card to see its live detail.</p>
+            <div class="bar"><i id="epochBar" style="width:0%"></i></div>
+            <dl class="kv" id="detailMeta"></dl>
+            <div class="row">
+              <button id="stopRun" class="danger" type="button" disabled>Stop Training</button>
+              <button id="gotoEval" type="button" disabled>Go To Evaluation</button>
+            </div>
+            <div class="status" id="detailStatus"></div>
+          </section>
+
+          <section class="card">
+            <h2>Metrics (results.csv)</h2>
+            <div class="spark" id="spark"></div>
+            <div class="scroll" style="max-height:220px;">
+              <table><thead><tr><th>Epoch</th><th>box_loss</th><th>mAP50</th><th>mAP50-95</th></tr></thead>
+              <tbody id="metricsBody"></tbody></table>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Log Tail</h2>
+            <pre class="log" id="logTail">No run selected.</pre>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/pipeline.js"></script>
+  <script>
+    const P = window.Pipeline;
+    const state = { configs: [], selections: [], runs: [], selectedRun: null, timer: null };
+    const params = new URLSearchParams(window.location.search);
+
+    async function loadPickers() {
+      const [configs, selections] = await Promise.all([
+        P.api('/api/training/configs'),
+        P.api('/api/dataset-selections'),
+      ]);
+      state.configs = configs.configs || [];
+      state.selections = (selections.selections || []).filter(function (item) { return item.exported; });
+      document.getElementById('configSelect').innerHTML = state.configs.map(function (config) {
+        return '<option value="' + P.esc(config.config_path) + '">' + P.esc(config.run_group) + ' / ' +
+          P.esc(config.run_name) + ' — ' + P.esc(config.config_path) + '</option>';
+      }).join('') || '<option value="">No training configs — create one in step 5</option>';
+      document.getElementById('selectionSelect').innerHTML = state.selections.map(function (item) {
+        return '<option value="' + P.esc(item.selection_path) + '">' + P.esc(item.dataset_name) + ' ' +
+          P.esc(item.dataset_version) + ' — ' + P.esc(item.selection_path) + '</option>';
+      }).join('') || '<option value="">No exported dataset selections — export one in step 4</option>';
+      if (params.get('config_path')) { document.getElementById('configSelect').value = params.get('config_path'); }
+      if (params.get('selection_path')) { document.getElementById('selectionSelect').value = params.get('selection_path'); }
+    }
+
+    function pickedPaths() {
+      return {
+        config_path: document.getElementById('configSelect').value,
+        selection_path: document.getElementById('selectionSelect').value,
+      };
+    }
+
+    async function checkReadiness() {
+      const picked = pickedPaths();
+      if (!picked.config_path || !picked.selection_path) {
+        P.setStatus('startStatus', 'Pick both a training config and an exported dataset selection.', 'err');
+        return false;
+      }
+      try {
+        const data = await P.api('/api/training/readiness', { method: 'POST', body: picked });
+        const items = [];
+        if (data.ready) { items.push('<li>Ready to start training</li>'); }
+        (data.missing || []).forEach(function (item) { items.push('<li class="miss">' + P.esc(item) + '</li>'); });
+        (data.warnings || []).forEach(function (item) { items.push('<li class="miss">warning: ' + P.esc(item) + '</li>'); });
+        document.getElementById('startReadiness').innerHTML = items.join('');
+        document.getElementById('startRun').disabled = !data.ready;
+        P.setStatus('startStatus', data.ready ? 'Ready.' : 'Not ready.', data.ready ? 'ok' : 'err');
+        return Boolean(data.ready);
+      } catch (error) {
+        document.getElementById('startRun').disabled = true;
+        P.setStatus('startStatus', 'Readiness check failed: ' + error.message, 'err');
+        return false;
+      }
+    }
+
+    async function startRun() {
+      const picked = pickedPaths();
+      P.setStatus('startStatus', 'Starting training run…');
+      try {
+        const data = await P.api('/api/training/runs/start', { method: 'POST', body: picked });
+        P.setStatus('startStatus', 'Started ' + data.run_dir + ' (pid ' + data.pid + ').', 'ok');
+        state.selectedRun = { run_group: data.run_group, run_name: data.run_name };
+        await loadRuns();
+        await refreshDetail();
+      } catch (error) {
+        P.setStatus('startStatus', 'Start failed: ' + error.message, 'err');
+      }
+    }
+
+    function statusPill(status) {
+      const kind = status === 'completed' ? 'ok' : (status === 'running' ? 'run' : (status === 'cancelled' ? 'warn' : 'bad'));
+      return '<span class="pill ' + kind + '">' + P.esc(status) + '</span>';
+    }
+
+    function endedLabel(run) {
+      if (run.status === 'failed' && run.reason === 'process_missing') { return 'process ended without completing'; }
+      return run.status;
+    }
+
+    async function loadRuns() {
+      const all = document.getElementById('showAll').checked ? '?all=1' : '';
+      try {
+        const data = await P.api('/api/training/runs/active' + all);
+        state.runs = data.runs || [];
+      } catch (error) {
+        P.setStatus('startStatus', 'Could not list runs: ' + error.message, 'err');
+        return;
+      }
+      const host = document.getElementById('runCards');
+      if (!state.runs.length) {
+        host.innerHTML = '<div class="empty">No pipeline-managed runs yet. Start one above.</div>';
+        return;
+      }
+      host.innerHTML = state.runs.map(function (run) {
+        const total = Number(run.expected_epochs || 0);
+        const current = Number(run.current_epoch || 0);
+        const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+        const selected = state.selectedRun && state.selectedRun.run_group === run.run_group && state.selectedRun.run_name === run.run_name;
+        return '<div class="runcard" data-group="' + P.esc(run.run_group) + '" data-name="' + P.esc(run.run_name) + '"' +
+          (selected ? ' style="border-color: var(--blue);"' : '') + '>' +
+          '<div class="row" style="justify-content:space-between;"><strong>' + P.esc(run.run_group) + ' / ' + P.esc(run.run_name) + '</strong>' +
+          statusPill(run.status) + '</div>' +
+          '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+          '<div class="hint">epoch ' + current + ' / ' + (total || '?') + ' · pid ' + P.esc(run.pid || '—') +
+          ' · started ' + P.esc(P.shortTime(run.started_at)) + '</div>' +
+          '<div class="row"><button type="button" class="ghost open-run">Open</button>' +
+          (run.status === 'completed' ? '<button type="button" class="ghost eval-run">Evaluate &rarr;</button>' : '') +
+          '</div></div>';
+      }).join('');
+      host.querySelectorAll('.runcard').forEach(function (card) {
+        card.querySelector('button.open-run').addEventListener('click', function () {
+          state.selectedRun = { run_group: card.dataset.group, run_name: card.dataset.name };
+          P.logInteraction('click', { control: 'open_run', run_group: card.dataset.group, run_name: card.dataset.name });
+          loadRuns();
+          refreshDetail();
+        });
+        const evalButton = card.querySelector('button.eval-run');
+        if (evalButton) {
+          evalButton.addEventListener('click', function () {
+            P.logInteraction('click', { control: 'goto_evaluation', run_group: card.dataset.group });
+            window.location.href = '/evaluation?run_group=' + encodeURIComponent(card.dataset.group) +
+              '&run_name=' + encodeURIComponent(card.dataset.name);
+          });
+        }
+      });
+    }
+
+    function renderSeries(results) {
+      /* load_training_results_series returns {series: {column: [[epoch, value], ...]}}. */
+      const series = (results && results.series) || {};
+      const map50 = series['metrics/mAP50(B)'] || [];
+      const map5095 = series['metrics/mAP50-95(B)'] || [];
+      const boxLoss = series['train/box_loss'] || [];
+      const spark = document.getElementById('spark');
+      const values = map50.map(function (point) { return Number(point[1]); });
+      const max = Math.max.apply(null, values.concat([0.0001]));
+      spark.innerHTML = values.length
+        ? values.slice(-60).map(function (value) {
+            return '<i style="height:' + Math.max(2, Math.round((value / max) * 44)) + 'px"></i>';
+          }).join('')
+        : '<span class="empty">No results.csv rows yet (' + P.esc((results && results.message) || 'waiting') + ').</span>';
+
+      const byEpoch = {};
+      function collect(points, key) {
+        points.forEach(function (point) {
+          byEpoch[point[0]] = byEpoch[point[0]] || { epoch: point[0] };
+          byEpoch[point[0]][key] = point[1];
+        });
+      }
+      collect(boxLoss, 'box_loss');
+      collect(map50, 'map50');
+      collect(map5095, 'map5095');
+      const rows = Object.keys(byEpoch).map(Number).sort(function (a, b) { return a - b; }).slice(-12);
+      const body = document.getElementById('metricsBody');
+      body.innerHTML = rows.length ? rows.map(function (epoch) {
+        const row = byEpoch[epoch];
+        return '<tr><td>' + epoch + '</td><td>' + P.fmt(row.box_loss) + '</td>' +
+          '<td>' + P.fmt(row.map50) + '</td><td>' + P.fmt(row.map5095) + '</td></tr>';
+      }).join('') : '<tr><td colspan="4" class="empty">No metric rows yet.</td></tr>';
+    }
+
+    async function refreshDetail() {
+      if (!state.selectedRun) { return; }
+      const ref = state.selectedRun;
+      let data;
+      try {
+        data = await P.api('/api/training/runs/' + encodeURIComponent(ref.run_group) + '/' + encodeURIComponent(ref.run_name) + '/status');
+      } catch (error) {
+        P.setStatus('detailStatus', 'Status failed: ' + error.message, 'err');
+        return;
+      }
+      document.getElementById('detailTitle').textContent = data.run_group + ' / ' + data.run_name + ' — ' + endedLabel(data);
+      const total = Number(data.expected_epochs || 0);
+      const current = Number(data.current_epoch || 0);
+      document.getElementById('epochBar').style.width = (total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0) + '%';
+      const best = data.best_metrics || {};
+      document.getElementById('detailMeta').innerHTML =
+        '<dt>state</dt><dd>' + P.esc(endedLabel(data)) + '</dd>' +
+        '<dt>pid</dt><dd>' + P.esc(data.pid || '—') + '</dd>' +
+        '<dt>alive</dt><dd>' + P.esc(String(data.alive)) + '</dd>' +
+        '<dt>epoch</dt><dd>' + current + ' / ' + (total || '?') + '</dd>' +
+        '<dt>started</dt><dd>' + P.esc(P.shortTime(data.started_at)) + '</dd>' +
+        '<dt>ended</dt><dd>' + P.esc(P.shortTime(data.ended_at)) + '</dd>' +
+        '<dt>best mAP50</dt><dd>' + P.fmt((best['metrics/mAP50(B)'] || {}).value) + '</dd>' +
+        '<dt>run dir</dt><dd>' + P.esc(data.run_dir) + '</dd>' +
+        '<dt>best.pt</dt><dd>' + P.esc(data.best_weights_path || '—') + '</dd>' +
+        '<dt>last.pt</dt><dd>' + P.esc(data.last_weights_path || '—') + '</dd>' +
+        '<dt>metadata</dt><dd>' + P.esc(data.training_metadata_path || '—') + '</dd>' +
+        '<dt>command</dt><dd>' + P.esc((data.command_line || []).join(' ')) + '</dd>';
+      document.getElementById('logTail').textContent = P.stripAnsi((data.log_tail || []).join('\n')) || 'No log output yet.';
+      renderSeries(data.results);
+      document.getElementById('stopRun').disabled = Boolean(data.terminal);
+      document.getElementById('gotoEval').disabled = !data.terminal;
+      P.setStatus('detailStatus', '');
+    }
+
+    async function stopRun() {
+      if (!state.selectedRun) { return; }
+      const ref = state.selectedRun;
+      P.setStatus('detailStatus', 'Stopping run…');
+      try {
+        const data = await P.api('/api/training/runs/' + encodeURIComponent(ref.run_group) + '/' +
+          encodeURIComponent(ref.run_name) + '/stop', { method: 'POST', body: {} });
+        P.setStatus('detailStatus', 'Run marked ' + data.status + '.', 'ok');
+      } catch (error) {
+        P.setStatus('detailStatus', 'Stop failed: ' + error.message, 'err');
+      }
+      await loadRuns();
+      await refreshDetail();
+    }
+
+    function wire() {
+      document.getElementById('refreshReadiness').addEventListener('click', checkReadiness);
+      document.getElementById('startRun').addEventListener('click', startRun);
+      document.getElementById('refreshRuns').addEventListener('click', function () { loadRuns(); refreshDetail(); });
+      document.getElementById('showAll').addEventListener('change', loadRuns);
+      document.getElementById('stopRun').addEventListener('click', stopRun);
+      document.getElementById('gotoEval').addEventListener('click', function () {
+        if (!state.selectedRun) { return; }
+        window.location.href = '/evaluation?run_group=' + encodeURIComponent(state.selectedRun.run_group) +
+          '&run_name=' + encodeURIComponent(state.selectedRun.run_name);
+      });
+      P.autoLogControls(document);
+      P.captureConsoleErrors();
+      state.timer = window.setInterval(function () { loadRuns(); refreshDetail(); }, 4000);
+    }
+
+    wire();
+    loadPickers().then(loadRuns).then(function () {
+      if (params.get('run_group') && params.get('run_name')) {
+        state.selectedRun = { run_group: params.get('run_group'), run_name: params.get('run_name') };
+        return refreshDetail();
+      }
+      return null;
+    }).catch(function (error) {
+      P.setStatus('startStatus', 'Load failed: ' + error.message, 'err');
+    });
+  </script>
+</body>
+</html>

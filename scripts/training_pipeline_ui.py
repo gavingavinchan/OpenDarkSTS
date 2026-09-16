@@ -587,6 +587,20 @@ def render_datasets_html() -> str:
     return render_template("datasets", stage_nav=render_stage_nav(4))
 
 
+def render_training_setup_html() -> str:
+    return render_template("training_setup", stage_nav=render_stage_nav(5))
+
+
+def render_training_html() -> str:
+    return render_template("training", stage_nav=render_stage_nav(6))
+
+
+def render_evaluation_html() -> str:
+    return render_template("evaluation", stage_nav=render_stage_nav(7))
+
+
+
+
 class TrainingPipelineHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -602,6 +616,15 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if path in {"/datasets", "/dataset-selection"}:
             self._respond_html(render_datasets_html())
+            return
+        if path == "/training-setup":
+            self._respond_html(render_training_setup_html())
+            return
+        if path in {"/training", "/train-yolo"}:
+            self._respond_html(render_training_html())
+            return
+        if path in {"/evaluation", "/evaluate"}:
+            self._respond_html(render_evaluation_html())
             return
         if path.startswith("/static/"):
             self._serve_static_file(path[len("/static/"):])
@@ -655,6 +678,17 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/training/runs/active":
             self._handle_list_active_runs(parsed)
             return
+        if path == "/api/training/run-groups":
+            self._handle_list_run_groups()
+            return
+        if path == "/api/training/evaluation-report":
+            self._handle_read_evaluation_report(parsed)
+            return
+        if path.startswith("/api/training/run-groups/"):
+            run_group = path[len("/api/training/run-groups/"):].strip("/")
+            if run_group and "/" not in run_group:
+                self._handle_show_run_group(run_group)
+                return
         if path.startswith("/api/jobs/"):
             self._handle_job_status(path[len("/api/jobs/"):])
             return
@@ -1067,15 +1101,6 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _handle_job_status(self, job_id: str) -> None:
-        with JOBS_LOCK:
-            job = JOBS.get(job_id.strip("/"))
-            payload = dict(job) if job else None
-        if payload is None:
-            self._respond_json({"error": "job not found"}, status=404)
-            return
-        self._respond_json(payload)
-
     def _handle_list_exported_datasets(self) -> None:
         try:
             datasets = pipeline.list_exported_datasets(pipeline.DEFAULT_DATASETS_DIR)
@@ -1189,6 +1214,10 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._respond_json({"error": str(exc)}, status=500)
             return
+        # The GUI polls /api/training/runs/<group>/<name>/status, so echo the run ref back.
+        run_dir_parts = str(result["run_dir"]).rstrip("/").split("/")
+        result["run_group"] = run_dir_parts[-2] if len(run_dir_parts) >= 2 else ""
+        result["run_name"] = run_dir_parts[-1] if run_dir_parts else ""
         self._log_training_action("start_training", {"run_dir": result["run_dir"], "pid": result["pid"]})
         self._respond_json(result, status=202)
 
@@ -1225,10 +1254,109 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         self._respond_json({"runs": runs})
 
+    def _start_test_split_job(self, run_dir, run_group: str, run_name: str, payload: dict) -> None:
+        """Test-split evaluation is slow, so run it detached as a polled job like imports."""
+        reap_old_jobs()
+        job_id = new_job_id()
+        with JOBS_LOCK:
+            JOBS[job_id] = {
+                "job_id": job_id,
+                "kind": "test_split",
+                "status": "running",
+                "run_group": run_group,
+                "run_name": run_name,
+                "run_dir": pipeline.repo_relative(run_dir),
+                "created_at": utcnow_iso(),
+                "updated_at": utcnow_iso(),
+                "message": "Running test-split evaluation",
+                "result": None,
+                "error": None,
+            }
+
+        def worker() -> None:
+            try:
+                result = pipeline.run_test_split(
+                    run_dir,
+                    dataset_dir=payload.get("dataset_dir"),
+                    device=payload.get("device", "cpu"),
+                    image_size=payload.get("image_size"),
+                )
+            except Exception as exc:
+                update_job(job_id, status="failed", error=str(exc), message="Test-split evaluation failed")
+                append_training_ui_interaction({"source": "training_api", "action": "run_test_split_failed", "job_id": job_id, "error": str(exc)})
+                return
+            update_job(job_id, status="completed", result=result, message="Test-split evaluation complete")
+            append_training_ui_interaction({"source": "training_api", "action": "run_test_split", "job_id": job_id, "run_dir": result["run_dir"]})
+
+        threading.Thread(target=worker, name=f"test-split-{job_id}", daemon=True).start()
+        self._log_training_action("run_test_split_started", {"job_id": job_id, "run_dir": pipeline.repo_relative(run_dir)})
+        self._respond_json({"job_id": job_id, "status": "running", "run_group": run_group, "run_name": run_name}, status=202)
+
+    def _handle_list_run_groups(self) -> None:
+        try:
+            groups = pipeline.list_run_groups(pipeline.DEFAULT_RUNS_DIR)
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        self._respond_json({"run_groups": groups})
+
+    def _handle_show_run_group(self, run_group: str) -> None:
+        try:
+            runs = pipeline.collect_run_group_summaries(run_group, pipeline.DEFAULT_RUNS_DIR)
+        except ValueError as exc:
+            self._respond_json({"error": str(exc)}, status=404)
+            return
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=500)
+            return
+        promoted_run_name, reason = pipeline.best_run_by_metric(runs)
+        self._respond_json({
+            "run_group": run_group,
+            "run_count": len(runs),
+            "runs": runs,
+            "suggested_run_name": promoted_run_name,
+            "suggested_reason": reason,
+        })
+
+    def _handle_job_status(self, job_id: str) -> None:
+        with JOBS_LOCK:
+            job = JOBS.get(job_id.strip("/"))
+            payload = dict(job) if job else None
+        if payload is None:
+            self._respond_json({"error": "job not found"}, status=404)
+            return
+        self._respond_json(payload)
+
+    def _handle_read_evaluation_report(self, parsed) -> None:
+        run_group = (query_text(parsed, "run_group") or "").strip()
+        if not run_group or "/" in run_group:
+            self._respond_json({"error": "run_group is required"}, status=400)
+            return
+        reports_dir = pipeline.repo_resolve(WORKSPACE_DIR / "reports")
+        markdown_path = reports_dir / f"{run_group}_evaluation.md"
+        json_path = reports_dir / f"{run_group}_evaluation.json"
+        if not markdown_path.is_file():
+            self._respond_json({"run_group": run_group, "exists": False, "markdown": None}, status=200)
+            return
+        self._respond_json({
+            "run_group": run_group,
+            "exists": True,
+            "report_markdown_path": pipeline.repo_relative(markdown_path),
+            "report_path": pipeline.repo_relative(json_path) if json_path.is_file() else None,
+            "markdown": markdown_path.read_text(encoding="utf-8"),
+        })
+
     def _handle_run_test_split(self, run_group: str, run_name: str) -> None:
         run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
         try:
             payload = self._json_body()
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        if payload.get("background"):
+            self._start_test_split_job(run_dir, run_group, run_name, payload)
+            return
+        try:
             result = pipeline.run_test_split(
                 run_dir,
                 dataset_dir=payload.get("dataset_dir"),

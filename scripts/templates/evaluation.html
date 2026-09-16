@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Evaluate</title>
+  <link rel="stylesheet" href="/static/pipeline.css">
+</head>
+<body data-page="evaluation">
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">07<sup>/07</sup></div>
+        <div>
+          <h1>Evaluate &amp; Promote</h1>
+          <p class="subtitle">Compare the runs in a run group, score the held-out test split, write the evaluation report, and promote the winning weight.</p>
+        </div>
+      </div>
+      __STAGE_NAV__
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Run Group</h2>
+        <div class="row">
+          <label class="field" style="min-width:340px;"><span>Run group</span><select id="groupSelect"></select></label>
+          <button id="loadGroup" class="primary" type="button">Load Results</button>
+          <button id="refreshGroups" type="button">Refresh Groups</button>
+        </div>
+        <div class="status" id="groupStatus"></div>
+      </section>
+
+      <section class="card">
+        <h2>Results</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr>
+              <th>Run</th><th>val mAP50</th><th>val mAP50-95</th><th>val P</th><th>val R</th>
+              <th>test mAP50</th><th>test mAP50-95</th><th>best.pt</th><th>Test split</th>
+            </tr></thead>
+            <tbody id="resultsBody"><tr><td colspan="9" class="empty">Pick a run group and press Load Results.</td></tr></tbody>
+          </table>
+        </div>
+        <div class="status" id="testStatus"></div>
+      </section>
+
+      <div class="cols">
+        <section class="card">
+          <h2>Evaluation Report</h2>
+          <div class="grid2">
+            <label class="field"><span>Promoted run (optional)</span><select id="promotedRun"><option value="">Auto: best mAP50</option></select></label>
+            <label class="field"><span>Promotion reason (optional)</span><input id="promotionReason" placeholder="why this run wins"></label>
+          </div>
+          <div class="row">
+            <button id="writeReport" class="primary" type="button" disabled>Write Evaluation Report</button>
+            <button id="loadReport" type="button" disabled>Reload Report</button>
+          </div>
+          <div class="status" id="reportStatus"></div>
+          <pre class="md" id="reportView">No report loaded.</pre>
+        </section>
+
+        <section class="card">
+          <h2>Promote Weight</h2>
+          <p class="hint">Promotion is a two-step flow. The backend refuses until <code>docs/yolo_weight_recreation.md</code> already documents the target weight name. Update the doc first, then acknowledge below and retry.</p>
+          <div class="grid2">
+            <label class="field"><span>Run to promote</span><select id="promoteRun"></select></label>
+            <label class="field"><span>Target weight name</span><input id="targetName" placeholder="yolo26n_myrun_2026-01-01_best.pt"></label>
+          </div>
+          <label class="row check" style="font-size:12px;">
+            <input id="ackDoc" type="checkbox"> I have updated docs/yolo_weight_recreation.md for this weight name
+          </label>
+          <label class="row check" style="font-size:12px;">
+            <input id="overwriteWeight" type="checkbox"> Overwrite an existing promoted weight with this name
+          </label>
+          <div class="row">
+            <button id="promoteWeight" class="danger" type="button" disabled>Promote Best Weight</button>
+          </div>
+          <div class="status" id="promoteStatus"></div>
+          <pre class="code" id="promoteDetail" style="display:none;"></pre>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/pipeline.js"></script>
+  <script>
+    const P = window.Pipeline;
+    const state = { groups: [], runs: [], group: null, jobTimer: null };
+    const params = new URLSearchParams(window.location.search);
+
+    async function loadGroups() {
+      const data = await P.api('/api/training/run-groups');
+      state.groups = data.run_groups || [];
+      document.getElementById('groupSelect').innerHTML = state.groups.map(function (group) {
+        return '<option value="' + P.esc(group.run_group) + '">' + P.esc(group.run_group) +
+          ' (' + group.run_count + ' runs, ' + group.test_metrics_count + ' with test metrics)</option>';
+      }).join('') || '<option value="">No run groups with results.csv yet</option>';
+      const wanted = params.get('run_group');
+      if (wanted && state.groups.some(function (group) { return group.run_group === wanted; })) {
+        document.getElementById('groupSelect').value = wanted;
+      }
+      P.setStatus('groupStatus', state.groups.length + ' run group(s) available.', '');
+    }
+
+    function metricCell(metrics, key) {
+      return P.fmt((metrics || {})[key]);
+    }
+
+    async function loadGroupResults() {
+      const group = document.getElementById('groupSelect').value;
+      if (!group) { P.setStatus('groupStatus', 'No run group selected.', 'err'); return; }
+      state.group = group;
+      P.setStatus('groupStatus', 'Loading ' + group + '\u2026');
+      try {
+        const data = await P.api('/api/training/run-groups/' + encodeURIComponent(group));
+        state.runs = data.runs || [];
+        renderResults();
+        if (data.suggested_run_name) {
+          document.getElementById('promoteRun').value = data.suggested_run_name;
+          document.getElementById('promotionReason').placeholder = data.suggested_reason || 'why this run wins';
+          updatePromoteButton();
+        }
+        P.setStatus('groupStatus', group + ': ' + state.runs.length + ' run(s). Suggested: ' +
+          (data.suggested_run_name || 'none') + '.', 'ok');
+      } catch (error) {
+        state.runs = [];
+        renderResults();
+        P.setStatus('groupStatus', 'Could not load run group: ' + error.message, 'err');
+        return;
+      }
+      document.getElementById('writeReport').disabled = false;
+      document.getElementById('loadReport').disabled = false;
+      await loadReport(true);
+    }
+
+    function renderResults() {
+      const body = document.getElementById('resultsBody');
+      if (!state.runs.length) {
+        body.innerHTML = '<tr><td colspan="9" class="empty">This run group has no runs with results.csv.</td></tr>';
+        return;
+      }
+      body.innerHTML = state.runs.map(function (run) {
+        const val = run.validation_metrics || {};
+        const test = run.test_metrics || {};
+        return '<tr><td>' + P.esc(run.run_name) + '</td>' +
+          '<td>' + metricCell(val, 'mAP50') + '</td><td>' + metricCell(val, 'mAP50-95') + '</td>' +
+          '<td>' + metricCell(val, 'precision') + '</td><td>' + metricCell(val, 'recall') + '</td>' +
+          '<td>' + metricCell(test, 'mAP50') + '</td><td>' + metricCell(test, 'mAP50-95') + '</td>' +
+          '<td>' + (run.weights_path ? '<span class="pill ok">yes</span>' : '<span class="pill warn">none</span>') + '</td>' +
+          '<td><button type="button" class="ghost test-split" data-run="' + P.esc(run.run_name) + '">Run Test Split</button></td></tr>';
+      }).join('');
+      body.querySelectorAll('button.test-split').forEach(function (button) {
+        button.addEventListener('click', function () { runTestSplit(button.dataset.run, button); });
+      });
+      const options = state.runs.map(function (run) {
+        return '<option value="' + P.esc(run.run_name) + '">' + P.esc(run.run_name) + '</option>';
+      }).join('');
+      document.getElementById('promotedRun').innerHTML = '<option value="">Auto: best mAP50</option>' + options;
+      document.getElementById('promoteRun').innerHTML = options || '<option value="">No runs</option>';
+      updatePromoteButton();
+      P.autoLogControls(document);
+    }
+
+    async function runTestSplit(runName, button) {
+      if (!state.group) { return; }
+      button.disabled = true;
+      P.setStatus('testStatus', 'Starting test-split evaluation for ' + runName + '… (background job)');
+      P.logInteraction('click', { control: 'run_test_split', run_group: state.group, run_name: runName });
+      let job;
+      try {
+        job = await P.api('/api/training/runs/' + encodeURIComponent(state.group) + '/' +
+          encodeURIComponent(runName) + '/test-split', { method: 'POST', body: { background: true, device: 'cpu' } });
+      } catch (error) {
+        button.disabled = false;
+        P.setStatus('testStatus', 'Test split failed to start: ' + error.message, 'err');
+        return;
+      }
+      pollJob(job.job_id, runName, button);
+    }
+
+    function pollJob(jobId, runName, button) {
+      if (state.jobTimer) { window.clearInterval(state.jobTimer); }
+      state.jobTimer = window.setInterval(async function () {
+        let job;
+        try {
+          job = await P.api('/api/jobs/' + encodeURIComponent(jobId));
+        } catch (error) {
+          window.clearInterval(state.jobTimer);
+          button.disabled = false;
+          P.setStatus('testStatus', 'Job polling failed: ' + error.message, 'err');
+          return;
+        }
+        if (job.status === 'running') {
+          P.setStatus('testStatus', 'Test split running for ' + runName + ' (job ' + jobId + ')…');
+          return;
+        }
+        window.clearInterval(state.jobTimer);
+        button.disabled = false;
+        if (job.status === 'completed') {
+          const metrics = (job.result || {}).metrics || {};
+          const message = 'Test split complete for ' + runName + ': mAP50 ' + P.fmt(metrics.mAP50) +
+            ' · ' + ((job.result || {}).test_metrics_path || '');
+          /* Reload the group so the new test metrics land in the results table. */
+          loadGroups().then(loadGroupResults).then(function () { P.setStatus('testStatus', message, 'ok'); });
+          P.setStatus('testStatus', message, 'ok');
+        } else {
+          P.setStatus('testStatus', 'Test split failed for ' + runName + ': ' + (job.error || 'unknown error'), 'err');
+        }
+      }, 3000);
+    }
+
+    async function writeReport() {
+      if (!state.group) { return; }
+      const payload = { run_group: state.group };
+      const promoted = document.getElementById('promotedRun').value;
+      const reason = document.getElementById('promotionReason').value.trim();
+      if (promoted) { payload.promoted_run_name = promoted; }
+      if (reason) { payload.promotion_reason = reason; }
+      P.setStatus('reportStatus', 'Writing evaluation report…');
+      try {
+        const data = await P.api('/api/training/evaluation-report', { method: 'POST', body: payload });
+        state.runs = data.runs || state.runs;
+        renderResults();
+        if (data.promoted_run_name) {
+          document.getElementById('promoteRun').value = data.promoted_run_name;
+          updatePromoteButton();
+        }
+        await loadReport(true);
+        P.setStatus('reportStatus', 'Wrote ' + data.report_markdown_path + ' (' + data.run_count +
+          ' runs; promoted ' + (data.promoted_run_name || 'none') + ').', 'ok');
+      } catch (error) {
+        P.setStatus('reportStatus', 'Report failed: ' + error.message, 'err');
+      }
+    }
+
+    async function loadReport(quiet) {
+      if (!state.group) { return; }
+      try {
+        const data = await P.api('/api/training/evaluation-report?run_group=' + encodeURIComponent(state.group));
+        if (!data.exists) {
+          document.getElementById('reportView').innerHTML = '<span class="empty">No report written for this run group yet.</span>';
+          if (!quiet) { P.setStatus('reportStatus', 'No report on disk yet.', ''); }
+          return;
+        }
+        document.getElementById('reportView').innerHTML = P.renderMarkdown(data.markdown);
+        if (!quiet) { P.setStatus('reportStatus', 'Loaded ' + data.report_markdown_path + '.', 'ok'); }
+      } catch (error) {
+        if (!quiet) { P.setStatus('reportStatus', 'Could not read report: ' + error.message, 'err'); }
+      }
+    }
+
+    function updatePromoteButton() {
+      const hasRun = Boolean(document.getElementById('promoteRun').value);
+      const hasName = Boolean(document.getElementById('targetName').value.trim());
+      document.getElementById('promoteWeight').disabled = !(hasRun && hasName);
+    }
+
+    async function promoteWeight() {
+      const runName = document.getElementById('promoteRun').value;
+      const targetName = document.getElementById('targetName').value.trim();
+      const ack = document.getElementById('ackDoc').checked;
+      const detail = document.getElementById('promoteDetail');
+      P.setStatus('promoteStatus', 'Promoting ' + runName + '…');
+      try {
+        const data = await P.api('/api/training/promote-weight', {
+          method: 'POST',
+          body: {
+            run_group: state.group,
+            run_name: runName,
+            target_name: targetName,
+            recreation_doc_updated: ack,
+            overwrite: document.getElementById('overwriteWeight').checked,
+          },
+        });
+        detail.style.display = 'block';
+        detail.textContent = JSON.stringify(data, null, 2);
+        P.setStatus('promoteStatus', 'Promoted to ' + data.promoted_path + '.', 'ok');
+      } catch (error) {
+        detail.style.display = 'block';
+        detail.textContent = 'Backend refusal:\n\n' + error.message +
+          '\n\nStep 1: add this weight name and its recreation recipe to docs/yolo_weight_recreation.md.' +
+          '\nStep 2: tick the acknowledgement box above and press Promote again.';
+        P.setStatus('promoteStatus', 'Promotion refused — see the refusal text below.', 'err');
+      }
+    }
+
+    function wire() {
+      document.getElementById('loadGroup').addEventListener('click', loadGroupResults);
+      document.getElementById('refreshGroups').addEventListener('click', function () { loadGroups(); });
+      document.getElementById('writeReport').addEventListener('click', writeReport);
+      document.getElementById('loadReport').addEventListener('click', function () { loadReport(false); });
+      document.getElementById('targetName').addEventListener('input', updatePromoteButton);
+      document.getElementById('promoteRun').addEventListener('change', updatePromoteButton);
+      document.getElementById('promoteWeight').addEventListener('click', promoteWeight);
+      P.autoLogControls(document);
+      P.captureConsoleErrors();
+    }
+
+    wire();
+    loadGroups().then(function () {
+      if (params.get('run_group')) { return loadGroupResults(); }
+      return null;
+    }).catch(function (error) {
+      P.setStatus('groupStatus', 'Load failed: ' + error.message, 'err');
+    });
+  </script>
+</body>
+</html>
