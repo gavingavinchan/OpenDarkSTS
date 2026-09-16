@@ -144,10 +144,16 @@ def verify_step4(page, base_url: str) -> dict:
     page.wait_for_timeout(200)
 
     page.click("#previewSplits")
-    page.wait_for_timeout(200)
+    page.wait_for_function("document.getElementById('splitStatus').textContent.indexOf('Previewing') === -1", timeout=60000)
+    page.wait_for_timeout(300)
     preview = text_of(page, "#splitPreview").lower()
     check("step4: Preview Splits renders train/val/test counts",
           "train" in preview and "val" in preview and "test" in preview, preview.replace("\n", " ")[:90])
+    group_count = text_of(page, "#splitGroupCount")
+    spanning = text_of(page, "#splitSpanning")
+    check("step4: Preview Splits reports scene groups and zero groups spanning splits",
+          group_count.isdigit() and int(group_count) > 0 and spanning == "0",
+          f"{group_count} groups, {spanning} spanning")
     shot(page, "step4_03_split_preview")
 
     page.fill("#datasetName", SCRATCH_DATASET_NAME)
@@ -263,10 +269,61 @@ def verify_step5(page, base_url: str, selection: dict) -> dict:
             config_path = row.query_selector("button.use-config").get_attribute("data-path")
     check("step5: saved config appears in the saved-config table", config_path is not None, str(config_path))
     if config_path:
+        # Dirty every field first: Use must replace them with the config's own values,
+        # not leave a different dataset/device/epoch count visible next to config A.
+        page.fill("#runGroup", "dirty_group")
+        page.fill("#runName", "dirty_run")
+        page.fill("#epochs", "77")
+        page.fill("#batch", "9")
+        page.fill("#imageSize", "1280")
+        page.fill("#device", "cuda:0")
+        page.fill("#workers", "8")
+        page.uncheck("#overwrite")
+        page.click("#augClear")
+        page.wait_for_timeout(150)
+
         page.click(f'button.use-config[data-path="{config_path}"]')
         page.wait_for_timeout(1500)
         check("step5: Use re-selects a saved config", "Using config" in text_of(page, "#setupStatus") or
               "Readiness" in text_of(page, "#setupStatus"), text_of(page, "#setupStatus")[:120])
+
+        stored = next((item for item in api_json(base_url, "/api/training/configs")["configs"]
+                       if item["config_path"] == config_path), {})
+        form = page.evaluate(
+            "() => ({"
+            " dataset: document.getElementById('datasetSelect').selectedOptions[0].textContent,"
+            " model: document.getElementById('weightSelect').selectedOptions[0].textContent,"
+            " run_group: document.getElementById('runGroup').value,"
+            " run_name: document.getElementById('runName').value,"
+            " image_size: document.getElementById('imageSize').value,"
+            " epochs: document.getElementById('epochs').value,"
+            " batch: document.getElementById('batch').value,"
+            " device: document.getElementById('device').value,"
+            " workers: document.getElementById('workers').value,"
+            " patience: document.getElementById('patience').value,"
+            " seed: document.getElementById('seed').value,"
+            " overwrite: document.getElementById('overwrite').checked,"
+            " augmentation: Array.from(document.querySelectorAll('input.aug'))"
+            "   .filter(n => n.value !== '').map(n => n.dataset.key).sort().join(',')"
+            "})"
+        )
+        expected_aug = ",".join(sorted(stored.get("augmentation") or {}))
+        mismatches = []
+        for field in ("run_group", "run_name", "image_size", "epochs", "batch", "device", "workers", "patience", "seed"):
+            want = "" if stored.get(field) is None else str(stored.get(field))
+            if form[field] != want:
+                mismatches.append(f"{field}: form={form[field]!r} config={want!r}")
+        if str(stored.get("dataset_name") or "") not in form["dataset"]:
+            mismatches.append(f"dataset: form={form['dataset']!r} config={stored.get('dataset_name')!r}")
+        if str(stored.get("model") or "") not in form["model"]:
+            mismatches.append(f"model: form={form['model']!r} config={stored.get('model')!r}")
+        if form["overwrite"] != bool(stored.get("overwrite")):
+            mismatches.append(f"overwrite: form={form['overwrite']} config={stored.get('overwrite')}")
+        if form["augmentation"] != expected_aug:
+            mismatches.append(f"augmentation: form={form['augmentation']!r} config={expected_aug!r}")
+        check("step5: Use loads every field of the chosen config into the form",
+              not mismatches, "; ".join(mismatches[:4]))
+        shot(page, "step5_06_use_config")
 
     return {"config_path": config_path, "selection_path": selection.get("selection_path"), "ready": ready}
 
@@ -360,14 +417,33 @@ def verify_step7(page, base_url: str, trained: bool) -> None:
     groups = [option.get_attribute("value") for option in page.query_selector_all("#groupSelect option")]
     check("step7: run groups are listed from the real workspace", len([g for g in groups if g]) > 0, f"{len(groups)} groups")
 
-    target = SCRATCH_RUN_GROUP if (trained and SCRATCH_RUN_GROUP in groups) else None
-    if target is None:
-        target = next((g for g in groups if g and "smoke" in g), next((g for g in groups if g), None))
-    check("step7: a run group can be selected for evaluation", target is not None, str(target))
-    if target is None:
+    # Every write on this page (evaluation report, promotion) must land in the scratch run
+    # group this script owns. There is deliberately no fallback: overwriting a real group's
+    # report would destroy its baseline and promotion rationale, so an unavailable scratch
+    # run is a FAIL, not a reason to pick someone else's run group.
+    scratch_available = bool(trained) and SCRATCH_RUN_GROUP in groups
+    check("step7: the scratch run group is available to evaluate", scratch_available,
+          f"trained={trained}, scratch group present={SCRATCH_RUN_GROUP in groups}")
+    target = SCRATCH_RUN_GROUP if scratch_available else None
+    read_only_target = target or next((g for g in groups if g), None)
+    check("step7: a run group can be selected for evaluation", read_only_target is not None, str(read_only_target))
+    if read_only_target is None:
         return
 
-    page.select_option("#groupSelect", target)
+    other = next((group for group in groups if group and group != groups[0]), None)
+    if other:
+        page.select_option("#groupSelect", other)
+        page.click("#refreshGroups")
+        page.wait_for_function("document.getElementById('groupStatus').textContent.indexOf('available') !== -1", timeout=30000)
+        page.wait_for_timeout(300)
+        kept = page.eval_on_selector("#groupSelect", "node => node.value")
+        check("step7: Refresh Groups keeps the currently selected run group", kept == other,
+              f"selected {other!r}, after refresh {kept!r}")
+    else:
+        check("step7: Refresh Groups keeps the currently selected run group", False,
+              "skipped: only one run group is available")
+
+    page.select_option("#groupSelect", read_only_target)
     page.click("#loadGroup")
     page.wait_for_function("document.getElementById('groupStatus').textContent.indexOf('Loading') === -1", timeout=60000)
     page.wait_for_timeout(500)
@@ -377,6 +453,18 @@ def verify_step7(page, base_url: str, trained: bool) -> None:
           len(rows) > 0 and "No report" not in body_text and "empty" not in (rows[0].get_attribute("class") or ""),
           f"{len(rows)} rows: {body_text.replace(chr(10), ' ')[:110]}")
     shot(page, "step7_02_results")
+
+    if not scratch_available:
+        skipped = "skipped: refusing to write a report into a non-scratch run group"
+        check("step7: Write Evaluation Report writes the markdown report", False, skipped)
+        check("step7: the generated markdown report is rendered on the page", False, skipped)
+        check("step7: Reload Report re-reads the report from disk", False, skipped)
+        check("step7: Run Test Split completes as a background job", False, skipped)
+        check("step7: completing a test split keeps the selected run group", False, skipped)
+        check("step7: Promote stays disabled until a run and target name are chosen", False, skipped)
+        check("step7: promotion is refused and the backend refusal text is shown", False, skipped)
+        check("step7: the refusal explains the two-step doc-first flow", False, skipped)
+        return
 
     page.click("#writeReport")
     page.wait_for_function("document.getElementById('reportStatus').textContent.indexOf('Writing') === -1", timeout=120000)
@@ -394,7 +482,7 @@ def verify_step7(page, base_url: str, trained: bool) -> None:
           text_of(page, "#reportStatus").startswith("Loaded "), text_of(page, "#reportStatus")[:120])
 
     test_buttons = page.query_selector_all("#resultsBody button.test-split")
-    if test_buttons and trained:
+    if test_buttons:
         test_buttons[0].click()
         page.wait_for_function(
             "document.getElementById('testStatus').textContent.indexOf('running') === -1 && "
@@ -404,6 +492,10 @@ def verify_step7(page, base_url: str, trained: bool) -> None:
         test_status = text_of(page, "#testStatus")
         check("step7: Run Test Split completes as a background job",
               test_status.startswith("Test split complete"), test_status[:200])
+        page.wait_for_timeout(1500)
+        after_test = page.eval_on_selector("#groupSelect", "node => node.value")
+        check("step7: completing a test split keeps the selected run group",
+              after_test == target, f"selected {target!r}, after test split {after_test!r}")
         shot(page, "step7_04_test_split")
     else:
         check("step7: Run Test Split completes as a background job", False,

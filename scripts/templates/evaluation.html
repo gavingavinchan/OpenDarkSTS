@@ -89,15 +89,18 @@
     const params = new URLSearchParams(window.location.search);
 
     async function loadGroups() {
+      const picker = document.getElementById('groupSelect');
+      /* Rebuilding the picker must not silently move the user to another run group:
+         keep whatever is selected now, then the loaded group, then the URL's group. */
+      const previous = picker.value || state.group || params.get('run_group');
       const data = await P.api('/api/training/run-groups');
       state.groups = data.run_groups || [];
-      document.getElementById('groupSelect').innerHTML = state.groups.map(function (group) {
+      picker.innerHTML = state.groups.map(function (group) {
         return '<option value="' + P.esc(group.run_group) + '">' + P.esc(group.run_group) +
           ' (' + group.run_count + ' runs, ' + group.test_metrics_count + ' with test metrics)</option>';
       }).join('') || '<option value="">No run groups with results.csv yet</option>';
-      const wanted = params.get('run_group');
-      if (wanted && state.groups.some(function (group) { return group.run_group === wanted; })) {
-        document.getElementById('groupSelect').value = wanted;
+      if (previous && state.groups.some(function (group) { return group.run_group === previous; })) {
+        picker.value = previous;
       }
       P.setStatus('groupStatus', state.groups.length + ' run group(s) available.', '');
     }

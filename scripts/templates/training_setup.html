@@ -308,14 +308,67 @@
       }).join('');
       body.querySelectorAll('button.use-config').forEach(function (button) {
         button.addEventListener('click', function () {
+          const config = configs.find(function (item) { return item.config_path === button.dataset.path; });
           state.configPath = button.dataset.path;
           document.getElementById('checkReadiness').disabled = false;
           document.getElementById('previewCommand').disabled = false;
           P.logInteraction('click', { control: 'use_config', config_path: button.dataset.path });
-          P.setStatus('setupStatus', 'Using config ' + button.dataset.path + '.', 'ok');
+          /* Load the whole config into the form: readiness and the command preview are
+             sent for this config, so the visible fields must be this config's fields. */
+          const applied = applyConfigToForm(config);
+          P.setStatus('setupStatus', 'Using config ' + button.dataset.path +
+            (applied ? '.' : ' (its dataset is not in the exported-dataset list).'), applied ? 'ok' : 'err');
           checkReadiness();
         });
       });
+    }
+
+    function setFieldValue(id, value) {
+      document.getElementById(id).value = (value === null || value === undefined) ? '' : String(value);
+    }
+
+    function selectDatasetFor(config) {
+      const index = state.datasets.findIndex(function (dataset) {
+        return String(dataset.dataset_name) === String(config.dataset_name) &&
+          String(dataset.dataset_version || 'v1') === String(config.dataset_version || 'v1');
+      });
+      if (index < 0) { return false; }
+      document.getElementById('datasetSelect').value = String(index);
+      onDatasetChange();
+      return true;
+    }
+
+    function selectWeightFor(config) {
+      const index = state.weights.findIndex(function (weight) {
+        return String(weight.path) === String(config.model) || String(weight.name) === String(config.model);
+      });
+      if (index < 0) { return false; }
+      document.getElementById('weightSelect').value = String(index);
+      onWeightChange();
+      return true;
+    }
+
+    function applyConfigToForm(config) {
+      if (!config) { return false; }
+      const datasetLoaded = selectDatasetFor(config);
+      selectWeightFor(config);
+      setFieldValue('runGroup', config.run_group);
+      setFieldValue('runName', config.run_name);
+      setFieldValue('imageSize', config.image_size);
+      setFieldValue('epochs', config.epochs);
+      setFieldValue('batch', config.batch);
+      setFieldValue('patience', config.patience);
+      setFieldValue('seed', config.seed);
+      setFieldValue('device', config.device);
+      setFieldValue('workers', config.workers);
+      setFieldValue('configName', String(config.config_path || '').split('/').pop().replace(/\.json$/, ''));
+      document.getElementById('overwrite').checked = Boolean(config.overwrite);
+      const augmentation = config.augmentation || {};
+      document.querySelectorAll('input.aug').forEach(function (input) {
+        const value = augmentation[input.dataset.key];
+        input.value = (value === null || value === undefined) ? '' : String(value);
+      });
+      return datasetLoaded;
     }
 
     function wire() {

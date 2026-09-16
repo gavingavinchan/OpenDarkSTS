@@ -278,6 +278,14 @@ def post_json_capture(url: str, payload: dict) -> tuple[int, dict]:
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
+def get_json_capture(url: str) -> tuple[int, dict]:
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
 def prepare_training_workspace(tmp_path: Path, monkeypatch) -> tuple[object, Path]:
     from scripts import training_pipeline_ui as ui
 

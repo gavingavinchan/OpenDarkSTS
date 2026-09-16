@@ -12,7 +12,7 @@ import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 try:
     from .visual_review_lib import (
@@ -685,8 +685,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._handle_read_evaluation_report(parsed)
             return
         if path.startswith("/api/training/run-groups/"):
-            run_group = path[len("/api/training/run-groups/"):].strip("/")
-            if run_group and "/" not in run_group:
+            run_group = unquote(path[len("/api/training/run-groups/"):].strip("/"))
+            if run_group and "/" not in run_group and run_group not in {".", ".."}:
                 self._handle_show_run_group(run_group)
                 return
         if path.startswith("/api/jobs/"):
@@ -1112,8 +1112,11 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         self._respond_json(result)
 
     def _training_run_ref(self, raw: str) -> tuple[str, str] | None:
-        parts = [part for part in raw.strip("/").split("/") if part]
-        if len(parts) != 2 or any(part in {".", ".."} for part in parts):
+        # The browser percent-encodes each segment, so decode before touching the filesystem.
+        parts = [unquote(part) for part in raw.strip("/").split("/") if part]
+        if len(parts) != 2:
+            return None
+        if any(part in {".", ".."} or "/" in part or "\\" in part for part in parts):
             return None
         return parts[0], parts[1]
 

@@ -3140,6 +3140,13 @@ def save_training_config(
         raise ValueError("run_name is required")
     if not clean_model:
         raise ValueError("model (starting weights) is required")
+    # Run group/name become URL path segments and directory names; whitespace makes both
+    # ambiguous, so it is rejected at the source rather than escaped everywhere downstream.
+    for label, value in (("run_group", clean_group), ("run_name", clean_run_name)):
+        if any(character.isspace() for character in value):
+            raise ValueError(f"{label} must not contain whitespace: {value!r}")
+        if "/" in value or "\\" in value or value in {".", ".."}:
+            raise ValueError(f"{label} must be a single path segment: {value!r}")
     if not str(dataset_name or "").strip():
         raise ValueError("dataset_name is required")
 
@@ -3213,6 +3220,10 @@ def list_training_configs(configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR
             "batch": config.get("batch"),
             "device": config.get("device"),
             "seed": config.get("seed"),
+            "patience": config.get("patience"),
+            "workers": config.get("workers"),
+            "augmentation": dict(config.get("augmentation") or {}),
+            "output_dir": config.get("output_dir"),
             "overwrite": bool(config.get("overwrite")),
             "missing": config_missing_items(config),
         })
