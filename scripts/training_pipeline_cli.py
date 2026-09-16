@@ -150,17 +150,21 @@ def command_export_dataset(args: argparse.Namespace) -> tuple[int, dict[str, Any
     if args.dry_run:
         dataset_dir = pipeline.repo_resolve(selection.get("export", {}).get("output_dir"))
         selected_items = selection.get("items") or []
-        selected_only_label_count = sum(
-            len(item.get("selected_detection_ids") or [])
-            for item in selected_items
-            if item.get("include_labels") == "selected_only"
-        )
+        background = selection.get("background_negatives") or {}
+        background_count = 0
+        if background.get("enabled"):
+            requested_keys = [str(key) for key in background.get("image_keys") or []]
+            background_count = pipeline.background_negative_limit(
+                len(selected_items), len(requested_keys), background.get("max_fraction")
+            )
+        # One YOLO label file is written per exported image, matching the real export path.
+        exported_image_count = len(selected_items) + background_count
         result = {
             "dataset_dir": str(dataset_dir),
             "dataset_manifest": str(dataset_dir / "dataset_manifest.json"),
             "data_yaml": str(dataset_dir / "data.yaml"),
-            "exported_image_count": len(selected_items),
-            "exported_label_count": selected_only_label_count,
+            "exported_image_count": exported_image_count,
+            "exported_label_count": exported_image_count,
         }
         add_diagnostics(result, args, "export_dataset_selection", selection_path=args.selection, dataset_dir=dataset_dir)
         return 0, envelope("export-dataset", ok=True, result=result)

@@ -1,0 +1,86 @@
+{
+  "cache_path": "REPLACED_BY_TEST",
+  "detections": [
+    {
+      "class_id": 0,
+      "class_name": "ship",
+      "confidence": 0.610666,
+      "detection_id": "auto-0001",
+      "height": 0.008020822752666273,
+      "parent_detection_id": null,
+      "review_label": "ship_non_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:39:16Z",
+      "source_models": [
+        "yolo26n",
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.01739366754617415,
+      "x_center": 0.7916688654353562,
+      "y_center": 0.20254215337734882
+    },
+    {
+      "class_id": 0,
+      "class_name": "ship",
+      "confidence": 0.495,
+      "detection_id": "auto-0003",
+      "height": 0.02589484,
+      "parent_detection_id": null,
+      "review_label": "neither",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:39:19Z",
+      "source_models": [
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.01730693,
+      "x_center": 0.73434502,
+      "y_center": 0.83669722
+    },
+    {
+      "class_id": 1,
+      "class_name": "ships",
+      "confidence": 0.422676,
+      "detection_id": "auto-0004",
+      "height": 0.00722955815134581,
+      "parent_detection_id": null,
+      "review_label": "ships_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:39:20Z",
+      "source_models": [
+        "yolo26n"
+      ],
+      "source_type": "auto",
+      "width": 0.01648548812664908,
+      "x_center": 0.6025451187335091,
+      "y_center": 0.3358402742508887
+    },
+    {
+      "class_id": 0,
+      "class_name": "ship",
+      "confidence": 0.324824,
+      "detection_id": "auto-0005",
+      "height": 0.00741950228542415,
+      "parent_detection_id": null,
+      "review_label": "ship_non_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:39:21Z",
+      "source_models": [
+        "yolo26n",
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.009401583113456421,
+      "x_center": 0.32759683377308707,
+      "y_center": 0.12676358557643463
+    }
+  ],
+  "height": 1969,
+  "image_filename": "2020-01-24_scene1_tile_1_3.png",
+  "image_key": "2020-01-24_scene1_tile_1_3",
+  "review_status": "completed",
+  "reviewer": "gavin",
+  "schema_version": 1,
+  "width": 1895
+}

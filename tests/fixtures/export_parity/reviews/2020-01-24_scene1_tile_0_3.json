@@ -1,0 +1,69 @@
+{
+  "cache_path": "REPLACED_BY_TEST",
+  "detections": [
+    {
+      "class_id": 0,
+      "class_name": "ship",
+      "confidence": 0.574919,
+      "detection_id": "auto-0001",
+      "height": 0.012204397334796752,
+      "parent_detection_id": null,
+      "review_label": "ship_non_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:38:55Z",
+      "source_models": [
+        "yolo26n",
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.016398487578558222,
+      "x_center": 0.93665024484302,
+      "y_center": 0.20709151708041962
+    },
+    {
+      "class_id": 1,
+      "class_name": "ships",
+      "confidence": 0.447665,
+      "detection_id": "auto-0002",
+      "height": 0.014806173657320483,
+      "parent_detection_id": null,
+      "review_label": "ships_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:38:39Z",
+      "source_models": [
+        "yolo26n",
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.008383384956185635,
+      "x_center": 0.8512949590745101,
+      "y_center": 0.8491253655672157
+    },
+    {
+      "class_id": 0,
+      "class_name": "ship",
+      "confidence": 0.407654,
+      "detection_id": "auto-0003",
+      "height": 0.017511190233977573,
+      "parent_detection_id": null,
+      "review_label": "ship_non_sts",
+      "reviewed": true,
+      "reviewed_at": "2026-04-26T07:38:55Z",
+      "source_models": [
+        "yolo26n",
+        "yolov8n"
+      ],
+      "source_type": "auto",
+      "width": 0.009368809272918823,
+      "x_center": 0.9648182297154899,
+      "y_center": 0.35105925737538146
+    }
+  ],
+  "height": 1966,
+  "image_filename": "2020-01-24_scene1_tile_0_3.png",
+  "image_key": "2020-01-24_scene1_tile_0_3",
+  "review_status": "completed",
+  "reviewer": "gavin",
+  "schema_version": 1,
+  "width": 1898
+}

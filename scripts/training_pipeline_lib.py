@@ -2480,56 +2480,14 @@ def find_review_for_image(image_key: str, reviews_dir: str | Path, *, include_in
     return candidates[0]
 
 
-def exportable_detections(review: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
-    # Reviewed positive labels are ground truth regardless of auto/manual origin.
-    selected_ids = item.get("selected_detection_ids")
-    if item.get("include_labels") == "selected_only":
-        if not isinstance(selected_ids, list):
-            raise ValueError(f"selected_only requires selected_detection_ids for image_key={item.get('image_key')}")
-        selected = {str(detection_id) for detection_id in selected_ids}
-    else:
-        selected = None
-
-    detections = []
-    for detection in review.get("detections", []):
-        if detection.get("review_label") not in REVIEW_LABEL_TO_CLASS:
-            continue
-        if selected is not None and str(detection.get("detection_id")) not in selected:
-            continue
-        detections.append(detection)
-    return detections
-
-
-def write_yolo_label_file(path: Path, detections: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for detection in detections:
-        class_id = REVIEW_LABEL_TO_CLASS[str(detection["review_label"])]
-        lines.append(
-            " ".join(
-                [
-                    str(class_id),
-                    f"{float(detection['x_center']):.8f}",
-                    f"{float(detection['y_center']):.8f}",
-                    f"{float(detection['width']):.8f}",
-                    f"{float(detection['height']):.8f}",
-                ]
-            )
-        )
-    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+# Canonical implementations live in visual_review_lib so the legacy export script and the
+# training pipeline always produce byte-identical labels and data.yaml files.
+exportable_detections = review_lib.exportable_detections
+write_yolo_label_file = review_lib.write_yolo_label_file
 
 
 def write_data_yaml(dataset_dir: Path) -> None:
-    content = (
-        f"path: {dataset_dir.resolve()}\n"
-        "train: images/train\n"
-        "val: images/val\n"
-        "test: images/test\n"
-        "names:\n"
-        "  0: ship\n"
-        "  1: ships\n"
-    )
-    (dataset_dir / "data.yaml").write_text(content)
+    review_lib.write_data_yaml(dataset_dir, split_layout=True)
 
 
 def relative_export_path(dataset_dir: Path, path: Path) -> str:

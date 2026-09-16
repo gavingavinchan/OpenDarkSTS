@@ -1231,13 +1231,28 @@ def queue_progress(reviews: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def exportable_detections(review: dict[str, Any]) -> list[dict[str, Any]]:
-    # Reviewed positive labels are ground truth regardless of auto/manual origin.
-    return [
-        detection
-        for detection in review.get("detections", [])
-        if detection.get("review_label") in EXPORTABLE_REVIEW_LABELS
-    ]
+def exportable_detections(review: dict[str, Any], item: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Canonical exportable-label filter shared by the legacy export and the training pipeline.
+
+    Reviewed positive labels are ground truth regardless of auto/manual origin. When a
+    dataset-selection ``item`` is supplied and it requests ``include_labels="selected_only"``,
+    only the listed ``selected_detection_ids`` are exported.
+    """
+    selected: set[str] | None = None
+    if item is not None and item.get("include_labels") == "selected_only":
+        selected_ids = item.get("selected_detection_ids")
+        if not isinstance(selected_ids, list):
+            raise ValueError(f"selected_only requires selected_detection_ids for image_key={item.get('image_key')}")
+        selected = {str(detection_id) for detection_id in selected_ids}
+
+    detections = []
+    for detection in review.get("detections", []):
+        if detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
+            continue
+        if selected is not None and str(detection.get("detection_id")) not in selected:
+            continue
+        detections.append(detection)
+    return detections
 
 
 def write_yolo_label_file(label_path: str | Path, detections: list[dict[str, Any]]) -> None:
@@ -1261,13 +1276,21 @@ def write_yolo_label_file(label_path: str | Path, detections: list[dict[str, Any
     target.write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
-def write_data_yaml(dataset_dir: str | Path) -> None:
+def write_data_yaml(dataset_dir: str | Path, *, split_layout: bool = False) -> None:
+    """Canonical data.yaml writer.
+
+    ``split_layout=False`` keeps the legacy flat single-directory export layout.
+    ``split_layout=True`` writes the train/val/test layout used by dataset selections.
+    """
     target = repo_resolve(Path(dataset_dir) / "data.yaml")
     ensure_parent(target)
+    if split_layout:
+        splits = "train: images/train\nval: images/val\ntest: images/test\n"
+    else:
+        splits = "train: images\nval: images\n"
     content = (
         f"path: {repo_resolve(dataset_dir)}\n"
-        "train: images\n"
-        "val: images\n"
+        f"{splits}"
         "names:\n"
         "  0: ship\n"
         "  1: ships\n"

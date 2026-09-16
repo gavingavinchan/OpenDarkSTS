@@ -134,6 +134,8 @@ Options:
 - `--include-incomplete`: allow incomplete reviews if the selection/export logic supports them.
 - `--dry-run`: report expected output paths and counts without writing artifacts.
 
+In both modes `exported_image_count` and `exported_label_count` count the same thing: one image and one YOLO label file per exported item, including enabled background negatives. `--dry-run` does not read review JSONs, so it cannot report per-bbox label row counts.
+
 Writes, unless `--dry-run` is used:
 
 - `workspace/datasets/<dataset>/images/{train,val,test}/...`
