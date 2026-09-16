@@ -213,3 +213,53 @@ Run directory: `workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960/yolo26n_aug_
 - Re-run the multi-model suite on `sts_clean_v1` before making any architecture claims; the v3/v4 suite rankings are not evidence.
 - The YOLOv8n default in `scripts/preprocess_sentinel_tiles.py` still points at a v2 balanced run and is still contaminated; retrain it on `sts_clean_v1` or drop it from the review prefill.
 - Consider a longer schedule (the run had not converged) and revisit the Madhulika deduplication if the lost crops turn out to matter.
+
+## Operational Run 2026-09
+
+First real end-to-end runs of the satellite-first pipeline (`scripts/pipeline.py`) with the promoted clean-split weight `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`, `--conf 0.25`, `--radius 1000`.
+
+Command shape:
+
+```bash
+.venv/bin/python scripts/pipeline.py \
+  --images workspace/inputs/<date> \
+  --ais-dir "/home/gavin/Downloads/AIS data" \
+  --date <YYYY-MM-DD> \
+  --output workspace/reports/operational/<date>/dark_sts.csv \
+  --also-write workspace/reports/operational/<date>/dark_sts.json
+```
+
+Dates were chosen by intersecting the Sentinel-2 tile dates under `Sentinel 2A/sentinel2/` with the NOAA AIS day files under `AIS data 20xx/all_csv/`: `59` dates have both. Tiles were copied into `workspace/inputs/<date>/` per the workspace rule; the read-only source was never modified.
+
+### Results
+
+| Date | Inputs | STS detections | FULLY_DARK | PARTIALLY_DARK | AIS_PRESENT |
+|---|---|---|---|---|---|
+| 2020-01-14 | 1 cropped JPEG (sidecar bbox) + 4 root GeoTIFFs | 4 | 1 | 1 | 2 |
+| 2020-01-04 | 4 tiles | 0 | 0 | 0 | 0 |
+| 2020-01-24 | 8 tiles (4 of them `_scene1_`) | 1 | 0 | 0 | 1 |
+| 2023-01-13 | 4 tiles | 0 | 0 | 0 | 0 |
+
+The three Sentinel-2 tile dates together take about `15 s` end to end on GPU device 0, AIS streaming included. Outputs live in `workspace/reports/operational/<date>/` as `dark_sts.csv`, `dark_sts.json`, and `previews/<detection_id>.png`.
+
+### Notable detections
+
+- `2020-01-14 ... cropped_small:2` — `FULLY_DARK`, conf `0.554`, `28.44323 / -94.50262`. The preview shows two hulls moored side by side and no AIS ping within `1000 m` all day. This is the cleanest dark-STS candidate found so far.
+- `2020-01-14 ... cropped_small:4` — reported `PARTIALLY_DARK`, conf `0.466`, but the single AIS match is `APL HOLLAND` at `702 m`, `SOG 9.7 kn`, ping at `07:44:43Z` — roughly nine hours before the likely mid-morning-local capture, and moving. This is a same-day-but-wrong-time artefact of having no time window; by eye the detection is really fully dark. It is the clearest argument for adding a time window once acquisition time is available.
+- `2020-01-14 True_color:1` and `zoomed_in:1` — the same STS pair seen in two crops of the same scene, both `AIS_PRESENT` with `EAGLE KLANG` (type `80`, `243 m`) and `MANIFA` (type `80`, `332 m`) at `93-161 m`, both at `SOG 0.2-0.3 kn` around `17:01-17:05Z`. Two stationary tankers alongside each other with both transponders on: a textbook legitimate STS, and a good positive control that the correlator works.
+- `2020-01-24_scene1_tile_3_3:5` — `AIS_PRESENT`, conf `0.639`, matched `EAGLE KINARUT` (`58.7 m`) and MMSI `636019025` (`83.9 m`), both `SOG ~5.2 kn` at `17:06Z`. Confirms that the `_scene1_` tile naming is handled.
+
+The two zoomed-out root GeoTIFFs for 2020-01-14 produced no detections, as expected: the model is trained at 10 m/px and those scenes are far coarser.
+
+### Preview sanity check
+
+Annotated PNGs inspected by eye; in all four cases the red box sits squarely on a pair of hulls, not on wake, cloud, or open water:
+
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14-00_00_2020-01-14-23_59_Sentinel-2_L2A_True_color_1.png`
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14_lat_28.40449_long_-94.50870_cropped_small_2.png`
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14_lat_28.40449_long_-94.50870_cropped_small_4.png`
+- `workspace/reports/operational/2020-01-24/previews/2020-01-24_scene1_tile_3_3_5.png`
+
+### Reading of these runs
+
+Recall, not precision, is the open question. Four dates of Texas Gulf tiles yielded five detections and no obvious false positive, which is encouraging for precision but says nothing about how many STS events the model walked past. The tile sets are also tiny (4-8 tiles per date) and cover a small part of the Gulf, so zero detections on 2020-01-04 and 2023-01-13 is unremarkable rather than evidence of anything.

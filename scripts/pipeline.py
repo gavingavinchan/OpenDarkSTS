@@ -152,7 +152,8 @@ def write_detection_preview(result: dict[str, Any], preview_dir: str | Path) -> 
 
     lines = _caption_lines(result)
     caption_height = PREVIEW_CAPTION_LINE_PX * len(lines) + 8
-    canvas = Image.new("RGB", (crop.width, crop.height + caption_height), (12, 12, 12))
+    caption_width = 6 * max((len(line) for line in lines), default=0) + 12
+    canvas = Image.new("RGB", (max(crop.width, caption_width), crop.height + caption_height), (12, 12, 12))
     canvas.paste(crop, (0, 0))
     caption = ImageDraw.Draw(canvas)
     for index, line in enumerate(lines):
