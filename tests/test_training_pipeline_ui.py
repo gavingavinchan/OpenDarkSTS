@@ -171,6 +171,53 @@ def test_step4_api_lists_and_saves_dataset_selection(tmp_path: Path, monkeypatch
     assert listed["selections"][0]["dataset_name"] == "API Fixture"
 
 
+def test_step4_api_split_preview_reports_scene_groups(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    images = {}
+    keys = []
+    for date in ("2020-01-14", "2020-02-15", "2020-03-16"):
+        for tile in range(3):
+            key = f"img_{date}_{tile}"
+            name = f"sentinel2__S2_{date}_tile_{tile}_0.png"
+            keys.append(key)
+            write_review(reviews_dir, cache_dir, reviewer="tester", image_key=key, image_filename=name)
+            images[key] = {
+                "image_key": key,
+                "original_filename": name,
+                "browser_relative_path": name,
+                "source_path": "/Sentinel 2A/sentinel2/" + name,
+                "album_ids": [],
+            }
+    write_json(manifest_path, {"schema_version": 1, "manifest_type": "training_import", "cache_dir": str(cache_dir), "images": images})
+    monkeypatch.setattr(ui, "IMPORT_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(ui, "REVIEWS_DIR", reviews_dir)
+    monkeypatch.setattr(ui, "IMPORT_REVIEWER", "tester")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASET_SELECTIONS_DIR", tmp_path / "dataset_selections")
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_DATASETS_DIR", tmp_path / "datasets")
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        preview = post_json(server.base_url + "/api/dataset-selections/split-preview", {"image_keys": keys})
+        legacy = post_json(
+            server.base_url + "/api/dataset-selections/split-preview",
+            {"image_keys": keys, "split_mode": "image"},
+        )
+        saved = post_json(
+            server.base_url + "/api/dataset-selections",
+            {"dataset_name": "Scene Fixture", "dataset_version": "v1", "image_keys": keys},
+        )
+
+    assert preview["split_mode"] == "group"
+    assert preview["group_count"] == 3
+    assert preview["groups_spanning_splits"] == 0
+    assert legacy["groups_spanning_splits"] > 0
+    assert saved["split_summary"]["groups_spanning_splits"] == 0
+    assert saved["split_summary"]["group_count"] == 3
+
+
 def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> None:
     from scripts import training_pipeline_ui as ui
 

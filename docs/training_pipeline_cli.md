@@ -137,6 +137,13 @@ Options:
 
 In both modes `exported_image_count` and `exported_label_count` count the same thing: one image and one YOLO label file per exported item, including enabled background negatives. `--dry-run` does not read review JSONs, so it cannot report per-bbox label row counts.
 
+An export is a replacement, not a merge: every `images/<split>` and `labels/<split>`
+directory is emptied before the selection is written, so the exported dataset always equals
+the selection exactly. Re-exporting after dropping an image, or after moving an image
+between splits, leaves no stale copy behind for YOLO to train on. The written
+`dataset_manifest.json` records `dataset_selection_manifest_sha256`, which
+`check-training-ready` uses to reject a stale export.
+
 Writes, unless `--dry-run` is used:
 
 - `workspace/datasets/<dataset>/images/{train,val,test}/...`
@@ -175,7 +182,18 @@ Options:
 
 ### `save-dataset-selection`
 
-Saves an image-level Step 4 dataset selection manifest with deterministic train/val/test splits.
+Saves a Step 4 dataset selection manifest with deterministic train/val/test splits.
+
+Splits are **group-aware by default** (`--split-mode group`): every image is keyed to a
+`<region>|<date>` scene group using the same rule as `scripts/build_clean_sts_dataset.py`
+(region from the import manifest's raster bounds, then source path, then album majority;
+date parsed from the most original filename), and a whole group always lands in exactly
+one split. This is what stops adjacent tiles of the same Sentinel-2 observation appearing
+in both train and val/test. `--split-mode image` restores the old per-image shuffle and is
+only an escape hatch; it will normally report a non-zero `groups_spanning_splits`.
+
+The command result reports `split_mode`, `group_key_rule`, `split_counts`, `group_count`
+and `groups_spanning_splits`, and each selection item carries its `group_key`.
 
 ```bash
 .venv/bin/python scripts/training_pipeline_cli.py save-dataset-selection \
@@ -194,9 +212,24 @@ Options:
 - `--album-id <id>`: source album metadata, repeatable.
 - `--seed <int>`: deterministic split seed. Defaults to `42`.
 - `--split-ratios train=0.8,val=0.1,test=0.1`: optional split ratios.
+- `--split-mode group|image`: defaults to `group` (scene-safe). `image` is the legacy leaky shuffle.
 - `--selections-dir <path>`: defaults to `workspace/dataset_selections`.
 - `--datasets-dir <path>`: default export root is `workspace/datasets`.
 - `--manifest`, `--reviews-dir`, `--reviewer`: source metadata stored in the selection.
+
+### `preview-dataset-split`
+
+Computes the exact splits `save-dataset-selection` would write, without saving anything.
+The step 4 GUI Split Preview calls the same helper through `POST /api/dataset-selections/split-preview`.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty preview-dataset-split \
+  --image-key img_abc --image-key img_def
+```
+
+Options mirror `save-dataset-selection`: `--seed`, `--split-ratios`, `--split-mode`,
+`--manifest`, `--reviews-dir`, `--reviewer`. The result reports `split_counts`,
+`group_count`, `groups_spanning_splits`, `group_key_rule` and the per-image `items`.
 
 ### `list-dataset-selections`
 
@@ -205,6 +238,10 @@ Lists saved Step 4 dataset selection manifests and reports item and split counts
 ```bash
 .venv/bin/python scripts/training_pipeline_cli.py --pretty list-dataset-selections
 ```
+
+Each row also reports `split_mode`, `group_count`, `groups_spanning_splits`, `exported`
+(an export directory exists) and `export_is_current` (that export was built from the
+selection file exactly as it stands now).
 
 ### `check-training-ready`
 
@@ -221,6 +258,9 @@ Checks include:
 - dataset export exists and contains `dataset_manifest.json`
 - `data.yaml` exists and defines `0: ship` and `1: ships`
 - `train` and `val` image/label folders exist and contain images
+- the export is current: `dataset_manifest.json` records the sha256 of the selection
+  manifest it was built from, and readiness fails when the selection has changed since
+  (re-export in step 4)
 - required training config fields are present
 - target run directory will not overwrite an existing run unless `overwrite` is enabled
 
@@ -630,7 +670,7 @@ Mutating training routes log to `workspace/reports/training_pipeline_ui_interact
 | `/import` (alias `/`) | 1 | `import-data`, `list-albums`, `create-album`, `add-to-album`, `rename-album`, `remove-from-album`, `remove-images` |
 | `/manual-review` | 2 | `run-auto-detect`, `image-key` |
 | `/bbox-overview` | 3 | `list-dataset-candidates` |
-| `/datasets` (alias `/dataset-selection`) | 4 | `list-dataset-candidates`, `save-dataset-selection`, `list-dataset-selections`, `export-dataset` |
+| `/datasets` (alias `/dataset-selection`) | 4 | `list-dataset-candidates`, `preview-dataset-split`, `save-dataset-selection`, `list-dataset-selections`, `export-dataset` |
 | `/training-setup` | 5 | `list-exported-datasets`, `list-starting-weights`, `save-training-config`, `list-training-configs`, `check-training-ready`, `build-train-command` |
 | `/training` (alias `/train-yolo`) | 6 | `start-training`, `training-status`, `stop-training`, `list-active-runs` |
 | `/evaluation` (alias `/evaluate`) | 7 | `list-run-groups`, `show-run-group`, `run-test-split`, `write-evaluation-report`, `promote-weight` |

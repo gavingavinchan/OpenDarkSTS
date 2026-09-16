@@ -81,17 +81,22 @@
         <div style="display:grid; gap:18px;">
           <section class="card">
             <h2>Split Preview</h2>
-            <p class="hint">Splits are assigned deterministically by the backend from the selected image keys and seed.</p>
+            <p class="hint">Splits are assigned deterministically by the backend from the selected image keys and seed. In <code>group</code> mode every <code>&lt;region&gt;|&lt;date&gt;</code> scene group lands in exactly one split, so adjacent tiles of one observation cannot leak between train and val/test.</p>
             <div class="grid3">
               <label class="field"><span>Train %</span><input id="ratioTrain" type="number" min="0" max="100" step="1" value="80"></label>
               <label class="field"><span>Val %</span><input id="ratioVal" type="number" min="0" max="100" step="1" value="10"></label>
               <label class="field"><span>Test %</span><input id="ratioTest" type="number" min="0" max="100" step="1" value="10"></label>
               <label class="field"><span>Seed</span><input id="seed" type="number" value="42"></label>
+              <label class="field"><span>Split mode</span><select id="splitMode">
+                <option value="group" selected>group (scene-safe)</option>
+                <option value="image">image (legacy, leaks scenes)</option>
+              </select></label>
             </div>
             <div class="row">
               <button id="previewSplits" type="button">Preview Splits</button>
             </div>
             <table id="splitPreview"><tbody></tbody></table>
+            <div class="status" id="splitStatus"></div>
           </section>
 
           <section class="card">
@@ -257,24 +262,44 @@
       return { train: train / total, val: val / total, test: test / total };
     }
 
-    function previewSplits() {
+    function renderSplitPreview(summary) {
+      const counts = summary.split_counts || {};
+      const rows = ['train', 'val', 'test'].map(function (split) {
+        return '<tr><th>' + split + '</th><td>' + (counts[split] || 0) + ' images</td></tr>';
+      });
+      rows.push('<tr><th>split mode</th><td>' + P.esc(summary.split_mode || 'group') +
+        (summary.group_key_rule ? ' (' + P.esc(summary.group_key_rule) + ')' : '') + '</td></tr>');
+      rows.push('<tr><th>scene groups</th><td><span id="splitGroupCount">' + (summary.group_count || 0) + '</span></td></tr>');
+      const spanning = summary.groups_spanning_splits || 0;
+      rows.push('<tr><th>groups spanning splits</th><td><span id="splitSpanning" class="pill ' +
+        (spanning ? 'bad' : 'ok') + '">' + spanning + '</span></td></tr>');
+      rows.push('<tr><th>seed</th><td>' + (summary.seed === undefined ? '' : summary.seed) + '</td></tr>');
+      rows.push('<tr><th>total</th><td>' + (summary.image_count || 0) + ' images</td></tr>');
+      document.querySelector('#splitPreview tbody').innerHTML = rows.join('');
+    }
+
+    async function previewSplits() {
       const keys = Array.from(state.selected);
       const ratios = splitRatios();
       const seed = Number(document.getElementById('seed').value) || 42;
-      /* Mirror the backend's deterministic ordering closely enough for a preview; the
-         saved manifest's splits come back from the server and overwrite this. */
-      const counts = {
-        train: Math.round(keys.length * ratios.train),
-        val: Math.round(keys.length * ratios.val),
-      };
-      counts.test = Math.max(keys.length - counts.train - counts.val, 0);
-      const rows = ['train', 'val', 'test'].map(function (split) {
-        return '<tr><th>' + split + '</th><td>' + counts[split] + ' images</td></tr>';
-      });
-      rows.push('<tr><th>seed</th><td>' + seed + '</td></tr>');
-      rows.push('<tr><th>total</th><td>' + keys.length + ' images</td></tr>');
-      document.querySelector('#splitPreview tbody').innerHTML = rows.join('');
-      P.logInteraction('preview_splits', { selected_count: keys.length, seed: seed, ratios: ratios });
+      const splitMode = document.getElementById('splitMode').value;
+      P.setStatus('splitStatus', 'Previewing splits\u2026');
+      P.logInteraction('preview_splits', { selected_count: keys.length, seed: seed, ratios: ratios, split_mode: splitMode });
+      try {
+        /* The backend owns split assignment, so the preview asks it rather than guessing. */
+        const summary = await P.api('/api/dataset-selections/split-preview', {
+          method: 'POST',
+          body: { image_keys: keys, seed: seed, split_ratios: ratios, split_mode: splitMode },
+        });
+        state.splits = {};
+        (summary.items || []).forEach(function (item) { state.splits[item.image_key] = item.split; });
+        renderSplitPreview(summary);
+        renderCandidates();
+        P.setStatus('splitStatus', 'Split preview: ' + (summary.group_count || 0) + ' scene group(s), ' +
+          (summary.groups_spanning_splits || 0) + ' spanning splits.', summary.groups_spanning_splits ? 'err' : 'ok');
+      } catch (error) {
+        P.setStatus('splitStatus', 'Split preview failed: ' + error.message, 'err');
+      }
     }
 
     async function saveSelection() {
@@ -286,6 +311,7 @@
         album_ids: currentFilters().album_ids,
         seed: Number(document.getElementById('seed').value) || 42,
         split_ratios: splitRatios(),
+        split_mode: document.getElementById('splitMode').value,
       };
       P.setStatus('saveStatus', 'Saving selection…');
       try {
@@ -293,7 +319,10 @@
         state.lastSelectionPath = data.selection_path;
         state.splits = {};
         ((data.selection || {}).items || []).forEach(function (item) { state.splits[item.image_key] = item.split; });
-        P.setStatus('saveStatus', 'Saved ' + data.selection_path + ' (' + payload.image_keys.length + ' images).', 'ok');
+        if (data.split_summary) { renderSplitPreview(data.split_summary); }
+        const spanning = (data.split_summary || {}).groups_spanning_splits || 0;
+        P.setStatus('saveStatus', 'Saved ' + data.selection_path + ' (' + payload.image_keys.length + ' images, ' +
+          ((data.split_summary || {}).group_count || 0) + ' scene groups, ' + spanning + ' spanning splits).', 'ok');
         renderCandidates();
         await loadSelections();
       } catch (error) {

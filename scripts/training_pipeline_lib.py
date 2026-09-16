@@ -25,6 +25,13 @@ try:
 except ImportError:
     import visual_review_lib as review_lib
 
+try:
+    from .dataset_splits import GroupStats, assign_groups_to_splits, check_no_group_overlap, group_key, parse_source_name
+    from . import build_clean_sts_dataset as clean_dataset_lib
+except ImportError:
+    from dataset_splits import GroupStats, assign_groups_to_splits, check_no_group_overlap, group_key, parse_source_name  # type: ignore
+    import build_clean_sts_dataset as clean_dataset_lib  # type: ignore
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = ROOT_DIR / "workspace"
@@ -2143,14 +2150,63 @@ def list_dataset_candidates(
     }
 
 
-def auto_split_items(image_keys: list[str], *, seed: int = 42, ratios: dict[str, float] | None = None) -> list[dict[str, Any]]:
-    ratios = ratios or {"train": 0.8, "val": 0.1, "test": 0.1}
-    unique_keys = list(dict.fromkeys(str(key) for key in image_keys if str(key).strip()))
+SPLIT_MODES = ("group", "image")
+GROUP_KEY_RULE = "<region>|<date>"
+
+
+def resolve_selection_group_keys(
+    image_keys: list[str],
+    *,
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path | None = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> dict[str, str]:
+    """Map image keys to `<region>|<date>` split groups, exactly as the clean builder does.
+
+    Region/date come from the import manifest entry when there is one (raster bounds,
+    then source path, then album majority), otherwise from the review document's cache
+    collection and its original filename.
+    """
+    manifest_file = repo_resolve(manifest_path) if manifest_path else None
+    import_images: dict[str, Any] = {}
+    if manifest_file is not None and manifest_file.exists():
+        import_images = load_import_manifest(manifest_file).get("images", {}) or {}
+    album_regions = clean_dataset_lib.album_region_index(import_images)
+    resolved: dict[str, str] = {}
+    for raw_key in image_keys:
+        image_key = str(raw_key)
+        entry = import_images.get(image_key)
+        if entry:
+            original = (
+                entry.get("browser_relative_path")
+                or entry.get("original_filename")
+                or entry.get("image_filename")
+                or image_key
+            )
+            region = clean_dataset_lib.region_for_import_entry(entry, album_regions)
+        else:
+            review: dict[str, Any] | None = None
+            try:
+                review, _ = find_review_for_image(image_key, reviews_dir, include_incomplete=True)
+            except Exception:
+                review = None
+            if review:
+                cache_dir = Path(str(review.get("cache_path") or "")).parent.name
+                region = clean_dataset_lib.CACHE_DIR_REGIONS.get(cache_dir, "unknown")
+                original = str(review.get("image_filename") or image_key)
+            else:
+                region = "unknown"
+                original = image_key
+        resolved[image_key] = group_key(parse_source_name(str(original)), region)
+    return resolved
+
+
+def split_items_by_image(unique_keys: list[str], *, seed: int, ratios: dict[str, float]) -> dict[str, str]:
+    """Legacy image-level split: shuffle image keys and cut by ratio. Leaks scene groups."""
+    keys = list(unique_keys)
     rng = random.Random(seed)
-    rng.shuffle(unique_keys)
-    total = len(unique_keys)
-    if total == 0:
-        return []
+    rng.shuffle(keys)
+    total = len(keys)
     train_count = int(round(total * float(ratios.get("train", 0.8))))
     val_count = int(round(total * float(ratios.get("val", 0.1))))
     if total >= 2 and val_count == 0:
@@ -2158,7 +2214,7 @@ def auto_split_items(image_keys: list[str], *, seed: int = 42, ratios: dict[str,
     if train_count + val_count > total:
         train_count = max(0, total - val_count)
     split_by_key: dict[str, str] = {}
-    for index, image_key in enumerate(unique_keys):
+    for index, image_key in enumerate(keys):
         if index < train_count:
             split = "train"
         elif index < train_count + val_count:
@@ -2166,15 +2222,95 @@ def auto_split_items(image_keys: list[str], *, seed: int = 42, ratios: dict[str,
         else:
             split = "test"
         split_by_key[image_key] = split
+    return split_by_key
+
+
+def auto_split_items(
+    image_keys: list[str],
+    *,
+    seed: int = 42,
+    ratios: dict[str, float] | None = None,
+    group_keys: dict[str, str] | None = None,
+    split_mode: str = "group",
+) -> list[dict[str, Any]]:
+    """Assign splits to image keys.
+
+    ``split_mode="group"`` (the default) keeps every `<region>|<date>` group inside one
+    split so adjacent tiles of the same scene cannot leak between train and val/test.
+    ``split_mode="image"`` is the old image-level shuffle, kept as an escape hatch.
+    """
+    if split_mode not in SPLIT_MODES:
+        raise ValueError(f"split_mode must be one of {SPLIT_MODES}, got {split_mode!r}")
+    ratios = ratios or {"train": 0.8, "val": 0.1, "test": 0.1}
+    unique_keys = list(dict.fromkeys(str(key) for key in image_keys if str(key).strip()))
+    if not unique_keys:
+        return []
+
+    groups_by_key = {key: str((group_keys or {}).get(key) or key) for key in unique_keys}
+    if split_mode == "image":
+        split_by_key = split_items_by_image(unique_keys, seed=seed, ratios=ratios)
+    else:
+        stats: dict[str, GroupStats] = {}
+        for key in unique_keys:
+            stats.setdefault(groups_by_key[key], GroupStats(key=groups_by_key[key])).add()
+        assignment = assign_groups_to_splits(stats.values(), ratios=ratios, seed=seed, metrics=["images"])
+        split_by_key = {key: assignment[groups_by_key[key]] for key in unique_keys}
+
     return [
         {
             "image_key": image_key,
             "split": split_by_key[image_key],
+            "group_key": groups_by_key[image_key],
             "include_labels": "all_exportable",
             "selected_detection_ids": None,
         }
         for image_key in sorted(unique_keys)
     ]
+
+
+def split_summary_for_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise a selection's splits, including how many groups straddle two splits."""
+    split_counts = {split: 0 for split in SPLITS}
+    item_groups: dict[str, tuple[str, str]] = {}
+    for item in items:
+        split = str((item or {}).get("split") or "train")
+        if split in split_counts:
+            split_counts[split] += 1
+        image_key = str((item or {}).get("image_key") or "")
+        item_groups[image_key] = (split, str((item or {}).get("group_key") or image_key))
+    overlap = check_no_group_overlap(item_groups)
+    return {
+        "image_count": len(items),
+        "split_counts": split_counts,
+        "group_count": int(overlap["group_count"]),
+        "groups_spanning_splits": len(overlap["overlapping_groups"]),
+        "overlapping_groups": sorted(overlap["overlapping_groups"]),
+    }
+
+
+def preview_dataset_split(
+    image_keys: list[str],
+    *,
+    seed: int = 42,
+    split_ratios: dict[str, float] | None = None,
+    split_mode: str = "group",
+    reviews_dir: str | Path = review_lib.DEFAULT_REVIEWS_DIR,
+    manifest_path: str | Path | None = DEFAULT_IMPORT_MANIFEST_PATH,
+    reviewer: str = review_lib.DEFAULT_REVIEWER,
+) -> dict[str, Any]:
+    """Backend split preview for step 4: the exact splits `save_dataset_selection` would write."""
+    keys = list(dict.fromkeys(str(key) for key in image_keys if str(key).strip()))
+    groups = resolve_selection_group_keys(keys, reviews_dir=reviews_dir, manifest_path=manifest_path, reviewer=reviewer)
+    items = auto_split_items(keys, seed=int(seed), ratios=split_ratios, group_keys=groups, split_mode=split_mode)
+    summary = split_summary_for_items(items)
+    summary.update({
+        "split_mode": split_mode,
+        "group_key_rule": GROUP_KEY_RULE,
+        "seed": int(seed),
+        "ratios": split_ratios or {"train": 0.8, "val": 0.1, "test": 0.1},
+        "items": items,
+    })
+    return summary
 
 
 def selection_filename(dataset_name: str, dataset_version: str | int) -> str:
@@ -2197,6 +2333,7 @@ def save_dataset_selection(
     album_ids: list[str] | None = None,
     seed: int = 42,
     split_ratios: dict[str, float] | None = None,
+    split_mode: str = "group",
     created_by: str | None = None,
 ) -> dict[str, Any]:
     clean_name = str(dataset_name or "").strip()
@@ -2209,6 +2346,7 @@ def save_dataset_selection(
     ratios = split_ratios or {"train": 0.8, "val": 0.1, "test": 0.1}
     output_name = slugify(f"{clean_name}_{version}", "dataset_v1")
     now = utcnow_iso_for_training()
+    group_keys = resolve_selection_group_keys(keys, reviews_dir=reviews_dir, manifest_path=manifest_path, reviewer=reviewer)
     selection = {
         "schema_version": SCHEMA_VERSION,
         "dataset_name": clean_name,
@@ -2218,6 +2356,7 @@ def save_dataset_selection(
         "updated_at": now,
         "created_by": created_by or reviewer,
         "selection_mode": "image",
+        "split_summary": None,
         "classes": {str(class_id): class_name for class_id, class_name in CLASS_ID_TO_NAME.items()},
         "sources": {
             "reviews_dir": repo_relative(reviews_dir),
@@ -2227,19 +2366,31 @@ def save_dataset_selection(
         },
         "split_policy": {
             "mode": "auto_with_manual_override",
+            "split_mode": split_mode,
+            "group_key_rule": GROUP_KEY_RULE if split_mode == "group" else None,
             "default_ratios": ratios,
             "seed": int(seed),
         },
-        "items": auto_split_items(keys, seed=int(seed), ratios=ratios),
+        "items": auto_split_items(
+            keys,
+            seed=int(seed),
+            ratios=ratios,
+            group_keys=group_keys,
+            split_mode=split_mode,
+        ),
         "background_negatives": {"enabled": False},
         "export": {
             "output_dir": repo_relative(repo_resolve(datasets_dir) / output_name),
             "include_incomplete_reviews": False,
         },
     }
+    summary = split_summary_for_items(selection["items"])
+    summary["split_mode"] = split_mode
+    summary["group_key_rule"] = GROUP_KEY_RULE if split_mode == "group" else None
+    selection["split_summary"] = summary
     target = repo_resolve(selections_dir) / selection_filename(clean_name, version)
     write_json(target, selection)
-    return {"selection_path": repo_relative(target), "selection": selection}
+    return {"selection_path": repo_relative(target), "selection": selection, "split_summary": summary}
 
 
 def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTIONS_DIR) -> list[dict[str, Any]]:
@@ -2251,14 +2402,15 @@ def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTI
         except Exception:
             continue
         items = selection.get("items") or []
-        split_counts = {split: 0 for split in SPLITS}
-        for item in items:
-            split = str((item or {}).get("split") or "train")
-            if split in split_counts:
-                split_counts[split] += 1
+        summary = split_summary_for_items(items)
+        split_counts = summary["split_counts"]
         export_dir = selection.get("export", {}).get("output_dir")
         export_path = repo_resolve(export_dir) if export_dir else None
         selections.append({
+            "split_mode": (selection.get("split_policy") or {}).get("split_mode") or "image",
+            "group_count": summary["group_count"],
+            "groups_spanning_splits": summary["groups_spanning_splits"],
+            "export_is_current": export_selection_is_current(path, export_path),
             "selection_path": repo_relative(path),
             "dataset_name": selection.get("dataset_name"),
             "dataset_version": selection.get("dataset_version"),
@@ -2299,6 +2451,21 @@ def config_missing_items(config: dict[str, Any]) -> list[str]:
     return missing
 
 
+def export_selection_is_current(selection_path: str | Path, dataset_dir: str | Path | None) -> bool:
+    """True when the exported dataset was built from the selection file as it stands now."""
+    if dataset_dir is None:
+        return False
+    manifest_path = repo_resolve(dataset_dir) / "dataset_manifest.json"
+    selection_file = repo_resolve(selection_path)
+    if not manifest_path.is_file() or not selection_file.is_file():
+        return False
+    try:
+        recorded = str(load_json(manifest_path).get("dataset_selection_manifest_sha256") or "")
+    except Exception:
+        return False
+    return bool(recorded) and recorded == file_hash(selection_file)
+
+
 def check_training_readiness(selection_path: str | Path, training_config: str | Path | dict[str, Any]) -> dict[str, Any]:
     selection = load_json(selection_path)
     config = load_json_or_dict(training_config)
@@ -2321,6 +2488,13 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
             missing.append(f"Exported dataset is missing labels/{split}")
         if dataset_dir is None or not split_has_images(dataset_dir, split):
             missing.append(f"{split} split must contain at least one image")
+
+    if dataset_dir is not None and (dataset_dir / "dataset_manifest.json").is_file() \
+            and not export_selection_is_current(selection_path, dataset_dir):
+        missing.append(
+            "Exported dataset is out of date: it was built from a different version of this "
+            "selection manifest; re-export the dataset in step 4"
+        )
 
     if dataset_dir is not None and not split_has_images(dataset_dir, "test"):
         warnings.append("test split has no images; final test metrics will be unavailable")
@@ -2522,6 +2696,20 @@ def ensure_dataset_dirs(dataset_dir: Path) -> None:
         (dataset_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
 
 
+def reset_dataset_split_dirs(dataset_dir: Path) -> None:
+    """Empty every images/<split> and labels/<split> dir so a re-export equals the selection.
+
+    Without this, an image dropped from the selection (or moved to another split) stays on
+    disk and YOLO keeps training on it.
+    """
+    for kind in ("images", "labels"):
+        for split in SPLITS:
+            target = dataset_dir / kind / split
+            if target.is_dir():
+                shutil.rmtree(target)
+    ensure_dataset_dirs(dataset_dir)
+
+
 def copy_review_image(review: dict[str, Any], image_target: Path) -> None:
     source = repo_resolve(str(review["cache_path"]))
     if not source.exists():
@@ -2574,7 +2762,7 @@ def export_dataset_selection(
 
     dataset_dir = repo_resolve(output_dir)
     include_incomplete = bool(selection.get("export", {}).get("include_incomplete_reviews", False))
-    ensure_dataset_dirs(dataset_dir)
+    reset_dataset_split_dirs(dataset_dir)
 
     exported_files: list[dict[str, Any]] = []
     exported_image_keys: list[str] = []
@@ -2871,13 +3059,28 @@ def list_starting_weights(
     return entries
 
 
+# Import staging areas under workspace/datasets: never exported YOLO datasets themselves.
+EXCLUDED_DATASET_SUBDIRS = ("raw", "extracted")
+DATASET_DISCOVERY_DEPTH = 2
+
+
 def list_exported_datasets(datasets_dir: str | Path = DEFAULT_DATASETS_DIR) -> list[dict[str, Any]]:
     root = repo_resolve(datasets_dir)
     datasets: list[dict[str, Any]] = []
     if not root.is_dir():
         return datasets
-    for manifest_path in sorted(root.glob("*/dataset_manifest.json")):
+    manifest_paths: list[Path] = []
+    for depth in range(1, DATASET_DISCOVERY_DEPTH + 1):
+        manifest_paths.extend(root.glob("/".join(["*"] * depth) + "/dataset_manifest.json"))
+    seen: set[Path] = set()
+    for manifest_path in sorted(set(manifest_paths)):
         dataset_dir = manifest_path.parent
+        if dataset_dir in seen:
+            continue
+        seen.add(dataset_dir)
+        relative_parts = dataset_dir.relative_to(root).parts
+        if relative_parts[0] in EXCLUDED_DATASET_SUBDIRS:
+            continue
         try:
             manifest = load_json(manifest_path)
         except Exception:

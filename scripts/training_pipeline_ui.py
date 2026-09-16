@@ -731,6 +731,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/dataset-selections":
             self._handle_save_dataset_selection()
             return
+        if parsed.path == "/api/dataset-selections/split-preview":
+            self._handle_preview_dataset_split()
+            return
         if parsed.path == "/api/dataset-selections/export":
             self._handle_export_dataset_selection()
             return
@@ -927,6 +930,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 album_ids=[str(value) for value in (payload.get("album_ids") or []) if str(value).strip()],
                 seed=int(payload.get("seed") or 42),
                 split_ratios=payload.get("split_ratios"),
+                split_mode=str(payload.get("split_mode") or "group"),
                 created_by=IMPORT_REVIEWER,
             )
         except Exception as exc:
@@ -935,7 +939,25 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         self._respond_json({
             "selection_path": result["selection_path"],
             "selection": result["selection"],
+            "split_summary": result["split_summary"],
         }, status=201)
+
+    def _handle_preview_dataset_split(self) -> None:
+        try:
+            payload = self._json_body()
+            result = pipeline.preview_dataset_split(
+                [str(value) for value in (payload.get("image_keys") or []) if str(value).strip()],
+                seed=int(payload.get("seed") or 42),
+                split_ratios=payload.get("split_ratios"),
+                split_mode=str(payload.get("split_mode") or "group"),
+                reviews_dir=REVIEWS_DIR,
+                manifest_path=IMPORT_MANIFEST_PATH,
+                reviewer=IMPORT_REVIEWER,
+            )
+        except Exception as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+            return
+        self._respond_json(result)
 
     def _handle_export_dataset_selection(self) -> None:
         try:

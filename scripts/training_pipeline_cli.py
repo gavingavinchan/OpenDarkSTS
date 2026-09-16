@@ -215,17 +215,38 @@ def command_save_dataset_selection(args: argparse.Namespace) -> tuple[int, dict[
         album_ids=list(args.album_id or []),
         seed=int(args.seed),
         split_ratios=parse_split_ratios(args.split_ratios),
+        split_mode=args.split_mode,
         created_by=args.created_by,
     )
+    summary = result["split_summary"]
     payload = {
         "selection_path": result["selection_path"],
         "dataset_name": result["selection"]["dataset_name"],
         "dataset_version": result["selection"]["dataset_version"],
         "item_count": len(result["selection"].get("items") or []),
         "export_output_dir": result["selection"].get("export", {}).get("output_dir"),
+        "split_mode": summary["split_mode"],
+        "group_key_rule": summary["group_key_rule"],
+        "split_counts": summary["split_counts"],
+        "group_count": summary["group_count"],
+        "groups_spanning_splits": summary["groups_spanning_splits"],
     }
     add_diagnostics(payload, args, "save_dataset_selection", selections_dir=args.selections_dir)
     return 0, envelope("save-dataset-selection", ok=True, result=payload)
+
+
+def command_preview_dataset_split(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    result = pipeline.preview_dataset_split(
+        list(args.image_key or []),
+        seed=int(args.seed),
+        split_ratios=parse_split_ratios(args.split_ratios),
+        split_mode=args.split_mode,
+        reviews_dir=args.reviews_dir,
+        manifest_path=args.manifest,
+        reviewer=args.reviewer,
+    )
+    add_diagnostics(result, args, "preview_dataset_split", reviews_dir=args.reviews_dir, manifest_path=args.manifest)
+    return 0, envelope("preview-dataset-split", ok=True, result=result)
 
 
 def command_list_dataset_selections(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -761,6 +782,12 @@ def build_parser() -> argparse.ArgumentParser:
     save_selection_parser.add_argument("--album-id", action="append")
     save_selection_parser.add_argument("--seed", type=int, default=42)
     save_selection_parser.add_argument("--split-ratios", help="Comma-separated train=0.8,val=0.1,test=0.1")
+    save_selection_parser.add_argument(
+        "--split-mode",
+        choices=list(pipeline.SPLIT_MODES),
+        default="group",
+        help="group (default): keep whole <region>|<date> scene groups in one split; image: legacy per-image shuffle",
+    )
     save_selection_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))
     save_selection_parser.add_argument("--datasets-dir", default=str(pipeline.DEFAULT_DATASETS_DIR))
     save_selection_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
@@ -768,6 +795,16 @@ def build_parser() -> argparse.ArgumentParser:
     save_selection_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
     save_selection_parser.add_argument("--created-by")
     save_selection_parser.set_defaults(handler=command_save_dataset_selection)
+
+    preview_split_parser = subparsers.add_parser("preview-dataset-split")
+    preview_split_parser.add_argument("--image-key", action="append", required=True)
+    preview_split_parser.add_argument("--seed", type=int, default=42)
+    preview_split_parser.add_argument("--split-ratios", help="Comma-separated train=0.8,val=0.1,test=0.1")
+    preview_split_parser.add_argument("--split-mode", choices=list(pipeline.SPLIT_MODES), default="group")
+    preview_split_parser.add_argument("--manifest", default=str(pipeline.DEFAULT_IMPORT_MANIFEST_PATH))
+    preview_split_parser.add_argument("--reviews-dir", default=str(review_lib.DEFAULT_REVIEWS_DIR))
+    preview_split_parser.add_argument("--reviewer", default=review_lib.DEFAULT_REVIEWER)
+    preview_split_parser.set_defaults(handler=command_preview_dataset_split)
 
     list_selections_parser = subparsers.add_parser("list-dataset-selections")
     list_selections_parser.add_argument("--selections-dir", default=str(pipeline.DEFAULT_DATASET_SELECTIONS_DIR))

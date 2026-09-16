@@ -947,6 +947,82 @@ def test_cli_save_dataset_selection_writes_step4_manifest(tmp_path: Path) -> Non
     assert [item["image_key"] for item in selection["items"]] == ["img_a", "img_b"]
 
 
+def scene_fixture(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+    """Reviews + import manifest for three dates x three tiles in one region."""
+    reviews_dir = tmp_path / "reviews"
+    cache_dir = tmp_path / "cache"
+    images = {}
+    keys: list[str] = []
+    for date in ("2020-01-14", "2020-02-15", "2020-03-16"):
+        for tile in range(3):
+            key = f"img_{date}_{tile}"
+            name = f"sentinel2__S2_{date}_tile_{tile}_0.png"
+            keys.append(key)
+            write_review(reviews_dir, cache_dir, reviewer="tester", image_key=key, image_filename=name)
+            images[key] = {
+                "schema_version": 1,
+                "image_key": key,
+                "original_filename": name,
+                "browser_relative_path": name,
+                "source_path": "/Sentinel 2A/sentinel2/" + name,
+                "album_ids": [],
+            }
+    manifest_path = tmp_path / "manifests" / "training_import_manifest.json"
+    write_json(manifest_path, {"schema_version": 1, "images": images})
+    return reviews_dir, manifest_path, keys
+
+
+def test_cli_save_dataset_selection_defaults_to_group_aware_splits(tmp_path: Path) -> None:
+    reviews_dir, manifest_path, keys = scene_fixture(tmp_path)
+    key_args: list[str] = []
+    for key in keys:
+        key_args += ["--image-key", key]
+
+    process = run_cli(
+        "save-dataset-selection",
+        "--dataset-name", "Scene Fixture",
+        *key_args,
+        "--selections-dir", str(tmp_path / "dataset_selections"),
+        "--datasets-dir", str(tmp_path / "datasets"),
+        "--reviews-dir", str(reviews_dir),
+        "--manifest", str(manifest_path),
+        "--reviewer", "tester",
+    )
+
+    assert process.returncode == 0
+    result = parse_envelope(process)["result"]
+    assert result["split_mode"] == "group"
+    assert result["group_key_rule"] == "<region>|<date>"
+    assert result["group_count"] == 3
+    assert result["groups_spanning_splits"] == 0
+    selection = json.loads(Path(result["selection_path"]).read_text())
+    assert {item["group_key"] for item in selection["items"]} == {
+        "texas_gulf|2020-01-14", "texas_gulf|2020-02-15", "texas_gulf|2020-03-16"
+    }
+
+
+def test_cli_preview_dataset_split_reports_groups_and_supports_image_mode(tmp_path: Path) -> None:
+    reviews_dir, manifest_path, keys = scene_fixture(tmp_path)
+    key_args: list[str] = []
+    for key in keys:
+        key_args += ["--image-key", key]
+    common = [
+        *key_args,
+        "--reviews-dir", str(reviews_dir),
+        "--manifest", str(manifest_path),
+        "--reviewer", "tester",
+    ]
+
+    grouped = parse_envelope(run_cli("preview-dataset-split", *common))
+    per_image = parse_envelope(run_cli("preview-dataset-split", *common, "--split-mode", "image"))
+
+    assert_envelope(grouped, command="preview-dataset-split", ok=True)
+    assert grouped["result"]["group_count"] == 3
+    assert grouped["result"]["groups_spanning_splits"] == 0
+    assert per_image["result"]["split_mode"] == "image"
+    assert per_image["result"]["groups_spanning_splits"] > 0
+
+
 def test_cli_list_dataset_selections_reports_saved_selection(tmp_path: Path) -> None:
     selection_dir = tmp_path / "dataset_selections"
     write_selection(
