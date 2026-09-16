@@ -609,6 +609,98 @@ Run duration: the full 11-model train-and-test sequence took about `8h 2m`, from
 
 Known gaps: update this section with per-model outcomes, test metrics, and logs after the final comparison summary is written.
 
+## Clean STS Dataset Weights (sts_clean_v1)
+
+This is the first weight trained on a dataset with a verified leak-free split. It supersedes the Madhulika-derived weights for evaluation purposes; every earlier number in this registry was measured on a split that shared scenes with training.
+
+Dataset: `workspace/datasets/derived/sts_clean_v1/data.yaml`.
+
+Dataset manifest: `workspace/datasets/derived/sts_clean_v1/dataset_manifest.json` (per-item provenance, region, scene-date group and split assignment).
+
+Dataset builder:
+
+```bash
+.venv/bin/python scripts/build_clean_sts_dataset.py --overwrite
+```
+
+Dataset inputs:
+
+- `workspace/datasets/derived/madhulika_yolov8_rectbbox` deduplicated from `381` Roboflow files to `88` unique scenes (`286` pre-augmented duplicates and `7` `False_color` duplicates of a `True_color` scene dropped).
+- `workspace/reviews/gavin`, all `474` reviews with `review_status: completed`, including ship-only images and the `3` pure negatives. `117` `neither` boxes are not exported.
+
+Split rule: whole `<region>|<date>` scene groups are assigned to exactly one split by `scripts/dataset_splits.py::assign_groups_to_splits` with `seed=42` and target ratios `0.70 / 0.15 / 0.15`, with hard floors of `100` test images and `60` test `ships` boxes. Regions come from raster bounds in `workspace/manifests/training_import_manifest.json`, falling back to the read-only source directory then the album majority.
+
+Resulting dataset: `562` images / `290` groups.
+
+| Split | Images | Groups | `ship` boxes | `ships` boxes | Negatives |
+|---|---|---|---|---|---|
+| train | 350 | 173 | 1486 | 353 | 0 |
+| val | 102 | 65 | 313 | 96 | 0 |
+| test | 110 | 52 | 547 | 69 | 3 |
+
+Leak check: `PASS`, zero groups appear in more than one split.
+
+Starting weights: root base weight `yolo26n.pt`.
+
+Training command script: `workspace/reports/run_sts_clean_v1_training.sh`.
+
+Recreate with:
+
+```bash
+bash workspace/reports/run_sts_clean_v1_training.sh
+```
+
+which runs:
+
+```bash
+.venv/bin/yolo detect train \
+  model=/home/gavin/OpenDarkSTS/yolo26n.pt \
+  data=/home/gavin/OpenDarkSTS/workspace/datasets/derived/sts_clean_v1/data.yaml \
+  imgsz=960 batch=8 epochs=300 patience=60 seed=42 device=0 workers=4 \
+  degrees=180 fliplr=0.5 flipud=0.5 hsv_h=0.015 hsv_s=0.35 hsv_v=0.25 \
+  mixup=0.05 mosaic=1.0 scale=0.4 translate=0.1 copy_paste=0 \
+  project=/home/gavin/OpenDarkSTS/workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960 \
+  name=yolo26n_aug_e300_img960
+```
+
+Classes: `0: ship`, `1: ships`. Package metadata: Ultralytics `8.4.23`, Python `3.12.2`, torch `2.10.0+cu128`, CUDA device `0` (`NVIDIA GeForce RTX 5070 Ti`).
+
+The dataset contains no baked-in augmentation; all augmentation is Ultralytics online augmentation applied at train time with the parameters above.
+
+Run outcome: all `300` epochs completed in `0.288` hours (`patience=60` never triggered). Best validation fitness at epoch `296`, val `mAP50-95 = 0.5931`.
+
+Covered weights:
+
+| Weight | Kind | Starting weights | Run metadata |
+|---|---|---|---|
+| `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt` | promoted copy (`sha256:080179e28767af1c10f5da297aa667ba2ee1f5846ca76c6765f6f577228433c9`) | `yolo26n.pt` | copy of the run `best.pt` below |
+| `workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960/yolo26n_aug_e300_img960/weights/best.pt` | run-local checkpoint | `yolo26n.pt` | `.../args.yaml`, `.../results.csv` |
+| `workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960/yolo26n_aug_e300_img960/weights/last.pt` | run-local checkpoint | `yolo26n.pt` | `.../args.yaml`, `.../results.csv` |
+
+Test-split evaluation (`yolo detect val split=test` on the `sts_clean_v1` test split, `imgsz=960`, `batch=8`, `device=0`):
+
+| Weight | all P | all R | all mAP50 | all mAP50-95 | ship mAP50 | ship mAP50-95 | ships mAP50 | ships mAP50-95 |
+|---|---|---|---|---|---|---|---|---|
+| `yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt` (clean) | 0.841 | 0.842 | 0.868 | 0.583 | 0.897 | 0.560 | 0.839 | 0.607 |
+| `yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` (old promoted) | 0.661 | 0.613 | 0.639 | 0.385 | 0.765 | 0.439 | 0.513 | 0.331 |
+| v4 suite `yolo26n_aug_e300_img960/weights/best.pt` (contaminated) | 0.809 | 0.858 | 0.880 | 0.602 | 0.875 | 0.494 | 0.886 | 0.711 |
+
+The v4 row is **not** a fair comparison: that model was trained on the balanced v4 dataset, which contains most of the images in this test split. Treat it as an upper bound of memorisation, not as generalisation.
+
+Evaluation scripts and logs:
+
+- `workspace/reports/eval_sts_clean_v1_baselines.sh` / `workspace/reports/eval_sts_clean_v1_baselines.log`
+- `workspace/reports/eval_sts_clean_v1_new_weight.sh` / `workspace/reports/eval_sts_clean_v1_new_weight.log`
+- `workspace/reports/train_sts_clean_v1_yolo26n.log`
+- Ultralytics val outputs under `workspace/runs/sts_clean_v1_eval/`
+
+Known gaps:
+
+- Byte-identical recreation is not guaranteed across Ultralytics, torch, CUDA, driver or GPU changes.
+- The dataset build depends on the read-only source imagery under `/home/gavin/Downloads/AIS data` and on `workspace/reviews/gavin`; adding or completing reviews changes the group set and therefore the split.
+- `2` reviewed images carry no georeferenced bounds and are placed by the source-path/album fallbacks rather than by raster bounds.
+- The Madhulika deduplication keeps one representative per scene base name. Where Roboflow produced several genuinely different crops of one scene under the same base name, only the most-labelled crop survives; the discarded crops are of the same scene, so no information about a new observation is lost, but some labelled boxes are.
+
 ## Updating This Registry
 
 When adding, moving, renaming, promoting, or deleting a YOLO `*.pt` file, update this document in the same change. If a weight has an adjacent doc instead, that doc must include the same reproduction fields and this registry should still point to it.

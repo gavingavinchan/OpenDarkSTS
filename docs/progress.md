@@ -148,3 +148,68 @@
 - Scan summary: `14,516,337` rows read, `12,883,565` usable `Class A` rows, `288` five-minute bins processed
 - Candidate output inserted with criteria version `ais_denmark_v1`: `37` events total (`25` `HIGH`, `12` `MEDIUM`) and `2,148` supporting point rows
 - Many candidates carry `anchor_status_present`, which suggests the next precision improvement should be an anchorage/port-distance filter before bulk ingesting more Denmark dates
+
+## Clean Evaluation v1 (2026-09-15)
+
+### Why the old numbers could not be trusted
+
+An audit of the evaluation path found leakage at every level:
+
+- `workspace/datasets/derived/madhulika_yolov8_rectbbox` is a pre-augmented Roboflow export. `381` files come from only `88` distinct scene base names; each source appears `3`-`6` times as random crops, flips, rotations and brightness variants. `17` of those `88` scene base names have copies in more than one of the Roboflow `train`/`valid`/`test` folders, so the same image was both trained on and tested on.
+- The same set mixes `True_color` and `False_color` renders of the same scene on the same date (`7` such duplicates), which the old split treated as unrelated images.
+- The balanced `v1`-`v4` datasets built by `scripts/build_madhulika_manual_sts_balanced_dataset.py` copy the Roboflow splits verbatim, so they inherit that leak, and their manual val/test splits held only `2` and `3` images.
+- The `v4` test split is `21` images / `30` `ships` boxes, so the 11-model suite ranking published from it is noise.
+- A leak that had not been noticed before: `5` scene dates (`2020-01-24`, `2020-02-08`, `2020-02-28`, `2020-05-18`, `2021-07-22`) appear in *both* the Madhulika Roboflow set and the manual review corpus. They are the same Gulf of Mexico observations reaching the dataset through two different source collections, so splitting per source collection would still have leaked.
+
+### What replaced it
+
+- `scripts/dataset_splits.py` assigns whole `<region>|<date>` scene groups to a single split, deterministically for a given seed. Region is resolved from raster bounds (`texas_gulf`, `gibraltar`, `suez`, `singapore`), with documented fallbacks. The scene token is parsed and recorded but deliberately not part of the key.
+- `scripts/build_clean_sts_dataset.py` builds `workspace/datasets/derived/sts_clean_v1/` from the deduplicated Madhulika scenes (`88` images) plus all `474` completed manual reviews, including ship-only images and the `3` pure negatives. No augmentation is baked into the dataset; Ultralytics online augmentation is used at train time.
+
+### sts_clean_v1 split
+
+`562` images across `290` scene groups, split with `seed=42`, target `70/15/15`, and hard floors of `100` test images and `60` test `ships` boxes.
+
+| Split | Images | Groups | `ship` boxes | `ships` boxes | Negatives | Madhulika / review images |
+|---|---|---|---|---|---|---|
+| train | 350 | 173 | 1486 | 353 | 0 | 49 / 301 |
+| val | 102 | 65 | 313 | 96 | 0 | 27 / 75 |
+| test | 110 | 52 | 547 | 69 | 3 | 12 / 98 |
+
+Leak check: `PASS` - zero of the `290` groups appear in more than one split. No two images in different splits are even byte-identical.
+
+Actual ratios are about `62/18/20` by image count rather than exactly `70/15/15`. That is deliberate: the group allocator balances image count and both class counts at once, and the test floor pulls extra groups into `test`. The test split is the honest one that matters, and it reached `110` images and `69` `ships` boxes, above the `100`/`60` targets.
+
+### First honest test-split comparison
+
+All three weights evaluated with `yolo detect val split=test` on the same `sts_clean_v1` test split (`110` images, `547` `ship` boxes, `69` `ships` boxes), `imgsz=960`, `batch=8`, `device=0`.
+
+| Weight | all P | all R | all mAP50 | all mAP50-95 | ship mAP50 | ship mAP50-95 | ships mAP50 | ships mAP50-95 |
+|---|---|---|---|---|---|---|---|---|
+| `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt` | 0.841 | 0.842 | 0.868 | 0.583 | 0.897 | 0.560 | 0.839 | 0.607 |
+| `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` (old promoted) | 0.661 | 0.613 | 0.639 | 0.385 | 0.765 | 0.439 | 0.513 | 0.331 |
+| `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/yolo26n_aug_e300_img960/weights/best.pt` (v4) | 0.809 | 0.858 | 0.880 | 0.602 | 0.875 | 0.494 | 0.886 | 0.711 |
+
+Reading of these numbers:
+
+- The new clean model is a large, real improvement over the previously promoted weight: `ships` mAP50 `0.513` -> `0.839`, overall mAP50 `0.639` -> `0.868`.
+- The v4 row must not be used as a ranking. That model was trained on the balanced v4 dataset, which contains most of the images in this test split, so its `ships` mAP50-95 of `0.711` is memorisation, not generalisation. It is reported only to show how much apparent skill contamination buys.
+- Even so, the clean model beats v4 on `ship` mAP50-95 (`0.560` vs `0.494`) despite v4 having seen the test images, which suggests the clean dataset - with ship-only images and negatives included - teaches the common class better than the artificially class-balanced v4 dataset did.
+
+### Training run
+
+`yolo26n.pt` -> 300 epochs, `imgsz=960`, `batch=8`, `patience=60`, `seed=42`, `device=0`, `workers=4`, v4 suite online augmentation (`degrees=180 fliplr=0.5 flipud=0.5 hsv_h=0.015 hsv_s=0.35 hsv_v=0.25 mixup=0.05 mosaic=1.0 scale=0.4 translate=0.1 copy_paste=0`). All 300 epochs ran in `0.288` hours; early stopping never triggered, and best validation fitness landed at epoch `296`, so the run was still improving and a longer schedule is worth trying.
+
+Run directory: `workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960/yolo26n_aug_e300_img960`. Log: `workspace/reports/train_sts_clean_v1_yolo26n.log`.
+
+### Promotion
+
+- Promoted weight: `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`
+- `scripts/preprocess_sentinel_tiles.py` now defaults `--weights-yolo26n` to that file.
+- Recreation recipe: `docs/yolo_weight_recreation.md`, section "Clean STS Dataset Weights (sts_clean_v1)".
+
+### Follow-ups
+
+- Re-run the multi-model suite on `sts_clean_v1` before making any architecture claims; the v3/v4 suite rankings are not evidence.
+- The YOLOv8n default in `scripts/preprocess_sentinel_tiles.py` still points at a v2 balanced run and is still contaminated; retrain it on `sts_clean_v1` or drop it from the review prefill.
+- Consider a longer schedule (the run had not converged) and revisit the Madhulika deduplication if the lost crops turn out to matter.

@@ -44,8 +44,12 @@ except ImportError:
     )
 
 
+# Default prefill weights. The YOLO26n default is the first weight trained on a
+# verified leak-free split (see docs/progress.md, "Clean Evaluation v1"); the
+# YOLOv8n default still comes from a contaminated balanced dataset and should be
+# retrained on sts_clean_v1 or dropped from the prefill.
 DEFAULT_YOLOV8 = Path("workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/weights/best.pt")
-DEFAULT_YOLO26 = Path("workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt")
+DEFAULT_YOLO26 = Path("workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt")
 
 
 def parse_args() -> argparse.Namespace:
