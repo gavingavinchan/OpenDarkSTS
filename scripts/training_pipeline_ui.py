@@ -1208,6 +1208,10 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 self._respond_json({"error": "Training is not ready", "missing": readiness["missing"]}, status=409)
                 return
             result = pipeline.start_training_run(selection_path, config_path)
+        except pipeline.TrainingRunActiveError as exc:
+            self._log_training_action("start_training_blocked", {"run_dir": exc.run_dir, "pid": exc.pid, "reason": "already_running"})
+            self._respond_json({"error": str(exc), "run_dir": exc.run_dir, "pid": exc.pid, "already_running": True}, status=409)
+            return
         except (KeyError, ValueError) as exc:
             self._respond_json({"error": str(exc)}, status=400)
             return

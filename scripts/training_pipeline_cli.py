@@ -594,11 +594,19 @@ def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any
     if not readiness["ready"]:
         result = {"ready": False, "missing": list(readiness["missing"])}
         return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["Training is not ready"])
-    result = pipeline.start_training_run(
-        args.selection,
-        args.config,
-        yolo_executable=args.yolo_executable,
-    )
+    try:
+        result = pipeline.start_training_run(
+            args.selection,
+            args.config,
+            yolo_executable=args.yolo_executable,
+        )
+    except pipeline.TrainingRunActiveError as exc:
+        return 3, envelope(
+            "start-training",
+            ok=False,
+            result={"ready": True, "run_dir": exc.run_dir, "pid": exc.pid, "already_running": True},
+            errors=[str(exc)],
+        )
     warnings = list(result.pop("warnings", []) or [])
     add_diagnostics(result, args, "start_training_run", selection_path=args.selection, config_path=args.config)
     return 0, envelope("start-training", ok=True, result=result, warnings=warnings)

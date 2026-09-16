@@ -3026,6 +3026,18 @@ TRAINING_LOG_FILENAME = "train.log"
 TRAINING_METADATA_FILENAME = "training_metadata.json"
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 TRAINING_COMPLETION_MARKERS = ("Results saved to", "epochs completed in")
+# Artifacts a launch regenerates. A relaunch into the same run directory rotates them
+# aside so a failed relaunch can never be judged `completed` from the previous launch.
+ROTATED_RUN_ARTIFACTS = (TRAINING_LOG_FILENAME, "results.csv", "test_metrics.json", "test_eval.log")
+
+
+class TrainingRunActiveError(RuntimeError):
+    """Raised when a launch targets a run directory whose previous process is still alive."""
+
+    def __init__(self, message: str, *, run_dir: str, pid: int | None) -> None:
+        super().__init__(message)
+        self.run_dir = run_dir
+        self.pid = pid
 
 
 def read_process_start_ticks(pid: int) -> int | None:
@@ -3113,6 +3125,44 @@ def read_log_tail(log_path: Path, max_lines: int = 40) -> list[str]:
     return lines[-max_lines:]
 
 
+def active_run_process(run_dir: Path) -> dict[str, Any] | None:
+    """Return the recorded process for `run_dir` when it is still alive, else None."""
+    process_path = run_dir / PROCESS_RECORD_FILENAME
+    if not process_path.is_file():
+        return None
+    try:
+        record = load_json(process_path)
+    except Exception:
+        return None
+    if str(record.get("status") or "running") in TERMINAL_RUN_STATUSES:
+        return None
+    if not process_is_alive(record.get("pid"), record.get("start_ticks")):
+        return None
+    return record
+
+
+def new_launch_id() -> str:
+    return f"{utcnow_iso_for_training().replace(':', '').replace('-', '')}_{secrets.token_hex(3)}"
+
+
+def rotate_previous_launch_artifacts(run_dir: Path, previous_launch_id: str | None) -> list[str]:
+    """Move the previous launch's regenerable artifacts aside so this launch starts clean."""
+    suffix = str(previous_launch_id or "previous")
+    rotated: list[str] = []
+    for filename in ROTATED_RUN_ARTIFACTS:
+        source = run_dir / filename
+        if not source.is_file():
+            continue
+        target = run_dir / f"{source.stem}.{suffix}{source.suffix}"
+        index = 1
+        while target.exists():
+            target = run_dir / f"{source.stem}.{suffix}-{index}{source.suffix}"
+            index += 1
+        source.rename(target)
+        rotated.append(target.name)
+    return rotated
+
+
 def start_training_run(
     selection_path: str | Path,
     training_config_path: str | Path,
@@ -3122,6 +3172,15 @@ def start_training_run(
 ) -> dict[str, Any]:
     config_file = repo_resolve(training_config_path)
     config = load_json(config_file)
+    run_dir = run_dir_for_config(config)
+    live = active_run_process(run_dir)
+    if live is not None:
+        raise TrainingRunActiveError(
+            f"A training process (pid {live.get('pid')}) is still running in {repo_relative(run_dir)}; "
+            "stop it before launching this run again",
+            run_dir=repo_relative(run_dir),
+            pid=live.get("pid"),
+        )
     readiness = check_training_readiness(selection_path, config)
     if not readiness["ready"]:
         raise ValueError("Training is not ready: " + "; ".join(readiness["missing"]))
@@ -3135,15 +3194,24 @@ def start_training_run(
         command_line.append("exist_ok=True")
     argv = [resolve_yolo_executable(yolo_executable), *command_line[1:]]
 
-    run_dir = run_dir_for_config(config)
     run_dir.mkdir(parents=True, exist_ok=True)
+    previous_record: dict[str, Any] = {}
+    previous_process_path = run_dir / PROCESS_RECORD_FILENAME
+    if previous_process_path.is_file():
+        try:
+            previous_record = load_json(previous_process_path)
+        except Exception:
+            previous_record = {}
+    rotated = rotate_previous_launch_artifacts(run_dir, previous_record.get("launch_id"))
+    launch_id = new_launch_id()
     log_path = run_dir / TRAINING_LOG_FILENAME
     started_at = utcnow_iso_for_training()
 
     env = dict(os.environ)
     env.update(extra_env or {})
-    with log_path.open("a", encoding="utf-8") as log_handle:
-        log_handle.write(f"# start_training_run {started_at}\n# {' '.join(argv)}\n")
+    # `w`, never `a`: a relaunch must not inherit the previous launch's completion markers.
+    with log_path.open("w", encoding="utf-8") as log_handle:
+        log_handle.write(f"# start_training_run {started_at} launch_id={launch_id}\n# {' '.join(argv)}\n")
         log_handle.flush()
         process = subprocess.Popen(
             argv,
@@ -3158,6 +3226,8 @@ def start_training_run(
     record = {
         "schema_version": SCHEMA_VERSION,
         "status": "running",
+        "launch_id": launch_id,
+        "rotated_previous_artifacts": rotated,
         "pid": process.pid,
         "pgid": process.pid,
         "start_ticks": read_process_start_ticks(process.pid),
@@ -3190,6 +3260,8 @@ def start_training_run(
         "training_metadata_path": repo_relative(run_dir / TRAINING_METADATA_FILENAME),
         "pid": process.pid,
         "status": "running",
+        "launch_id": launch_id,
+        "rotated_previous_artifacts": rotated,
         "started_at": started_at,
         "command_line": list(command_line),
         "argv": list(argv),

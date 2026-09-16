@@ -130,6 +130,10 @@
 
     async function startRun() {
       const picked = pickedPaths();
+      const button = document.getElementById('startRun');
+      /* Disable while the launch is in flight so a double click cannot start two
+         processes into the same run directory (the backend also refuses). */
+      button.disabled = true;
       P.setStatus('startStatus', 'Starting training run…');
       try {
         const data = await P.api('/api/training/runs/start', { method: 'POST', body: picked });
@@ -138,6 +142,7 @@
         await loadRuns();
         await refreshDetail();
       } catch (error) {
+        button.disabled = false;
         P.setStatus('startStatus', 'Start failed: ' + error.message, 'err');
       }
     }

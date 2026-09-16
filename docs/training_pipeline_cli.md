@@ -40,7 +40,7 @@ Exit codes:
 - `0`: command succeeded.
 - `1`: pipeline failure, such as missing files or invalid manifests.
 - `2`: command-line usage error.
-- `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`. `start-training` also exits `3` when readiness blocks the launch, but with `ok: false`.
+- `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`. `start-training` also exits `3` with `ok: false` when readiness blocks the launch, or when a live process already owns the target run directory.
 - `4`: `training-status` ran successfully and observed a `failed` run.
 
 `ok` means the CLI command ran and returned a valid response. It does not always mean the domain condition is positive. For example, `check-training-ready` exits `3` with `ok: true` when it successfully reports training blockers.
@@ -330,10 +330,24 @@ Launches the exact `build-train-command` command as a detached process. This is 
   --config workspace/training_configs/manual_reviewed_gavin_balanced_1to1_v1_e150_img960.json
 ```
 
-Readiness is checked first; blockers exit `3` with `ok: false` and nothing is launched. On success the run directory receives:
+A launch is refused when `process.json` in the target run directory still records a live
+process, even with `overwrite` enabled: the CLI exits `3` with `ok: false` and
+`result.already_running: true`, and `POST /api/training/runs/start` answers `409`. Stop the
+existing run first, otherwise two YOLO processes write into one directory and only the
+second can be stopped.
+
+Readiness is checked first; blockers exit `3` with `ok: false` and nothing is launched.
+
+Each launch gets a `launch_id`. Relaunching into an existing run directory rotates the
+previous launch's regenerable artifacts aside (`train.log`, `results.csv`,
+`test_metrics.json`, `test_eval.log` become `<stem>.<previous launch_id><suffix>`) and
+rewrites `training_metadata.json` with `status: running`, so a failed relaunch can never be
+reported as `completed` from the previous launch's log, metrics, or checkpoint.
+
+On success the run directory receives:
 
 - `train.log`: combined stdout/stderr of the YOLO process.
-- `process.json`: pid, process-group id, `start_ticks` from `/proc` for PID-reuse protection, command line, argv, and launch time.
+- `process.json`: pid, process-group id, `start_ticks` from `/proc` for PID-reuse protection, `launch_id`, `rotated_previous_artifacts`, command line, argv, and launch time.
 - `training_metadata.json`: written by `write_training_metadata` with `status: running`.
 
 `--yolo-executable` overrides the resolved `yolo` binary (default `.venv/bin/yolo`, then `PATH`).

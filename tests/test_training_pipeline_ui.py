@@ -376,6 +376,39 @@ def test_step6_api_starts_polls_and_stops_training_run(tmp_path: Path, monkeypat
     assert "start_training" in interactions and "stop_training" in interactions
 
 
+def test_step6_api_refuses_a_second_start_into_a_live_run_dir(tmp_path: Path, monkeypatch) -> None:
+    ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
+    fake_yolo = tmp_path / "bin" / "yolo"
+    fake_yolo.parent.mkdir(parents=True)
+    fake_yolo.write_text("#!/bin/sh\nexec sleep 120\n")
+    fake_yolo.chmod(0o755)
+    monkeypatch.setattr(ui.pipeline, "resolve_yolo_executable", lambda executable=None: str(fake_yolo))
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        saved_selection = save_and_export_selection(server.base_url)
+        _, saved_config = post_json_capture(
+            server.base_url + "/api/training/configs",
+            {
+                "dataset_name": "API Training Fixture", "dataset_version": "v1", "model": "yolov8n.pt",
+                "run_group": "api_dup_group", "run_name": "api_dup_run", "image_size": 320,
+                "epochs": 1, "batch": 2, "device": "cpu", "overwrite": True,
+                "selection_path": saved_selection["selection_path"],
+            },
+        )
+        body = {"selection_path": saved_selection["selection_path"], "config_path": saved_config["config_path"]}
+        first_status, first = post_json_capture(server.base_url + "/api/training/runs/start", body)
+        second_status, second = post_json_capture(server.base_url + "/api/training/runs/start", body)
+        record = json.loads((tmp_path / "runs" / "api_dup_group" / "api_dup_run" / "process.json").read_text())
+        post_json_capture(server.base_url + "/api/training/runs/api_dup_group/api_dup_run/stop", {})
+
+    assert first_status == 202
+    assert second_status == 409
+    assert second["already_running"] is True
+    assert second["pid"] == first["pid"]
+    # The refused launch must not have replaced the live process record.
+    assert record["pid"] == first["pid"]
+
+
 def test_step7_api_writes_evaluation_report_and_refuses_undocumented_promotion(tmp_path: Path, monkeypatch) -> None:
     ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
     run_dir = tmp_path / "runs" / "api_eval_group" / "api_eval_run"
