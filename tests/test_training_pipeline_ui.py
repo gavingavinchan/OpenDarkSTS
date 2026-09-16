@@ -405,3 +405,52 @@ def test_step7_api_writes_evaluation_report_and_refuses_undocumented_promotion(t
     assert not (tmp_path / "model_weights").exists()
     interactions = (tmp_path / "reports" / "interactions.jsonl").read_text()
     assert "promote_weight_refused" in interactions
+
+
+def get_text(url: str) -> tuple[int, str, str]:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return response.status, response.headers.get("Content-Type", ""), response.read().decode("utf-8")
+
+
+def test_template_loader_reads_every_page_template() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    templates = ui.load_templates()
+    for name in ("bbox_overview", "import"):
+        assert name in templates, f"missing template {name}"
+        assert templates[name].lstrip().startswith("<!DOCTYPE html>")
+    assert ui.template_text("import") is templates["import"]
+
+
+def test_render_template_substitutes_placeholders() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    html = ui.render_template("import", stage_nav="<nav id='probe'></nav>")
+    assert "__STAGE_NAV__" not in html
+    assert "<nav id='probe'></nav>" in html
+
+
+def test_stage_nav_covers_all_seven_stages_and_marks_current() -> None:
+    from scripts import training_pipeline_ui as ui
+
+    nav = ui.render_stage_nav(4)
+    for href in ("/import", "/bbox-overview", "/datasets", "/training-setup", "/training", "/evaluation"):
+        assert f'href="{href}"' in nav
+    assert 'class="stage active" href="/datasets"' in nav
+    assert nav.count("data-stage=") == 7
+
+
+def test_shared_static_assets_are_served(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        status, content_type, css = get_text(f"{server.base_url}/static/pipeline.css")
+        assert status == 200 and "css" in content_type
+        assert ".stage.active" in css
+        try:
+            get_text(f"{server.base_url}/static/../training_pipeline_ui.py")
+            raise AssertionError("path traversal should not be served")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+
+
