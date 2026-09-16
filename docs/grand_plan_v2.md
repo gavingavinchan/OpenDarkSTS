@@ -1,3 +1,5 @@
+> **Deprecated.** This describes a two-zoom-level, dot-detector design that was never built. See [`grand_plan_v3.md`](grand_plan_v3.md) for the system as it actually exists.
+
 # OpenDarkSTS — Grand Plan v2 (AIS-First Pipeline)
 
 Detect dark ship-to-ship (STS) transfers using a two-stage satellite imagery approach

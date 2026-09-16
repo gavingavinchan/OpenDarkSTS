@@ -4,7 +4,12 @@ Detect dark ship-to-ship (STS) transfers by first analyzing satellite imagery to
 
 # Branch Context
 
-The current `ais-first-pipeline` branch is focused on the training pipeline: reviewing, curating, training, and evaluating YOLO datasets for the dot-detector and later STS models. See `docs/grand_plan_v2.md` implementation order and `docs/training_pipeline_plan.md` for the authoritative training-side plan. For training pipeline CLI usage and automation diagnostics, refer to `docs/training_pipeline_cli.md`.
+The current `ais-first-pipeline` branch carries both halves of the system:
+
+- The **training pipeline** (steps 1-7, GUI + CLI): reviewing, curating, training, and evaluating YOLO datasets for the STS detector. `docs/training_pipeline_plan.md` is the authoritative training-side plan; `docs/training_pipeline_cli.md` covers CLI usage and automation diagnostics.
+- The **operational pipeline** (`scripts/pipeline.py`): one command that detects STS pairs in Sentinel-2 tiles, georeferences them, cross-references the matching US AIS day file, and writes a CSV/JSON of dark STS candidates plus an annotated PNG per detection. `README.md` has the quickstart.
+
+`docs/grand_plan_v3.md` describes the system as it actually exists: a single 10 m/pixel true-colour zoom level, one STS detector (no dot detector), US AIS only, and same-day radius matching with no time window. `docs/grand_plan_v2.md` is retained only as history and is wrong about the two-zoom-level, dot-detector design.
 
 # Data Handling Rule
 
