@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Dataset Selection</title>
+  <link rel="stylesheet" href="/static/pipeline.css">
+</head>
+<body data-page="datasets">
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">04<sup>/07</sup></div>
+        <div>
+          <h1>Dataset Selection</h1>
+          <p class="subtitle">Pick reviewed images, assign train/val/test splits, save a reproducible selection manifest, and export it as a YOLO dataset.</p>
+        </div>
+      </div>
+      __STAGE_NAV__
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Filters</h2>
+        <div class="grid2">
+          <label class="field"><span>Albums</span>
+            <select id="albumFilter" multiple size="5"></select>
+          </label>
+          <label class="field"><span>Label class</span>
+            <select id="labelFilter" multiple size="5">
+              <option value="ship">ship</option>
+              <option value="ships">ships</option>
+              <option value="neither">neither</option>
+              <option value="exportable">exportable</option>
+            </select>
+          </label>
+          <label class="field"><span>Has ships (bbox)</span>
+            <select id="hasShipsFilter">
+              <option value="any">Any</option>
+              <option value="yes">Only images with exportable bboxes</option>
+              <option value="no">Only images without exportable bboxes (background)</option>
+            </select>
+          </label>
+          <label class="field"><span>Reviewer</span>
+            <select id="reviewerFilter"><option value="">All reviewers</option></select>
+          </label>
+          <label class="field"><span>Review status</span>
+            <select id="completionFilter">
+              <option value="completed">Completed reviews only</option>
+              <option value="all">Include incomplete reviews</option>
+            </select>
+          </label>
+          <label class="field"><span>Search filename / key</span>
+            <input id="searchFilter" placeholder="filename or image key" autocomplete="off">
+          </label>
+        </div>
+        <div class="row">
+          <button id="applyFilters" class="primary" type="button">Apply Filters</button>
+          <button id="selectAll" type="button">Select All Visible</button>
+          <button id="clearSelection" type="button">Clear Selection</button>
+          <button id="invertSelection" type="button">Invert Selection</button>
+        </div>
+        <p class="hint" id="candidateSummary">Loading candidates…</p>
+        <div class="status" id="candidateStatus"></div>
+      </section>
+
+      <div class="cols">
+        <section class="card">
+          <h2>Candidates</h2>
+          <div class="scroll">
+            <table id="candidateTable">
+              <thead><tr>
+                <th><input type="checkbox" id="headerToggle" title="Toggle all visible"></th>
+                <th>Image</th><th>Albums</th><th>Status</th><th>ship</th><th>ships</th><th>neither</th><th>Split</th>
+              </tr></thead>
+              <tbody id="candidateBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div style="display:grid; gap:18px;">
+          <section class="card">
+            <h2>Split Preview</h2>
+            <p class="hint">Splits are assigned deterministically by the backend from the selected image keys and seed.</p>
+            <div class="grid3">
+              <label class="field"><span>Train %</span><input id="ratioTrain" type="number" min="0" max="100" step="1" value="80"></label>
+              <label class="field"><span>Val %</span><input id="ratioVal" type="number" min="0" max="100" step="1" value="10"></label>
+              <label class="field"><span>Test %</span><input id="ratioTest" type="number" min="0" max="100" step="1" value="10"></label>
+              <label class="field"><span>Seed</span><input id="seed" type="number" value="42"></label>
+            </div>
+            <div class="row">
+              <button id="previewSplits" type="button">Preview Splits</button>
+            </div>
+            <table id="splitPreview"><tbody></tbody></table>
+          </section>
+
+          <section class="card">
+            <h2>Save &amp; Export</h2>
+            <div class="grid2">
+              <label class="field"><span>Dataset name</span><input id="datasetName" value="dataset_1"></label>
+              <label class="field"><span>Version</span><input id="datasetVersion" value="v1"></label>
+            </div>
+            <label class="field"><span>Description</span><input id="datasetDescription" placeholder="optional"></label>
+            <div class="row">
+              <button id="saveSelection" class="primary" type="button" disabled>Save Selection</button>
+              <button id="exportSelection" type="button" disabled>Export YOLO Dataset</button>
+              <button id="continueToSetup" type="button" disabled>Continue To Training Setup</button>
+            </div>
+            <div class="status" id="saveStatus"></div>
+          </section>
+        </div>
+      </div>
+
+      <section class="card">
+        <h2>Saved Selections</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Dataset</th><th>Version</th><th>Images</th><th>Train/Val/Test</th><th>Exported</th><th>Updated</th><th>Actions</th></tr></thead>
+            <tbody id="selectionBody"></tbody>
+          </table>
+        </div>
+        <div class="status" id="selectionStatus"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/pipeline.js"></script>
+  <script>
+    const P = window.Pipeline;
+    const state = {
+      candidates: [],
+      visible: [],
+      selected: new Set(),
+      splits: {},
+      albums: [],
+      selections: [],
+      lastSelectionPath: null,
+      lastExportDir: null,
+    };
+
+    function currentFilters() {
+      return {
+        album_ids: Array.from(document.getElementById('albumFilter').selectedOptions).map(function (o) { return o.value; }),
+        labels: Array.from(document.getElementById('labelFilter').selectedOptions).map(function (o) { return o.value; }),
+        has_ships: document.getElementById('hasShipsFilter').value,
+        reviewer: document.getElementById('reviewerFilter').value,
+        completion: document.getElementById('completionFilter').value,
+        search: document.getElementById('searchFilter').value.trim().toLowerCase(),
+      };
+    }
+
+    async function loadAlbums() {
+      try {
+        const data = await P.api('/api/albums');
+        state.albums = data.albums || [];
+        document.getElementById('albumFilter').innerHTML = state.albums.map(function (album) {
+          return '<option value="' + P.esc(album.album_id) + '">' + P.esc(album.album_name || album.album_id) +
+            ' (' + (album.image_count || 0) + ')</option>';
+        }).join('') || '<option disabled>No albums yet</option>';
+      } catch (error) {
+        P.setStatus('candidateStatus', 'Could not load albums: ' + error.message, 'err');
+      }
+    }
+
+    function applyClientFilters() {
+      const filters = currentFilters();
+      state.visible = state.candidates.filter(function (item) {
+        const counts = item.counts || {};
+        if (filters.has_ships === 'yes' && !(counts.exportable > 0)) { return false; }
+        if (filters.has_ships === 'no' && counts.exportable > 0) { return false; }
+        if (filters.reviewer && (item.reviewer || '') !== filters.reviewer) { return false; }
+        if (filters.search) {
+          const haystack = (String(item.image_filename || '') + ' ' + String(item.image_key || '')).toLowerCase();
+          if (haystack.indexOf(filters.search) === -1) { return false; }
+        }
+        return true;
+      });
+      renderCandidates();
+    }
+
+    async function loadCandidates() {
+      const filters = currentFilters();
+      const params = new URLSearchParams();
+      filters.album_ids.forEach(function (value) { params.append('album_id', value); });
+      filters.labels.forEach(function (value) { params.append('label', value); });
+      if (filters.completion === 'all') { params.set('include_incomplete', '1'); }
+      P.setStatus('candidateStatus', 'Loading candidates…');
+      try {
+        const data = await P.api('/api/dataset-candidates?' + params.toString());
+        state.candidates = data.candidates || [];
+        state.candidates.forEach(function (item) { item.reviewer = item.reviewer || data.reviewer; });
+        const reviewers = Array.from(new Set(state.candidates.map(function (item) { return item.reviewer; }).filter(Boolean)));
+        const reviewerSelect = document.getElementById('reviewerFilter');
+        const previous = reviewerSelect.value;
+        reviewerSelect.innerHTML = '<option value="">All reviewers</option>' + reviewers.map(function (name) {
+          return '<option value="' + P.esc(name) + '">' + P.esc(name) + '</option>';
+        }).join('');
+        reviewerSelect.value = previous;
+        const counts = data.bbox_counts || {};
+        document.getElementById('candidateSummary').textContent =
+          data.candidate_count + ' candidate images · ship ' + (counts.ship || 0) +
+          ' · ships ' + (counts.ships || 0) + ' · neither ' + (counts.neither || 0) +
+          ' · exportable bboxes ' + (counts.exportable || 0);
+        P.setStatus('candidateStatus', '');
+        applyClientFilters();
+      } catch (error) {
+        P.setStatus('candidateStatus', 'Failed to load candidates: ' + error.message, 'err');
+      }
+    }
+
+    function renderCandidates() {
+      const body = document.getElementById('candidateBody');
+      if (!state.visible.length) {
+        body.innerHTML = '<tr><td colspan="8" class="empty">No candidates match these filters.</td></tr>';
+      } else {
+        body.innerHTML = state.visible.map(function (item) {
+          const counts = item.counts || {};
+          const checked = state.selected.has(item.image_key) ? ' checked' : '';
+          const split = state.splits[item.image_key] || '';
+          return '<tr class="' + (checked ? 'selected' : '') + '" data-key="' + P.esc(item.image_key) + '">' +
+            '<td><input type="checkbox" class="pick"' + checked + ' data-key="' + P.esc(item.image_key) + '"></td>' +
+            '<td>' + P.esc(item.image_filename) + '</td>' +
+            '<td>' + P.esc((item.album_names || []).join(', ') || '—') + '</td>' +
+            '<td><span class="pill ' + (item.review_status === 'completed' ? 'ok' : 'warn') + '">' + P.esc(item.review_status || '—') + '</span></td>' +
+            '<td>' + (counts.ship || 0) + '</td><td>' + (counts.ships || 0) + '</td><td>' + (counts.neither || 0) + '</td>' +
+            '<td>' + P.esc(split || '—') + '</td></tr>';
+        }).join('');
+      }
+      body.querySelectorAll('input.pick').forEach(function (box) {
+        box.addEventListener('change', function () {
+          if (box.checked) { state.selected.add(box.dataset.key); } else { state.selected.delete(box.dataset.key); }
+          P.logInteraction('toggle_candidate', { image_key: box.dataset.key, selected: box.checked, selected_count: state.selected.size });
+          updateSelectionSummary();
+          box.closest('tr').classList.toggle('selected', box.checked);
+        });
+      });
+      updateSelectionSummary();
+    }
+
+    function updateSelectionSummary() {
+      const count = state.selected.size;
+      document.getElementById('saveSelection').disabled = count === 0;
+      document.getElementById('exportSelection').disabled = !state.lastSelectionPath;
+      document.getElementById('continueToSetup').disabled = !state.lastExportDir;
+      const summary = document.getElementById('candidateSummary');
+      const base = summary.dataset.base || summary.textContent;
+      summary.dataset.base = base;
+      summary.textContent = base.replace(/ · selected \d+$/, '') + ' · selected ' + count;
+    }
+
+    function splitRatios() {
+      const train = Number(document.getElementById('ratioTrain').value) || 0;
+      const val = Number(document.getElementById('ratioVal').value) || 0;
+      const test = Number(document.getElementById('ratioTest').value) || 0;
+      const total = train + val + test;
+      if (total <= 0) { return { train: 0.8, val: 0.1, test: 0.1 }; }
+      return { train: train / total, val: val / total, test: test / total };
+    }
+
+    function previewSplits() {
+      const keys = Array.from(state.selected);
+      const ratios = splitRatios();
+      const seed = Number(document.getElementById('seed').value) || 42;
+      /* Mirror the backend's deterministic ordering closely enough for a preview; the
+         saved manifest's splits come back from the server and overwrite this. */
+      const counts = {
+        train: Math.round(keys.length * ratios.train),
+        val: Math.round(keys.length * ratios.val),
+      };
+      counts.test = Math.max(keys.length - counts.train - counts.val, 0);
+      const rows = ['train', 'val', 'test'].map(function (split) {
+        return '<tr><th>' + split + '</th><td>' + counts[split] + ' images</td></tr>';
+      });
+      rows.push('<tr><th>seed</th><td>' + seed + '</td></tr>');
+      rows.push('<tr><th>total</th><td>' + keys.length + ' images</td></tr>');
+      document.querySelector('#splitPreview tbody').innerHTML = rows.join('');
+      P.logInteraction('preview_splits', { selected_count: keys.length, seed: seed, ratios: ratios });
+    }
+
+    async function saveSelection() {
+      const payload = {
+        dataset_name: document.getElementById('datasetName').value.trim(),
+        dataset_version: document.getElementById('datasetVersion').value.trim() || 'v1',
+        description: document.getElementById('datasetDescription').value.trim() || null,
+        image_keys: Array.from(state.selected),
+        album_ids: currentFilters().album_ids,
+        seed: Number(document.getElementById('seed').value) || 42,
+        split_ratios: splitRatios(),
+      };
+      P.setStatus('saveStatus', 'Saving selection…');
+      try {
+        const data = await P.api('/api/dataset-selections', { method: 'POST', body: payload });
+        state.lastSelectionPath = data.selection_path;
+        state.splits = {};
+        ((data.selection || {}).items || []).forEach(function (item) { state.splits[item.image_key] = item.split; });
+        P.setStatus('saveStatus', 'Saved ' + data.selection_path + ' (' + payload.image_keys.length + ' images).', 'ok');
+        renderCandidates();
+        await loadSelections();
+      } catch (error) {
+        P.setStatus('saveStatus', 'Save failed: ' + error.message, 'err');
+      }
+      updateSelectionSummary();
+    }
+
+    async function exportSelection(selectionPath) {
+      const target = selectionPath || state.lastSelectionPath;
+      if (!target) { P.setStatus('saveStatus', 'Save a selection first.', 'err'); return; }
+      P.setStatus('saveStatus', 'Exporting ' + target + '…');
+      try {
+        const data = await P.api('/api/dataset-selections/export', { method: 'POST', body: { selection_path: target } });
+        state.lastExportDir = data.dataset_dir;
+        const warnings = (data.warnings || []).length ? ' Warnings: ' + data.warnings.join('; ') : '';
+        P.setStatus('saveStatus', 'Exported ' + data.exported_image_count + ' images to ' + data.dataset_dir + '.' + warnings, 'ok');
+        await loadSelections();
+      } catch (error) {
+        P.setStatus('saveStatus', 'Export failed: ' + error.message, 'err');
+      }
+      updateSelectionSummary();
+    }
+
+    async function loadSelections() {
+      try {
+        const data = await P.api('/api/dataset-selections');
+        state.selections = data.selections || [];
+        const body = document.getElementById('selectionBody');
+        if (!state.selections.length) {
+          body.innerHTML = '<tr><td colspan="7" class="empty">No saved selections yet.</td></tr>';
+          return;
+        }
+        body.innerHTML = state.selections.map(function (item) {
+          const counts = item.split_counts || {};
+          return '<tr><td>' + P.esc(item.dataset_name) + '</td><td>' + P.esc(item.dataset_version) + '</td>' +
+            '<td>' + (item.item_count || 0) + '</td>' +
+            '<td>' + (counts.train || 0) + ' / ' + (counts.val || 0) + ' / ' + (counts.test || 0) + '</td>' +
+            '<td><span class="pill ' + (item.exported ? 'ok' : 'warn') + '">' + (item.exported ? 'exported' : 'not exported') + '</span></td>' +
+            '<td>' + P.esc(P.shortTime(item.updated_at)) + '</td>' +
+            '<td><button type="button" class="ghost export-one" data-path="' + P.esc(item.selection_path) + '">Export</button></td></tr>';
+        }).join('');
+        body.querySelectorAll('button.export-one').forEach(function (button) {
+          button.addEventListener('click', function () {
+            P.logInteraction('click', { control: 'export_saved_selection', selection_path: button.dataset.path });
+            exportSelection(button.dataset.path);
+          });
+        });
+        P.setStatus('selectionStatus', state.selections.length + ' saved selections.', '');
+      } catch (error) {
+        P.setStatus('selectionStatus', 'Could not load selections: ' + error.message, 'err');
+      }
+    }
+
+    function wire() {
+      document.getElementById('applyFilters').addEventListener('click', loadCandidates);
+      document.getElementById('searchFilter').addEventListener('input', applyClientFilters);
+      document.getElementById('hasShipsFilter').addEventListener('change', applyClientFilters);
+      document.getElementById('reviewerFilter').addEventListener('change', applyClientFilters);
+      document.getElementById('selectAll').addEventListener('click', function () {
+        state.visible.forEach(function (item) { state.selected.add(item.image_key); });
+        renderCandidates();
+      });
+      document.getElementById('clearSelection').addEventListener('click', function () {
+        state.selected.clear();
+        renderCandidates();
+      });
+      document.getElementById('invertSelection').addEventListener('click', function () {
+        state.visible.forEach(function (item) {
+          if (state.selected.has(item.image_key)) { state.selected.delete(item.image_key); }
+          else { state.selected.add(item.image_key); }
+        });
+        renderCandidates();
+      });
+      document.getElementById('headerToggle').addEventListener('change', function (event) {
+        state.visible.forEach(function (item) {
+          if (event.target.checked) { state.selected.add(item.image_key); } else { state.selected.delete(item.image_key); }
+        });
+        renderCandidates();
+      });
+      document.getElementById('previewSplits').addEventListener('click', previewSplits);
+      document.getElementById('saveSelection').addEventListener('click', function () { saveSelection(); });
+      document.getElementById('exportSelection').addEventListener('click', function () { exportSelection(null); });
+      document.getElementById('continueToSetup').addEventListener('click', function () {
+        window.location.href = '/training-setup';
+      });
+      P.autoLogControls(document);
+      P.captureConsoleErrors();
+    }
+
+    wire();
+    loadAlbums().then(loadCandidates).then(loadSelections);
+  </script>
+</body>
+</html>

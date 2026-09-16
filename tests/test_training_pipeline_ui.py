@@ -454,3 +454,28 @@ def test_shared_static_assets_are_served(tmp_path: Path, monkeypatch) -> None:
             assert exc.code == 404
 
 
+
+
+def test_dataset_selection_page_renders_200_with_nav(tmp_path: Path, monkeypatch) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        for path in ("/datasets", "/dataset-selection"):
+            status, content_type, body = get_text(f"{server.base_url}{path}")
+            assert status == 200 and "text/html" in content_type
+            assert "Dataset Selection" in body
+            assert 'aria-label="Training pipeline stages"' in body
+            assert "__STAGE_NAV__" not in body
+        status, _, js = get_text(f"{server.base_url}/static/pipeline.js")
+        assert status == 200 and "training-ui-interaction" in js
+
+
+def test_unknown_job_id_returns_404(tmp_path: Path) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        try:
+            get_json(f"{server.base_url}/api/jobs/does-not-exist")
+            raise AssertionError("expected 404")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404

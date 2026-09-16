@@ -583,6 +583,10 @@ def render_import_html() -> str:
     )
 
 
+def render_datasets_html() -> str:
+    return render_template("datasets", stage_nav=render_stage_nav(4))
+
+
 class TrainingPipelineHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -595,6 +599,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if path == "/import":
             self._respond_html(render_import_html())
+            return
+        if path in {"/datasets", "/dataset-selection"}:
+            self._respond_html(render_datasets_html())
             return
         if path.startswith("/static/"):
             self._serve_static_file(path[len("/static/"):])
@@ -647,6 +654,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/training/runs/active":
             self._handle_list_active_runs(parsed)
+            return
+        if path.startswith("/api/jobs/"):
+            self._handle_job_status(path[len("/api/jobs/"):])
             return
         if path.startswith("/api/training/runs/") and path.endswith("/status"):
             run_ref = self._training_run_ref(path[len("/api/training/runs/"):-len("/status")])
@@ -1056,6 +1066,15 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             append_training_ui_interaction({"source": "training_api", "action": action, **details})
         except Exception:
             pass
+
+    def _handle_job_status(self, job_id: str) -> None:
+        with JOBS_LOCK:
+            job = JOBS.get(job_id.strip("/"))
+            payload = dict(job) if job else None
+        if payload is None:
+            self._respond_json({"error": "job not found"}, status=404)
+            return
+        self._respond_json(payload)
 
     def _handle_list_exported_datasets(self) -> None:
         try:
