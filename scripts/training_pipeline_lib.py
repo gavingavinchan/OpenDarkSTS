@@ -3473,6 +3473,32 @@ def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
     }
 
 
+def list_run_groups(runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, Any]]:
+    """List evaluatable run groups: any runs_dir child holding at least one run with results.csv."""
+    root = repo_resolve(runs_dir)
+    groups: list[dict[str, Any]] = []
+    if not root.is_dir():
+        return groups
+    for group_dir in sorted(root.iterdir()):
+        if not group_dir.is_dir():
+            continue
+        run_names = [child.name for child in sorted(group_dir.iterdir()) if child.is_dir() and (child / "results.csv").is_file()]
+        if not run_names:
+            continue
+        report_path = repo_resolve(WORKSPACE_DIR / "reports") / f"{group_dir.name}_evaluation.md"
+        groups.append({
+            "run_group": group_dir.name,
+            "run_dir": repo_relative(group_dir),
+            "run_count": len(run_names),
+            "run_names": run_names,
+            "promoted_weight_count": sum(1 for name in run_names if (group_dir / name / "weights" / "best.pt").is_file()),
+            "test_metrics_count": sum(1 for name in run_names if (group_dir / name / TEST_METRICS_FILENAME).is_file()),
+            "report_markdown_path": repo_relative(report_path) if report_path.is_file() else None,
+        })
+    groups.sort(key=lambda item: str(item.get("run_group") or ""))
+    return groups
+
+
 def collect_run_group_summaries(run_group: str, runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, Any]]:
     group_dir = repo_resolve(runs_dir) / str(run_group)
     if not group_dir.is_dir():

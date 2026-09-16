@@ -549,6 +549,30 @@ def command_list_exported_datasets(args: argparse.Namespace) -> tuple[int, dict[
     return 0, envelope("list-exported-datasets", ok=True, result=result)
 
 
+def command_list_run_groups(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    groups = pipeline.list_run_groups(args.runs_dir)
+    result = {"run_group_count": len(groups), "run_groups": groups}
+    add_diagnostics(result, args, "list_run_groups", runs_dir=args.runs_dir)
+    return 0, envelope("list-run-groups", ok=True, result=result)
+
+
+def command_show_run_group(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    try:
+        runs = pipeline.collect_run_group_summaries(args.run_group, args.runs_dir)
+    except ValueError as exc:
+        return 1, envelope("show-run-group", ok=False, errors=[str(exc)])
+    suggested, reason = pipeline.best_run_by_metric(runs)
+    result = {
+        "run_group": args.run_group,
+        "run_count": len(runs),
+        "runs": runs,
+        "suggested_run_name": suggested,
+        "suggested_reason": reason,
+    }
+    add_diagnostics(result, args, "show_run_group", runs_dir=args.runs_dir)
+    return 0, envelope("show-run-group", ok=True, result=result)
+
+
 def command_list_starting_weights(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     weights = pipeline.list_starting_weights(
         root_dir=args.root_dir,
@@ -887,6 +911,15 @@ def build_parser() -> argparse.ArgumentParser:
     active_runs_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
     active_runs_parser.add_argument("--all", action="store_true", help="Include terminal runs as well")
     active_runs_parser.set_defaults(handler=command_list_active_runs)
+
+    run_groups_parser = subparsers.add_parser("list-run-groups")
+    run_groups_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    run_groups_parser.set_defaults(handler=command_list_run_groups)
+
+    show_group_parser = subparsers.add_parser("show-run-group")
+    show_group_parser.add_argument("--run-group", required=True)
+    show_group_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
+    show_group_parser.set_defaults(handler=command_show_run_group)
 
     evaluation_parser = subparsers.add_parser("write-evaluation-report")
     evaluation_parser.add_argument("--run-group", required=True)
