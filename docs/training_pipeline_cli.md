@@ -440,6 +440,8 @@ legacy runs that predate `process.json`. This is what the step 7 GUI page uses t
 
 Returns the per-run validation/test metric summaries for one run group plus the suggested promotion target,
 without writing anything. The step 7 results table is this command's output rendered as a table.
+`validation_metrics` describes the `best.pt` epoch; `final_validation_metrics` and
+`best_validation_epoch` are reported alongside it.
 
 ```bash
 .venv/bin/python scripts/training_pipeline_cli.py --pretty show-run-group --run-group manual_reviewed_gavin_v1_smoke
@@ -454,7 +456,12 @@ Writes `workspace/reports/<run_group>_evaluation.json` and `.md` for every run i
   --run-group manual_reviewed_gavin_balanced_1to1_v1_e150_img960
 ```
 
-Validation metrics come from the final `results.csv` row. Test metrics come from `test_metrics.json` in the run directory when `run-test-split` has been used. The promoted run defaults to the highest test mAP50, falling back to validation mAP50; override with `--promote-run-name` and `--promotion-reason`. `--baseline` accepts a JSON file of baseline metrics, and `--include-runs` embeds the full per-run detail in the envelope.
+Validation metrics come from the **best** `results.csv` row: the epoch with the highest
+mAP50-95, which is the fitness Ultralytics uses to decide when to save `best.pt`. That is the
+checkpoint offered for promotion, so ranking and display use it; the last row is still
+reported separately as `final_validation_metrics`, and `best_validation_epoch` names the
+epoch. Using the final row instead made a run that peaked early and collapsed look as bad as
+its last epoch and could recommend a worse checkpoint from another run. Test metrics come from `test_metrics.json` in the run directory when `run-test-split` has been used. The promoted run defaults to the highest test mAP50, falling back to validation mAP50; override with `--promote-run-name` and `--promotion-reason`. `--baseline` accepts a JSON file of baseline metrics, and `--include-runs` embeds the full per-run detail in the envelope.
 
 ### `run-test-split`
 
@@ -481,7 +488,9 @@ Copies a run's `best.pt` to `workspace/model_weights/<target-name>.pt`.
 The command enforces the repository YOLO weight reproducibility rule and exits `2` without copying anything when either check fails:
 
 - `--recreation-doc-updated` must be passed, acknowledging that `docs/yolo_weight_recreation.md` is already updated.
-- `--target-name` must already be mentioned in `docs/yolo_weight_recreation.md`.
+- `--target-name` must already be mentioned in `docs/yolo_weight_recreation.md` as a whole
+  filename token. A substring match is not enough: promoting to `26n.pt` is refused even
+  though the document mentions `yolo26n.pt`, because the promoted destination has no recipe.
 
 Document the weight first, then promote. `--overwrite` is required to replace an existing promoted weight.
 

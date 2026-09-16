@@ -2873,18 +2873,25 @@ def evaluation_markdown(report: dict[str, Any]) -> str:
         "",
         "## Runs",
         "",
-        "| Run | Val mAP50 | Test mAP50 | Test Precision | Test Recall |",
-        "|---|---:|---:|---:|---:|",
+        "Validation columns describe the best.pt epoch (highest mAP50-95, the Ultralytics "
+        "fitness for detection), not the final epoch.",
+        "",
+        "| Run | Best epoch | Val mAP50 | Final val mAP50 | Test mAP50 | Test Precision | Test Recall |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for run in report.get("runs", []):
         validation = run.get("validation_metrics") or {}
+        final_validation = run.get("final_validation_metrics") or {}
         test = run.get("test_metrics") or {}
+        best_epoch = run.get("best_validation_epoch")
         lines.append(
             "| "
             + " | ".join(
                 [
                     str(run.get("run_name", "")),
+                    "" if best_epoch is None else str(best_epoch),
                     str(metric_value(validation, "mAP50")),
+                    str(metric_value(final_validation, "mAP50")),
                     str(metric_value(test, "mAP50")),
                     str(metric_value(test, "precision")),
                     str(metric_value(test, "recall")),
@@ -2893,7 +2900,7 @@ def evaluation_markdown(report: dict[str, Any]) -> str:
             + " |"
         )
     if not report.get("runs"):
-        lines.append("| none |  |  |  |  |")
+        lines.append("| none |  |  |  |  |  |  |")
     if report.get("baseline") is not None:
         lines.extend(["", "## Baseline", "", f"`{json.dumps(report['baseline'], sort_keys=True)}`"])
     return "\n".join(lines) + "\n"
@@ -2979,6 +2986,16 @@ def normalize_augmentation(augmentation: dict[str, Any] | None) -> dict[str, Any
             raise ValueError(f"augmentation value for {key} must be numeric")
         normalized[str(key)] = parsed
     return normalized
+
+
+def doc_mentions_weight_name(weight_name: str, doc_text: str) -> bool:
+    """True when `doc_text` names this exact weight file, not merely a longer name.
+
+    A substring test lets `26n.pt` match an existing `yolo26n.pt` entry, so promotion
+    would report `documented: true` with no recipe for the promoted destination.
+    """
+    pattern = r"(?<![A-Za-z0-9_.\-])" + re.escape(str(weight_name)) + r"(?![A-Za-z0-9_.\-])"
+    return re.search(pattern, doc_text) is not None
 
 
 def weight_recreation_doc_text(doc_path: str | Path = WEIGHT_RECREATION_DOC) -> str:
@@ -3721,22 +3738,63 @@ with open(output, "w", encoding="utf-8") as handle:
 """
 
 
-def final_results_row(results_csv: str | Path) -> dict[str, float]:
+def read_results_rows(results_csv: str | Path) -> list[dict[str, str]]:
     target = repo_resolve(results_csv)
     if not target.is_file():
-        return {}
-    last: dict[str, Any] | None = None
+        return []
     with target.open(newline="") as handle:
-        for row in csv.DictReader(handle):
-            last = row
-    if not last:
+        return [{str(key).strip(): value for key, value in row.items()} for row in csv.DictReader(handle)]
+
+
+def row_metrics(row: dict[str, str] | None) -> dict[str, float]:
+    if not row:
         return {}
     metrics: dict[str, float] = {}
     for column, alias in RESULTS_METRIC_ALIASES.items():
-        value = parse_float({str(key).strip(): item for key, item in last.items()}.get(column))
+        value = parse_float(row.get(column))
         if value is not None:
             metrics[alias] = value
     return metrics
+
+
+def final_results_row(results_csv: str | Path) -> dict[str, float]:
+    rows = read_results_rows(results_csv)
+    return row_metrics(rows[-1] if rows else None)
+
+
+def best_results_row(results_csv: str | Path) -> tuple[dict[str, float], int | None]:
+    """Return the validation row for the epoch `best.pt` was saved from, and its epoch.
+
+    Ultralytics saves `best.pt` on the highest *fitness*, which for detection is
+    mAP50-95 (weights [0, 0, 0, 1]); ties keep the earliest epoch because the trainer
+    only overwrites on a strict improvement. Reporting the last row instead makes a run
+    that peaked early and collapsed look as bad as its final epoch, while the promoted
+    checkpoint is the good one.
+    """
+    rows = read_results_rows(results_csv)
+    if not rows:
+        return {}, None
+
+    def fitness(row: dict[str, str]) -> float | None:
+        for column in ("metrics/mAP50-95(B)", "metrics/mAP50(B)"):
+            value = parse_float(row.get(column))
+            if value is not None:
+                return value
+        return None
+
+    best_index = None
+    best_value = None
+    for index, row in enumerate(rows):
+        value = fitness(row)
+        if value is None:
+            continue
+        if best_value is None or value > best_value:
+            best_value = value
+            best_index = index
+    if best_index is None:
+        return row_metrics(rows[-1]), parse_epoch(rows[-1].get("epoch"), len(rows))
+    best_row = rows[best_index]
+    return row_metrics(best_row), parse_epoch(best_row.get("epoch"), best_index + 1)
 
 
 def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
@@ -3749,11 +3807,16 @@ def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
             test_metrics = (load_json(test_metrics_path).get("metrics") or None)
         except Exception:
             test_metrics = None
+    best_metrics, best_epoch = best_results_row(target / "results.csv")
     return {
         "run_name": target.name,
         "run_dir": repo_relative(target),
         "weights_path": repo_relative(weights) if weights.is_file() else None,
-        "validation_metrics": final_results_row(target / "results.csv"),
+        # `validation_metrics` describes the checkpoint that is offered for promotion
+        # (best.pt), so it is the best epoch's row, not the last one.
+        "validation_metrics": best_metrics,
+        "best_validation_epoch": best_epoch,
+        "final_validation_metrics": final_results_row(target / "results.csv"),
         "test_metrics": test_metrics,
         "training_metadata_path": repo_relative(target / TRAINING_METADATA_FILENAME) if (target / TRAINING_METADATA_FILENAME).is_file() else None,
     }
@@ -3929,7 +3992,7 @@ def promote_weight(
             "Refusing to promote: pass recreation_doc_updated after documenting the weight in docs/yolo_weight_recreation.md"
         )
     doc_text = weight_recreation_doc_text(doc_path)
-    if clean_target not in doc_text:
+    if not doc_mentions_weight_name(clean_target, doc_text):
         raise ValueError(
             f"Refusing to promote: {clean_target} is not mentioned in docs/yolo_weight_recreation.md; document it first"
         )

@@ -32,13 +32,14 @@
 
       <section class="card">
         <h2>Results</h2>
+        <p class="hint">Validation columns describe the <code>best.pt</code> epoch (highest mAP50-95, the Ultralytics fitness for detection), because that is the checkpoint offered for promotion. The final epoch is shown separately as <em>final val mAP50</em>.</p>
         <div class="scroll">
           <table>
             <thead><tr>
-              <th>Run</th><th>val mAP50</th><th>val mAP50-95</th><th>val P</th><th>val R</th>
-              <th>test mAP50</th><th>test mAP50-95</th><th>best.pt</th><th>Test split</th>
+              <th>Run</th><th>best epoch</th><th>val mAP50</th><th>val mAP50-95</th><th>val P</th><th>val R</th>
+              <th>final val mAP50</th><th>test mAP50</th><th>test mAP50-95</th><th>best.pt</th><th>Test split</th>
             </tr></thead>
-            <tbody id="resultsBody"><tr><td colspan="9" class="empty">Pick a run group and press Load Results.</td></tr></tbody>
+            <tbody id="resultsBody"><tr><td colspan="11" class="empty">Pick a run group and press Load Results.</td></tr></tbody>
           </table>
         </div>
         <div class="status" id="testStatus"></div>
@@ -139,15 +140,18 @@
     function renderResults() {
       const body = document.getElementById('resultsBody');
       if (!state.runs.length) {
-        body.innerHTML = '<tr><td colspan="9" class="empty">This run group has no runs with results.csv.</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" class="empty">This run group has no runs with results.csv.</td></tr>';
         return;
       }
       body.innerHTML = state.runs.map(function (run) {
         const val = run.validation_metrics || {};
         const test = run.test_metrics || {};
+        const finalVal = run.final_validation_metrics || {};
         return '<tr><td>' + P.esc(run.run_name) + '</td>' +
+          '<td>' + (run.best_validation_epoch === null || run.best_validation_epoch === undefined ? '—' : P.esc(run.best_validation_epoch)) + '</td>' +
           '<td>' + metricCell(val, 'mAP50') + '</td><td>' + metricCell(val, 'mAP50-95') + '</td>' +
           '<td>' + metricCell(val, 'precision') + '</td><td>' + metricCell(val, 'recall') + '</td>' +
+          '<td>' + metricCell(finalVal, 'mAP50') + '</td>' +
           '<td>' + metricCell(test, 'mAP50') + '</td><td>' + metricCell(test, 'mAP50-95') + '</td>' +
           '<td>' + (run.weights_path ? '<span class="pill ok">yes</span>' : '<span class="pill warn">none</span>') + '</td>' +
           '<td><button type="button" class="ghost test-split" data-run="' + P.esc(run.run_name) + '">Run Test Split</button></td></tr>';

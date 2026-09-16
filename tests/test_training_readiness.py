@@ -87,3 +87,38 @@ def test_training_readiness_blocks_existing_run_without_overwrite(tmp_path: Path
 
     overwrite_config_path = write_training_config(tmp_path / "training_configs" / "fixture_group_overwrite.json", output_dir=runs_dir, overwrite=True)
     assert training_lib.check_training_readiness(selection_path, overwrite_config_path)["ready"] is True
+
+
+def test_promotion_doc_check_matches_whole_weight_names(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    doc_path = tmp_path / "yolo_weight_recreation.md"
+    doc_path.write_text("| workspace/model_weights/yolo26n.pt | trained from scratch |\n")
+    run_dir = tmp_path / "runs" / "group" / "run"
+    (run_dir / "weights").mkdir(parents=True)
+    (run_dir / "weights" / "best.pt").write_bytes(b"weights")
+
+    def promote(target_name: str):
+        return training_lib.promote_weight(
+            run_group="group",
+            run_name="run",
+            target_name=target_name,
+            recreation_doc_updated=True,
+            runs_dir=tmp_path / "runs",
+            model_weights_dir=tmp_path / "model_weights",
+            doc_path=doc_path,
+        )
+
+    assert training_lib.doc_mentions_weight_name("yolo26n.pt", doc_path.read_text()) is True
+    assert training_lib.doc_mentions_weight_name("26n.pt", doc_path.read_text()) is False
+
+    try:
+        promote("26n.pt")
+    except ValueError as exc:
+        assert "not mentioned" in str(exc)
+    else:  # pragma: no cover - the substring match would have let this through
+        raise AssertionError("26n.pt must not be accepted just because yolo26n.pt is documented")
+    assert not (tmp_path / "model_weights" / "26n.pt").exists()
+
+    result = promote("yolo26n.pt")
+    assert result["documented"] is True
+    assert (tmp_path / "model_weights" / "yolo26n.pt").is_file()
