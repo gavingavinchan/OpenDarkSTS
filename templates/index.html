@@ -736,6 +736,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
       <div class="nav-section">Operations</div>
       <div class="nav-item" onclick="showTab('scan',this)"><span class="nav-icon">🛰️</span> Scan Images</div>
       <div class="nav-item" onclick="showTab('results',this)"><span class="nav-icon">🚢</span> STS Events</div>
+      <div class="nav-item" onclick="showTab('all-detections',this)"><span class="nav-icon">🔭</span> All Detections</div>
       <div class="nav-section">Tracking</div>
       <div class="nav-item" onclick="showTab('map',this)"><span class="nav-icon">🗺️</span> Live Map</div>
       <div class="nav-section">Data</div>
@@ -946,6 +947,34 @@ hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
         <p>No STS events yet — run a scan to detect dark fleet activity</p>
       </div>
       <div class="sts-grid" id="sts-grid"></div>
+    </div>
+
+    <!-- ══ ALL DETECTIONS TAB ═════════════════════ -->
+    <div id="tab-all-detections" class="tab-panel">
+      <div class="page-hdr">
+        <div class="page-title">ALL DETECTIONS</div>
+        <div class="page-sub">// view every scanned image with annotations — including non-STS detections</div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:14px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="buildAllDetections()">🔄 REFRESH</button>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim)">
+          Filter: 
+          <select id="det-filter" onchange="buildAllDetections()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-family:var(--mono)">
+            <option value="all">All images</option>
+            <option value="with-detections">With detections only</option>
+            <option value="ships-only">Ships (no STS)</option>
+            <option value="sts">STS events</option>
+            <option value="clear">Clear (no detections)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="all-det-empty" class="empty-state">
+        <div class="empty-icon">🛰️</div>
+        <p>No scans yet — run a scan first to see all detection results</p>
+      </div>
+      <div class="sts-grid" id="all-det-grid"></div>
     </div>
 
     <!-- ══ MAP TAB ════════════════════════════════ -->
@@ -1605,6 +1634,7 @@ async function runScan() {
 
     buildStsCards(_scanResults);
     buildExportPreview(_scanResults);
+    buildAllDetections();
     loadStats();
 
     if (d.confirmed_sts > 0) {
@@ -1733,6 +1763,81 @@ function buildStsCards(results) {
       }
     }, i * 400);
   });
+}
+
+// ── ALL DETECTIONS GRID ──────────────────────────────────────
+function buildAllDetections() {
+  const filter = document.getElementById('det-filter')?.value || 'all';
+  const grid   = document.getElementById('all-det-grid');
+  const empty  = document.getElementById('all-det-empty');
+
+  if (!_scanResults.length) {
+    empty.style.display = 'block';
+    grid.innerHTML = '';
+    return;
+  }
+
+  let filtered = _scanResults;
+  if (filter === 'with-detections') {
+    filtered = _scanResults.filter(r => (r.num_detections || 0) > 0);
+  } else if (filter === 'ships-only') {
+    filtered = _scanResults.filter(r => (r.num_ships || 0) > 0 && !r.is_confirmed_sts && !r.is_detected_only);
+  } else if (filter === 'sts') {
+    filtered = _scanResults.filter(r => r.is_confirmed_sts || r.is_detected_only);
+  } else if (filter === 'clear') {
+    filtered = _scanResults.filter(r => (r.num_detections || 0) === 0);
+  }
+
+  if (!filtered.length) {
+    empty.style.display = 'block';
+    empty.querySelector('p').textContent = 'No images match the selected filter';
+    grid.innerHTML = '';
+    return;
+  }
+
+  empty.style.display = 'none';
+
+  grid.innerHTML = filtered.map(r => {
+    const numShips = r.num_ships || 0;
+    const numSts   = r.num_sts   || 0;
+    const isSTS    = r.is_confirmed_sts || r.is_detected_only;
+
+    let statusBadge = '';
+    if (isSTS) {
+      const cls = r.dark_status === 'FULLY_DARK'     ? 'b-red'    :
+                  r.dark_status === 'PARTIALLY_DARK' ? 'b-orange' :
+                  r.dark_status === 'AIS_PRESENT'    ? 'b-green'  :
+                  r.dark_status === 'DETECTED_ONLY'  ? 'b-purple' : 'b-blue';
+      const label = r.dark_status === 'FULLY_DARK'     ? '🔴 CONFIRMED DARK'     :
+                    r.dark_status === 'PARTIALLY_DARK' ? '🟡 PARTIALLY DARK'     :
+                    r.dark_status === 'AIS_PRESENT'    ? '🟢 AIS PRESENT'        :
+                    r.dark_status === 'DETECTED_ONLY'  ? '⚪ DETECTED — UNVERIFIED' : r.dark_status;
+      statusBadge = `<span class="badge ${cls}">${label}</span>`;
+    } else if (numShips > 0) {
+      statusBadge = `<span class="badge b-blue">🚢 ${numShips} SHIP${numShips > 1 ? 'S' : ''}</span>`;
+    } else {
+      statusBadge = `<span class="badge b-green">✅ CLEAR</span>`;
+    }
+
+    return `<div class="sts-card">
+      <div style="position:relative">
+        <img src="${r.result_image}?t=${Date.now()}" alt="${r.filename}" style="width:100%;border-radius:var(--r);display:block">
+        <div style="position:absolute;top:10px;right:10px">${statusBadge}</div>
+      </div>
+      <div style="padding:12px 14px">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text);font-weight:600;word-break:break-all;margin-bottom:6px">${r.filename}</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.6">
+          🚢 Ships: <strong style="color:var(--text)">${numShips}</strong> &nbsp;|&nbsp;
+          🛟 STS: <strong style="color:${numSts > 0 ? 'var(--red)' : 'var(--text)'}">${numSts}</strong> &nbsp;|&nbsp;
+          📊 Conf: <strong style="color:var(--text)">${(r.conf_thresh || 0).toFixed(2)}</strong>
+        </div>
+        ${r.lat != null && r.lon != null ? `<div style="font-family:var(--mono);font-size:10px;color:var(--accent);margin-top:4px">📍 ${r.lat.toFixed(4)}, ${r.lon.toFixed(4)}</div>` : ''}
+      </div>
+      <div style="padding:0 14px 14px;display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="window.open('${r.result_image}','_blank')" style="flex:1">🖼️ FULL IMAGE</button>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ── MAP ──────────────────────────────────────────────────────
@@ -2011,8 +2116,8 @@ async function loadAisFiles() {
       <td>${f.size_mb} MB</td>
       <td><code style="font-size:9px;color:var(--text-dim)">${f.path}</code></td>
       <td style="display:flex;gap:6px">
-        <button class="btn btn-primary btn-sm" onclick="useAisFile('${f.path}')">📡 Use</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteAisFile('${f.name}')">🗑️</button>
+        <button class="btn btn-primary btn-sm" onclick="useAisFile(${JSON.stringify(f.path)})">📡 Use</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteAisFile(${JSON.stringify(f.name)})">🗑️</button>
       </td>
     </tr>`).join('');
 }
@@ -2070,6 +2175,7 @@ fetch('/api/scan/history').then(r => r.json()).then(data => {
     _scanResults = data;
     buildStsCards(data);
     buildExportPreview(data);
+    buildAllDetections();
     toast(`📂 Loaded ${data.length} previous scan result(s)`);
   }
 });

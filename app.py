@@ -73,7 +73,8 @@ CONF_PRESETS = {
     "high":   0.45,
 }
 
-MAX_BOX_AREA_FRAC = 0.50
+MAX_BOX_AREA_FRAC = 0.25   # Lower = stricter filter for false positive large boxes
+NMS_IOU_THRESHOLD = 0.30   # Lower = stricter suppression of overlapping boxes
 
 # ─────────────────────────────────────────────────────────────
 # DARK STATUS DEFINITIONS
@@ -186,10 +187,58 @@ def is_valid_box(box, img_h: int, img_w: int) -> bool:
     return (box_area / img_area) <= MAX_BOX_AREA_FRAC
 
 
+def filter_overlapping_boxes(boxes, img_h: int, img_w: int, iou_threshold: float = 0.30):
+    """
+    Custom NMS to remove overlapping/nested boxes of the same class.
+    Keeps the highest-confidence box when multiple boxes overlap significantly.
+    Also removes boxes that fully contain smaller boxes (nested big-box false positives).
+    """
+    # First filter by area
+    valid_boxes = [b for b in boxes if is_valid_box(b, img_h, img_w)]
+    if len(valid_boxes) <= 1:
+        return valid_boxes
+
+    # Sort by confidence descending
+    sorted_boxes = sorted(valid_boxes, key=lambda b: float(b.conf[0]), reverse=True)
+    keep = []
+
+    for box in sorted_boxes:
+        x1, y1, x2, y2 = map(float, box.xyxy[0])
+        cls = int(box.cls[0])
+        box_area = (x2 - x1) * (y2 - y1)
+        should_keep = True
+
+        for kept in keep:
+            kx1, ky1, kx2, ky2 = map(float, kept.xyxy[0])
+            kcls = int(kept.cls[0])
+            if kcls != cls:
+                continue  # Only suppress same class
+
+            # Compute IoU
+            ix1 = max(x1, kx1); iy1 = max(y1, ky1)
+            ix2 = min(x2, kx2); iy2 = min(y2, ky2)
+            iw  = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
+            inter = iw * ih
+            kept_area = (kx2 - kx1) * (ky2 - ky1)
+            union = box_area + kept_area - inter
+            iou   = inter / union if union > 0 else 0
+
+            # Containment ratio — if this box contains a kept box mostly inside
+            contain_ratio = inter / min(box_area, kept_area) if min(box_area, kept_area) > 0 else 0
+
+            if iou >= iou_threshold or contain_ratio >= 0.70:
+                should_keep = False
+                break
+
+        if should_keep:
+            keep.append(box)
+
+    return keep
+
+
 def draw_boxes(img_bgr, boxes, img_h: int, img_w: int):
-    for box in boxes:
-        if not is_valid_box(box, img_h, img_w):
-            continue
+    filtered = filter_overlapping_boxes(boxes, img_h, img_w, iou_threshold=NMS_IOU_THRESHOLD)
+    for box in filtered:
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cls_id = int(box.cls[0])
         conf   = float(box.conf[0])
@@ -277,17 +326,18 @@ def api_scan():
         img_h, img_w = img_bgr.shape[:2]
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-        results = model.predict(img_rgb, conf=conf, verbose=False)
+        results = model.predict(img_rgb, conf=conf, iou=NMS_IOU_THRESHOLD, verbose=False)
         r       = results[0]
+
+        # Apply custom NMS to remove overlapping/nested duplicate boxes
+        filtered_boxes = filter_overlapping_boxes(r.boxes, img_h, img_w, iou_threshold=NMS_IOU_THRESHOLD)
 
         annotated = draw_boxes(img_bgr.copy(), r.boxes, img_h, img_w)
         out_name  = f"det_{ts}_{img_path.stem[:40]}.jpg"
         cv2.imwrite(str(EXPORT_DIR / out_name), annotated)
 
         detections = []
-        for box in r.boxes:
-            if not is_valid_box(box, img_h, img_w):
-                continue
+        for box in filtered_boxes:
             cls_id = int(box.cls[0])
             detections.append({
                 "class":      CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else str(cls_id),
@@ -344,6 +394,10 @@ def api_scan():
             "total":            len(detections),
             "sts_count":        len(sts_detections),
             "ship_count":       len(detections) - len(sts_detections),
+            "num_detections":   len(detections),
+            "num_ships":        len(detections) - len(sts_detections),
+            "num_sts":          len(sts_detections),
+            "conf_thresh":      conf,
             "detections":       detections,
             "ais_vessels":      ais_vessels,
             "dark_status":      dark_status,
@@ -410,7 +464,7 @@ def api_detect():
     img_bgr      = cv2.imread(str(img_path))
     img_h, img_w = img_bgr.shape[:2]
     img_rgb      = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    results      = model.predict(img_rgb, conf=conf, verbose=False)
+    results      = model.predict(img_rgb, conf=conf, iou=NMS_IOU_THRESHOLD, verbose=False)
     r            = results[0]
 
     annotated = draw_boxes(img_bgr.copy(), r.boxes, img_h, img_w)
@@ -528,7 +582,7 @@ def serve_export(filename):
 # AIS DATA MANAGER ROUTES
 # ─────────────────────────────────────────────────────────────
 
-AIS_DIR         = Path(__file__).parent / "AIS_Downloads"
+AIS_DIR         = BASE_DIR.parent / "AIS_Downloads"
 AIS_DIR.mkdir(parents=True, exist_ok=True)
 
 _ais_download_log    = []
@@ -619,75 +673,136 @@ def api_ais_download():
             else:
                 _ais_download_log.append("🌍 No coordinate filter — downloading full dataset")
 
+            import zipfile
+
             failed = []
             for i, date in enumerate(dates, 1):
-                yr       = date[:4]
-                filename = f"ais-{date}.csv.zst"
-                url      = AIS_BASE_URL.format(year=yr, date=date)
-                zst_path = AIS_DIR / filename
-                csv_name = f"AIS_{date.replace('-', '_')}.csv"
-                csv_path = AIS_DIR / csv_name
+                yr        = int(date[:4])
+                date_us   = date.replace('-', '_')   # YYYY_MM_DD
+                csv_name  = f"AIS_{date_us}.csv"
+                csv_path  = AIS_DIR / csv_name
 
                 if csv_path.exists():
                     _ais_download_log.append(f"[{i}/{len(dates)}] ⏭️  Already exists: {csv_name}")
                     _ais_download_done_n += 1
                     continue
 
-                try:
-                    _ais_download_log.append(f"[{i}/{len(dates)}] ⬇️  Downloading {filename}…")
-                    urllib.request.urlretrieve(url, str(zst_path))
-                    raw_mb = zst_path.stat().st_size / 1024**2
+                # Pick URL format based on year
+                # 2015-2024: AIS_YYYY_MM_DD.zip
+                # 2025+:     ais-YYYY-MM-DD.csv.zst
+                if yr >= 2025:
+                    url      = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{yr}/ais-{date}.csv.zst"
+                    dl_name  = f"ais-{date}.csv.zst"
+                    use_zst  = True
+                else:
+                    url      = f"https://coast.noaa.gov/htdata/CMSP/AISDataHandler/{yr}/AIS_{date_us}.zip"
+                    dl_name  = f"AIS_{date_us}.zip"
+                    use_zst  = False
 
-                    if HAS_ZST:
-                        _ais_download_log.append(f"[{i}/{len(dates)}] 📦 Decompressing {raw_mb:.1f}MB…")
-                        # Decompress to temp file
-                        temp_path = AIS_DIR / f"_temp_{date}.csv"
-                        with open(zst_path, "rb") as f_in:
+                dl_path = AIS_DIR / dl_name
+
+                try:
+                    _ais_download_log.append(f"[{i}/{len(dates)}] ⬇️  Downloading {dl_name}…")
+
+                    # Use urlopen with longer timeout and chunked download with retries
+                    import socket
+                    socket.setdefaulttimeout(120)  # 2 minute timeout per chunk
+
+                    max_retries = 3
+                    last_err    = None
+                    for attempt in range(max_retries):
+                        try:
+                            with urllib.request.urlopen(url, timeout=120) as response:
+                                total_size = int(response.headers.get('Content-Length', 0))
+                                downloaded = 0
+                                chunk_size = 1024 * 1024  # 1 MB chunks
+                                with open(dl_path, 'wb') as f_out:
+                                    while True:
+                                        chunk = response.read(chunk_size)
+                                        if not chunk:
+                                            break
+                                        f_out.write(chunk)
+                                        downloaded += len(chunk)
+                                        # Log progress every 50MB
+                                        if downloaded % (50 * 1024 * 1024) < chunk_size:
+                                            pct = (downloaded * 100 // total_size) if total_size else 0
+                                            _ais_download_log.append(
+                                                f"[{i}/{len(dates)}]    {downloaded/1024**2:.0f}MB / {total_size/1024**2:.0f}MB ({pct}%)"
+                                            )
+                            last_err = None
+                            break  # success
+                        except Exception as e:
+                            last_err = e
+                            if dl_path.exists():
+                                dl_path.unlink()
+                            _ais_download_log.append(f"[{i}/{len(dates)}] ⚠️  Attempt {attempt+1} failed: {e} — retrying…")
+
+                    if last_err:
+                        raise last_err
+
+                    raw_mb = dl_path.stat().st_size / 1024**2
+
+                    # Decompress based on format
+                    temp_path = AIS_DIR / f"_temp_{date}.csv"
+
+                    if use_zst:
+                        if not HAS_ZST:
+                            _ais_download_log.append(f"[{i}/{len(dates)}] ⚠️  Install zstandard to auto-decompress")
+                            _ais_download_done_n += 1
+                            continue
+                        _ais_download_log.append(f"[{i}/{len(dates)}] 📦 Decompressing zst {raw_mb:.1f}MB…")
+                        with open(dl_path, "rb") as f_in:
                             dctx = zstd.ZstdDecompressor()
                             with open(temp_path, "wb") as f_out:
                                 dctx.copy_stream(f_in, f_out)
-                        zst_path.unlink()
-
-                        if has_filter:
-                            # Filter to coordinates
-                            _ais_download_log.append(f"[{i}/{len(dates)}] 📍 Filtering to coordinates…")
-                            df = pd.read_csv(temp_path, low_memory=False)
-                            total_rows = len(df)
-
-                            # Detect column names — handles LAT/LON, lat/lon, latitude/longitude
-                            cols = {c.strip().lower(): c.strip() for c in df.columns}
-                            lat_col = cols.get('lat') or cols.get('latitude')
-                            lon_col = cols.get('lon') or cols.get('long') or cols.get('longitude')
-
-                            if not lat_col or not lon_col:
-                                _ais_download_log.append(f"[{i}/{len(dates)}] ⚠️  Columns found: {cols[:10]}")
-                                _ais_download_log.append(f"[{i}/{len(dates)}] ⚠️  Could not find LAT/LON columns — saving unfiltered")
-                                temp_path.rename(csv_path)
-                            else:
-                                filtered = df[
-                                    (df[lat_col] >= float(lat_min)) & (df[lat_col] <= float(lat_max)) &
-                                    (df[lon_col] >= float(lon_min)) & (df[lon_col] <= float(lon_max))
-                                ]
-                                filtered.to_csv(csv_path, index=False)
-                                temp_path.unlink()
-                                csv_mb = csv_path.stat().st_size / 1024**2
-                                _ais_download_log.append(
-                                    f"[{i}/{len(dates)}] ✅ {csv_name} — "
-                                    f"{len(filtered):,}/{total_rows:,} rows kept ({csv_mb:.1f}MB)"
-                                )
-                        else:
-                            temp_path.rename(csv_path)
-                            csv_mb = csv_path.stat().st_size / 1024**2
-                            _ais_download_log.append(f"[{i}/{len(dates)}] ✅ {csv_name} ({csv_mb:.1f}MB)")
                     else:
-                        _ais_download_log.append(f"[{i}/{len(dates)}] ✅ {filename} saved (install zstandard to auto-decompress)")
+                        _ais_download_log.append(f"[{i}/{len(dates)}] 📦 Extracting zip {raw_mb:.1f}MB…")
+                        with zipfile.ZipFile(dl_path, 'r') as zf:
+                            # Find CSV inside zip
+                            csv_inside = next((n for n in zf.namelist() if n.endswith('.csv')), None)
+                            if not csv_inside:
+                                raise Exception("No CSV found inside ZIP")
+                            with zf.open(csv_inside) as f_in, open(temp_path, "wb") as f_out:
+                                f_out.write(f_in.read())
+
+                    dl_path.unlink()  # remove archive
+
+                    if has_filter:
+                        _ais_download_log.append(f"[{i}/{len(dates)}] 📍 Filtering to coordinates…")
+                        df = pd.read_csv(temp_path, low_memory=False)
+                        total_rows = len(df)
+
+                        # Detect column names — handles LAT/LON, lat/lon, latitude/longitude
+                        cols = {c.strip().lower(): c.strip() for c in df.columns}
+                        lat_col = cols.get('lat') or cols.get('latitude')
+                        lon_col = cols.get('lon') or cols.get('long') or cols.get('longitude')
+
+                        if not lat_col or not lon_col:
+                            _ais_download_log.append(f"[{i}/{len(dates)}] ⚠️  Could not find LAT/LON columns — saving unfiltered")
+                            temp_path.rename(csv_path)
+                        else:
+                            filtered = df[
+                                (df[lat_col] >= float(lat_min)) & (df[lat_col] <= float(lat_max)) &
+                                (df[lon_col] >= float(lon_min)) & (df[lon_col] <= float(lon_max))
+                            ]
+                            filtered.to_csv(csv_path, index=False)
+                            temp_path.unlink()
+                            csv_mb = csv_path.stat().st_size / 1024**2
+                            _ais_download_log.append(
+                                f"[{i}/{len(dates)}] ✅ {csv_name} — "
+                                f"{len(filtered):,}/{total_rows:,} rows kept ({csv_mb:.1f}MB)"
+                            )
+                    else:
+                        temp_path.rename(csv_path)
+                        csv_mb = csv_path.stat().st_size / 1024**2
+                        _ais_download_log.append(f"[{i}/{len(dates)}] ✅ {csv_name} ({csv_mb:.1f}MB)")
 
                     _ais_download_done_n += 1
 
                 except Exception as e:
                     _ais_download_log.append(f"[{i}/{len(dates)}] ❌ Failed: {e}")
                     failed.append(date)
-                    for p in [zst_path, AIS_DIR / f"_temp_{date}.csv"]:
+                    for p in [dl_path, AIS_DIR / f"_temp_{date}.csv"]:
                         if p.exists():
                             p.unlink()
 

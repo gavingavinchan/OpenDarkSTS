@@ -18,3 +18,21 @@ bbox_preview/
 # Environment
 darkfleet_env/
 .env
+
+# Jupyter checkpoints
+notebooks/.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Model weights (too large for git, distribute via releases)
+notebooks/*.pt
+*.pt
+!weights/best.pt
+
+# Notebook-generated preview images
+notebooks/annotation_preview.png
+notebooks/test_predictions.png
+notebooks/training_results.png
+
+# Local training run outputs
+opendarksts_retrainable_reviewed_madhulika_yolo_completed_runs_*/
+runs/
