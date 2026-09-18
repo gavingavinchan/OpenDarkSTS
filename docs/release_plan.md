@@ -133,8 +133,7 @@ Small fixes that stop the pipeline from giving confidently wrong answers.
   so `sceneN` files may be duplicates or mosaics. Keep the scene's identity and
   acquisition time in a sidecar file. Credentials from environment variables or an
   untracked config file, never from constants or logged.
-- Both as functions + CLI commands + tests with the network mocked. Commits credited to
-  their authors.
+- Both as functions + CLI commands + tests with the network mocked.
 
 ### Phase 3 — Detect in the GUI
 
@@ -177,7 +176,7 @@ on the image does.
   deletion contained to the workspace, uploads validated.
 - CI on Linux and Windows.
 - Merge `release` to `main`, tag `v0.1`. Close PR #2 as superseded; close PR #3 and PR #4
-  with a note pointing at the commits that carried their work in.
+  with a note that their work was carried into `release`.
 
 ### Alongside — the SNAME 2026 paper
 
@@ -190,16 +189,17 @@ blocker for the software release.
 
 ---
 
-## 4. Whose work goes where
+## 4. Where each piece comes from
 
-| Contributor | Contribution | How it enters |
+| Source | What it brings | How it enters |
 |---|---|---|
 | Gavin | Training tool steps 1-7, leak-free evaluation, operational pipeline, tests | The base (`release`) |
 | Gavin (May-June) | Run-status hardening, paper draft, test plans | Phase 0 |
 | Madhulika | NOAA AIS downloader; dashboard design (results table, map, export, region presets); `compare_yolo_models.py` portability fix | Phase 2, Phase 3-4 design reference |
 | Sohail | Sentinel-2 CDSE downloader | Phase 2 |
 
-PR #4 is not merged as a branch, for these reasons: its `weights/best.pt` is
+We work as one team, so commits are not attributed per person; the table only says where
+to find the source material. PR #4 is not merged as a branch, for these reasons: its `weights/best.pt` is
 byte-identical to the stock Ultralytics `yolo11s.pt` COCO checkpoint (SHA-256
 `85a76fe8...`), so it detects people and bicycles, and merging would keep the 19 MB file
 in history for good; its `.gitignore` rewrite drops our ignores for `workspace/`, secrets
@@ -224,7 +224,16 @@ for the release: the shipped model is our promoted clean-split `yolo26n`.
 
 ---
 
-## 6. Still to decide
+## 6. How the work gets done
+
+Codex (Astra) does the implementation, phase by phase, working in the `release` working
+tree. Fable plans each phase, reviews Astra's changes against this plan, runs the tests,
+and commits. Occasionally the roles swap so each model's work gets a second pair of eyes.
+Gavin checks anything user-facing before it becomes official.
+
+---
+
+## 7. Still to decide
 
 | Question | Default if nobody objects |
 |---|---|
