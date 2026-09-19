@@ -3346,7 +3346,12 @@ def reap_if_child(pid: int) -> None:
 
 
 def process_is_alive(pid: int | None, start_ticks: int | None = None) -> bool:
-    if not pid:
+    try:
+        pid = int(pid)
+        start_ticks = int(start_ticks) if start_ticks is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if pid <= 0 or pid > sys.maxsize:
         return False
     if process_state(int(pid)) == "Z":
         reap_if_child(int(pid))
@@ -3357,7 +3362,7 @@ def process_is_alive(pid: int | None, start_ticks: int | None = None) -> bool:
         return False
     except PermissionError:
         pass
-    except (OSError, ValueError):
+    except (OSError, ValueError, OverflowError):
         return False
     if start_ticks is None:
         return True
@@ -3600,7 +3605,14 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
     process_path = target / PROCESS_RECORD_FILENAME
     if not process_path.is_file():
         raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
-    record = load_json(process_path)
+    warnings: list[str] = []
+    record_readable = True
+    try:
+        record = load_json(process_path)
+    except (OSError, ValueError):
+        record = {}
+        record_readable = False
+        warnings.append("process.json could not be parsed; inferred terminal state from run artifacts")
 
     log_path = target / TRAINING_LOG_FILENAME
     # A completion check needs the whole log, but only a tail is returned.
@@ -3623,7 +3635,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
         record["status"] = status
         record["ended_at"] = record.get("ended_at") or utcnow_iso_for_training()
         changed = True
-    if changed:
+    if changed and record_readable:
         write_json(process_path, record)
         update_training_metadata_status(target, status, ended_at=record.get("ended_at"), reason=record.get("reason"))
 
@@ -3637,6 +3649,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
         "alive": alive,
         "pid": record.get("pid"),
         "reason": record.get("reason"),
+        "warnings": warnings,
         "started_at": record.get("started_at"),
         "ended_at": record.get("ended_at"),
         "expected_epochs": record.get("expected_epochs"),
@@ -3659,7 +3672,10 @@ def stop_training_run(run_dir: str | Path, *, grace_seconds: float = 10.0) -> di
     process_path = target / PROCESS_RECORD_FILENAME
     if not process_path.is_file():
         raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
-    record = load_json(process_path)
+    try:
+        record = load_json(process_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError("process.json could not be parsed; no process can safely be stopped") from exc
     pid = record.get("pid")
     status = str(record.get("status") or "running")
     if status in TERMINAL_RUN_STATUSES:
