@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDarkSTS / __PAGE_TITLE__</title>
+<link rel="stylesheet" href="/static/pipeline.css"><link rel="stylesheet" href="/static/operations.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"></head>
+<body data-page="__PAGE__" class="operations-page">
+<main class="ops-main">
+  <div class="ops-heading"><div><p class="eyebrow">OPEN DARK STS / FIELD WORKSPACE</p><h1>__PAGE_TITLE__</h1></div><span class="local-status">● Local workspace</span></div>
+  <nav class="detect-steps" aria-label="Detect steps"><a href="/detect">01 Area & dates</a><a href="/data">02 Data</a><a href="/run">03 Run</a></nav>
+  <p id="notice" class="status" role="status" aria-live="polite"></p>
+  <section id="homePanel" hidden>
+    <div class="ops-hero"><div><p class="eyebrow">SATELLITE IMAGERY + US AIS RECORDS</p><h2>Find the pair.<br>Check the record.</h2><p>Find candidate ship-to-ship transfers, compare nearby AIS vessels, and keep the evidence ready for human review.</p><a class="ops-button" href="/detect">Start a detection run <span>↗</span></a></div><div class="field-note"><span class="eyebrow">HOW TO READ A RESULT</span><strong>Same day.<br>Within your radius.</strong><p>A vessel's presence in AIS does not identify either visible hull. An absence is a reason to review the evidence, not a conclusion about activity.</p><span class="note-rule">01 / Imagery &nbsp; 02 / AIS &nbsp; 03 / Review</span></div></div>
+    <div class="ops-three"><article class="ops-card"><span class="eyebrow">CURRENT MODEL</span><h3 id="modelName">Loading…</h3><p id="modelInfo"></p><a href="/evaluation">Manage in Improve →</a></article><article class="ops-card"><span class="eyebrow">YOUR DATA</span><h3 id="inventorySummary">Loading…</h3><p>Local imagery and AIS day files selected for this workspace.</p><a href="/data">Manage data →</a></article><article class="ops-card"><span class="eyebrow">RECENT WORK</span><h3 id="jobsSummary">Loading…</h3><p>Downloads and runs continue in the background.</p><p id="pendingReviews"></p><ul id="recentRuns"></ul><a href="/jobs">Open Jobs →</a></article></div>
+  </section>
+  <section id="areaPanel" hidden>
+    <div class="ops-split"><div class="map-panel"><div id="areaMap" aria-label="Area selection map"></div><div class="map-tools"><button id="drawArea" type="button">Draw area</button><button id="mapExtent" type="button">Use map extent</button><span id="mapHint">Choose a preset or draw two opposite corners.</span></div></div>
+    <form id="areaForm" class="ops-card"><span class="eyebrow">01 / AREA & DATES</span><h2>Choose your search</h2><label class="field">US area preset<select id="preset"><option value="">Custom area</option></select></label>
+      <div class="grid2"><label class="field">West<input id="west" type="number" step="any" required></label><label class="field">South<input id="south" type="number" step="any" required></label><label class="field">East<input id="east" type="number" step="any" required></label><label class="field">North<input id="north" type="number" step="any" required></label></div>
+      <div class="grid2"><label class="field">Start date<input id="start" type="date" required></label><label class="field">End date<input id="end" type="date" required></label></div>
+      <label class="field">Existing imagery folder<input id="images" required></label><p class="hint">Use your own north-up GeoTIFF tiles, or download imagery in the next step.</p>
+      <button class="primary" type="submit">Save and continue to Data →</button>
+    </form></div>
+  </section>
+  <section id="dataPanel" hidden>
+    <p class="ops-intro">Bring the imagery and vessel records into one workspace. Existing input folders are read only.</p>
+    <div class="ops-two"><article class="ops-card"><span class="eyebrow">02 / SENTINEL-2 IMAGERY</span><h2 id="imageCount">Loading…</h2><p id="imagePath" class="path"></p><label class="field">Maximum scene cloud cover (%)<input id="maxCloud" type="number" min="0" max="100"></label><p>Download true-colour tiles for the saved area and dates. A CDSE account must be configured on this computer.</p><button id="getImagery" class="primary">Download imagery</button></article>
+    <article class="ops-card"><span class="eyebrow">02 / NOAA AIS</span><h2 id="aisCount">Loading…</h2><label class="field">AIS folder or day CSV<input id="aisPath"></label><p>Download complete US AIS day files. Keeping the full day avoids reusing an area-filtered file for another area.</p><button id="saveAis">Use this AIS source</button><button id="getAis" class="primary">Download AIS</button></article></div>
+    <div class="ops-footer"><span id="dateSummary"></span><a class="ops-button" href="/run">Continue to Run →</a></div>
+  </section>
+  <section id="runPanel" hidden><div class="ops-two"><form id="runForm" class="ops-card"><span class="eyebrow">03 / DETECTION</span><h2>Run the comparison</h2><p id="runModel"></p><div class="grid2"><label class="field">Detection confidence<input id="confidence" type="number" step=".01" min="0" max="1" required></label><label class="field">AIS radius (metres)<input id="radius" type="number" min="1" max="100000" required></label></div><p id="runInputs"></p><button id="runButton" class="primary" type="submit">Start detection</button></form><article class="field-note"><span class="eyebrow">WHAT YOU WILL GET</span><strong>A traceable<br>candidate list.</strong><p>Each detection includes an annotated image and nearby AIS vessels. CSV and JSON outputs preserve the settings and evidence for review.</p><p>Missing or invalid AIS is reported separately, with an unknown vessel count.</p></article></div></section>
+  <section id="jobsPanel" hidden><div class="ops-footer"><p class="ops-intro">Background work, with its output and log.</p><button id="refreshJobs">Refresh</button></div><div class="ops-split"><div class="ops-card"><div class="scroll"><table><thead><tr><th>Job</th><th>Started</th><th>State</th></tr></thead><tbody id="jobRows"></tbody></table></div></div><article class="ops-card"><h2 id="jobTitle">Select a job</h2><div id="jobOutput"></div><pre class="log" id="jobLog">Job output will appear here.</pre></article></div></section>
+</main><script src="/static/vendor/leaflet/leaflet.js"></script><script src="/static/pipeline.js"></script><script src="/static/operations.js"></script></body></html>

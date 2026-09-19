@@ -15,7 +15,11 @@ session. The experimental Results page remains hidden pending review.
   bounds and source checksums, and imagery retains acquisition metadata. Current NOAA
   endpoint/schema migration is documented in `docs/acquisition.md`. Validation: 266
   passed, 2 skipped; current NOAA endpoint and header checked without downloading a day.
-- Phases 3–7: in progress.
+- Phase 3: shared Home, Area & dates, Data, Run, and Jobs pages implemented on the
+  existing server. Acquisition/detection jobs persist status and logs; training jobs
+  are included. CLI uses the same project and job helpers. Validation: 271 passed,
+  2 skipped; six pages checked in Chromium with no JavaScript errors.
+- Phases 4–7: in progress.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.

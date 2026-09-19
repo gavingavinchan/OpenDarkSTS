@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import json
 import mimetypes
 import re
+import shutil
 import secrets
 import threading
 import time
@@ -13,6 +15,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
     from .visual_review_lib import (
@@ -24,6 +29,7 @@ try:
     )
     from . import training_pipeline_lib as pipeline
     from . import review_visual_detections_ui as review_ui
+    from . import operations, jobs
 except ImportError:
     from visual_review_lib import (
         DEFAULT_REVIEWER,
@@ -34,6 +40,7 @@ except ImportError:
     )
     import training_pipeline_lib as pipeline
     import review_visual_detections_ui as review_ui
+    from scripts import operations, jobs
 
 
 REVIEWS_DIR = DEFAULT_REVIEWS_DIR
@@ -602,11 +609,67 @@ def render_evaluation_html() -> str:
 
 
 class TrainingPipelineHandler(BaseHTTPRequestHandler):
+    def _operations_get(self, path, parsed):
+        pages = {"/": ("home", "Your field workspace"), "/detect": ("area", "Area & dates"),
+                 "/data": ("data", "Bring in the data"), "/run": ("run", "Run detection"), "/jobs": ("jobs", "Jobs")}
+        if path in pages:
+            page, title = pages[path]
+            self._respond_html(render_template("operations", page=page, page_title=title))
+            return True
+        if not path.startswith("/api/operations/"):
+            return False
+        try:
+            if path == "/api/operations/dashboard":
+                self._respond_json(operations.dashboard())
+            elif path == "/api/operations/project":
+                self._respond_json(operations.project())
+            elif path == "/api/operations/jobs":
+                self._respond_json({"jobs": jobs.list_jobs(include_training=True)})
+            elif path.startswith("/api/operations/jobs/"):
+                suffix = path[len("/api/operations/jobs/"):].split("/")
+                job = jobs.read_job(unquote(suffix[0]))
+                if len(suffix) == 2 and suffix[1] == "output":
+                    extension = query_text(parsed, "format")
+                    if extension not in {"csv", "json"} or job.get("status") != "completed" or job.get("kind") != "run":
+                        raise ValueError("Output is not available")
+                    output = jobs.contained(Path(job["result"]["output_dir"]) / f"dark_sts.{extension}")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv" if extension == "csv" else "application/json")
+                    self.send_header("Content-Disposition", f'attachment; filename="dark_sts.{extension}"')
+                    self.end_headers()
+                    with output.open("rb") as handle:
+                        shutil.copyfileobj(handle, self.wfile)
+                elif len(suffix) == 1:
+                    self._respond_json(job)
+                else:
+                    raise ValueError("Unknown job resource")
+            else:
+                self._respond_json({"error": "not found"}, status=404)
+        except (ValueError, OSError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+        return True
+
+    def _operations_post(self, path):
+        try:
+            payload = self._json_body()
+            if path == "/api/operations/project":
+                result = operations.save_project(payload)
+                self._log_training_action("save_detection_project", result)
+                self._respond_json(result)
+            elif path == "/api/operations/jobs":
+                kind = payload.get("kind")
+                result = jobs.submit_job(kind, payload["options"]) if "options" in payload else operations.submit_project_job(kind)
+                self._log_training_action("start_operation", {"job_id": result["job_id"], "kind": kind})
+                self._respond_json(result, status=202)
+            else:
+                self._respond_json({"error": "not found"}, status=404)
+        except (ValueError, OSError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        if path in {"/", ""}:
-            self._respond_html(render_import_html())
+        if self._operations_get(path, parsed):
             return
         if path == "/bbox-overview":
             self._respond_html(render_bbox_overview_html())
@@ -719,6 +782,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/operations/"):
+            self._operations_post(parsed.path)
+            return
         if parsed.path == "/api/training-ui-interaction":
             self._handle_training_ui_interaction()
             return
@@ -1548,6 +1614,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         return value or None
 
     def _respond_html(self, html: str, status: int = 200) -> None:
+        navigation = '<nav class="app-navigation" aria-label="Main"><a class="app-brand" href="/">OpenDarkSTS</a><a href="/">Home</a><a href="/detect">Detect</a><a href="/import">Improve</a><a href="/jobs">Jobs</a></nav>'
+        html = html.replace("</head>", '<link rel="stylesheet" href="/static/operations.css"></head>')
+        html = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + navigation, html, count=1)
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -1600,7 +1669,7 @@ def main() -> None:
     print(f"  Reviewer:        {IMPORT_REVIEWER}")
     print(f"  Open http://localhost:{args.port}")
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), TrainingPipelineHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), TrainingPipelineHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -14,8 +14,11 @@ from PIL import Image
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_SOURCE_DIR = Path("/home/gavin/Downloads/AIS data/Sentinel 2A/sentinel2/")
-WORKSPACE_DIR = ROOT_DIR / "workspace"
+try:
+    from .workspace import WORKSPACE_DIR
+except ImportError:
+    from workspace import WORKSPACE_DIR
+DEFAULT_SOURCE_DIR = WORKSPACE_DIR / "inputs" / "imagery"
 DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache" / "sentinel_tiles"
 DEFAULT_REVIEWS_DIR = WORKSPACE_DIR / "reviews"
 DEFAULT_MANIFEST_PATH = WORKSPACE_DIR / "manifests" / "visual_preprocess_manifest.json"

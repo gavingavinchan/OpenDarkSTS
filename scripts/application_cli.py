@@ -20,6 +20,7 @@ def build_parser():
         command.add_argument("--end")
         command.add_argument("--bbox", nargs=4, type=float, required=kind == "imagery")
         command.add_argument("--output-dir")
+        command.add_argument("--background", action="store_true")
         if kind == "imagery":
             command.add_argument("--max-cloud", type=float, default=30)
     run = commands.add_parser("run")
@@ -30,30 +31,31 @@ def build_parser():
     run.add_argument("--conf", type=float, default=.25)
     run.add_argument("--radius", type=float, default=1000)
     run.add_argument("--output-dir")
+    run.add_argument("--background", action="store_true")
+    jobs = commands.add_parser("jobs")
+    jobs.add_argument("job_id", nargs="?")
+    project = commands.add_parser("project")
+    project.add_argument("--set", dest="settings", help="JSON object of project settings")
+    project.add_argument("--start-job", choices=["ais", "imagery", "run"])
     training = commands.add_parser("training", add_help=False)
     training.add_argument("arguments", nargs=argparse.REMAINDER)
     return parser
 
 
 def execute(args):
-    from . import acquisition, pipeline
-    from .workspace import WORKSPACE_DIR, contained
+    from . import jobs, operations
+    if args.command == "project":
+        if args.settings:
+            operations.save_project(json.loads(args.settings))
+        return operations.submit_project_job(args.start_job) if args.start_job else operations.project()
     log = lambda message: print(message, file=sys.stderr, flush=True)
-    if args.command == "acquire":
-        options = {"output_dir": args.output_dir, "bbox": args.bbox, "log": log}
-        if args.kind == "imagery":
-            options["max_cloud"] = args.max_cloud
-        return getattr(acquisition, "acquire_" + args.kind)(args.start, args.end, **options)
-    if args.command == "run":
-        output = contained(args.output_dir or WORKSPACE_DIR / "reports" / "operational" / uuid.uuid4().hex)
-        results = pipeline.run_pipeline(args.images, weights=args.weights,
-                    ais_dir=args.ais_dir or WORKSPACE_DIR / "inputs" / "ais" / "full",
-                    date=args.date, conf=args.conf, radius_m=args.radius,
-                    preview_dir=output / "previews", record_path=output / "run.json", warn=log)
-        pipeline.write_pipeline_output(output / "dark_sts.json", results)
-        pipeline.write_pipeline_output(output / "dark_sts.csv", results)
-        return {"output_dir": str(output), "summary": pipeline.summarise_results(results)}
-    raise ValueError("Unknown command")
+    if args.command == "jobs":
+        return jobs.read_job(args.job_id) if args.job_id else {"jobs": jobs.list_jobs(include_training=True)}
+    kind = args.kind if args.command == "acquire" else args.command
+    options = {key: value for key, value in vars(args).items()
+               if key not in {"command", "kind", "workspace", "background"} and value is not None}
+    return jobs.submit_job(kind, options) if args.background else jobs.execute_job(kind, options, log=log)
+
 
 
 def main(argv=None):
