@@ -1222,7 +1222,7 @@ def test_cli_build_train_command_missing_run_name_has_friendly_error(tmp_path: P
 
     process = run_cli("build-train-command", "--selection", str(selection_path), "--config", str(config_path))
 
-    assert process.returncode == 1
+    assert process.returncode == 2
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="build-train-command", ok=False)
     assert "output run name" in envelope["errors"][0]
@@ -1337,13 +1337,13 @@ def test_cli_image_key_returns_stable_identity(tmp_path: Path) -> None:
     assert envelope["result"]["image_key"].startswith("img_")
 
 
-def test_cli_image_key_missing_source_exits_1(tmp_path: Path) -> None:
+def test_cli_image_key_missing_source_exits_2(tmp_path: Path) -> None:
     profile = tmp_path / "render_profile.json"
     write_json(profile, {"kind": "rgb_original"})
 
     process = run_cli("image-key", "--source", str(tmp_path / "missing.png"), "--render-profile", str(profile))
 
-    assert process.returncode == 1
+    assert process.returncode == 2
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="image-key", ok=False)
     assert "Source image not found" in envelope["errors"][0]
@@ -1357,7 +1357,7 @@ def test_cli_image_key_rejects_unknown_render_profile_kind(tmp_path: Path) -> No
 
     process = run_cli("image-key", "--source", str(source), "--render-profile", str(profile))
 
-    assert process.returncode == 1
+    assert process.returncode == 2
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="image-key", ok=False)
     assert "Unknown render profile kind" in envelope["errors"][0]
@@ -1478,7 +1478,7 @@ def test_cli_save_training_config_rejects_unknown_augmentation_key(tmp_path: Pat
         "--configs-dir", str(tmp_path / "training_configs"),
     )
 
-    assert process.returncode == 1
+    assert process.returncode == 2
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="save-training-config", ok=False)
     assert "not_a_real_arg" in envelope["errors"][0]
@@ -1675,7 +1675,7 @@ def test_cli_stop_training_cancels_running_run(tmp_path: Path) -> None:
 def test_cli_training_status_requires_pipeline_managed_run(tmp_path: Path) -> None:
     process = run_cli("training-status", "--run-dir", str(tmp_path / "nowhere"))
 
-    assert process.returncode == 1
+    assert process.returncode == 2
     envelope = parse_envelope(process)
     assert_envelope(envelope, command="training-status", ok=False)
     assert "No pipeline-managed training run" in envelope["errors"][0]

@@ -38,8 +38,8 @@ Global flags:
 Exit codes:
 
 - `0`: command succeeded.
-- `1`: pipeline failure, such as missing files or invalid manifests.
-- `2`: command-line usage error.
+- `1`: pipeline or runtime failure, such as an unreadable input file.
+- `2`: command-line usage or backend validation error (`ValueError`), including invalid run paths and malformed JSON objects. The JSON error envelope is preserved.
 - `3`: readiness command completed successfully but found blockers. In this case `ok` is still `true` and `result.ready` is `false`. `start-training` also exits `3` with `ok: false` when readiness blocks the launch, or when a live process already owns the target run directory.
 - `4`: `training-status` ran successfully and observed a `failed` run.
 
@@ -400,6 +400,16 @@ On success the run directory receives:
 ### `training-status`
 
 Reports live status for a pipeline-managed run and lazily reconciles terminal state; there is no watcher daemon.
+
+Run paths, configured output roots, and run references must stay under `workspace/runs`,
+including their resolved symlink targets. Group and run names must be single path
+segments. These checks also apply to stopping, listing, evaluation, and promotion.
+Tests use uniquely allocated temporary directories under that root.
+
+A corrupt `process.json` produces a status warning and an inferred terminal status
+without rewriting the damaged record. Stopping such a run is refused. Recorded logs
+are read only within the run directory; an escaped log falls back to a contained
+`train.log`, or is omitted if that path also escapes.
 
 ```bash
 .venv/bin/python scripts/training_pipeline_cli.py --pretty training-status \

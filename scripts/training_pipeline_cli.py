@@ -452,7 +452,7 @@ def command_rename_album(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
             album_description=args.album_description,
         )
     except ValueError as exc:
-        return 1, envelope("rename-album", ok=False, errors=[str(exc)])
+        return 2, envelope("rename-album", ok=False, errors=[str(exc)])
     result = {
         "album_id": record["album_id"],
         "album_name": record["album_name"],
@@ -581,7 +581,7 @@ def command_show_run_group(args: argparse.Namespace) -> tuple[int, dict[str, Any
     try:
         runs = pipeline.collect_run_group_summaries(args.run_group, args.runs_dir)
     except ValueError as exc:
-        return 1, envelope("show-run-group", ok=False, errors=[str(exc)])
+        return 2, envelope("show-run-group", ok=False, errors=[str(exc)])
     suggested, reason = pipeline.best_run_by_metric(runs)
     result = {
         "run_group": args.run_group,
@@ -641,7 +641,7 @@ def command_training_status(args: argparse.Namespace) -> tuple[int, dict[str, An
     add_diagnostics(result, args, "training_status", run_dir=run_dir)
     ok = result["status"] != "failed"
     errors = [] if ok else [f"Training run is failed ({result.get('reason') or 'unknown reason'})"]
-    return (0 if ok else 4), envelope("training-status", ok=ok, result=result, errors=errors)
+    return (0 if ok else 4), envelope("training-status", ok=ok, result=result, errors=errors, warnings=list(result.get("warnings") or []))
 
 
 def command_stop_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -1033,6 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         status, response = args.handler(args)
+    except ValueError as exc:
+        print_response(envelope(args.command, ok=False, errors=[str(exc)]), pretty=bool(args.pretty), human=bool(args.human))
+        return 2
     except Exception as exc:
         print_response(envelope(args.command, ok=False, errors=[str(exc)]), pretty=bool(args.pretty), human=bool(args.human))
         return 1
