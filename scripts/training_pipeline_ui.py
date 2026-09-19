@@ -131,7 +131,8 @@ def reap_old_jobs() -> None:
     with JOBS_LOCK:
         stale = [
             job_id for job_id, job in JOBS.items()
-            if job["state"] in {"done", "failed"} and job.get("finished_epoch", 0) < cutoff
+            if job.get("state", job.get("status")) in {"done", "completed", "failed"}
+            and 0 < job.get("finished_epoch", 0) < cutoff
         ]
         for job_id in stale:
             JOBS.pop(job_id, None)
@@ -1474,10 +1475,10 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                     image_size=payload.get("image_size"),
                 )
             except Exception as exc:
-                update_job(job_id, status="failed", error=str(exc), message="Test-split evaluation failed")
+                update_job(job_id, status="failed", error=str(exc), message="Test-split evaluation failed", finished_epoch=time.time())
                 append_training_ui_interaction({"source": "training_api", "action": "run_test_split_failed", "job_id": job_id, "error": str(exc)})
                 return
-            update_job(job_id, status="completed", result=result, message="Test-split evaluation complete")
+            update_job(job_id, status="completed", result=result, message="Test-split evaluation complete", finished_epoch=time.time())
             append_training_ui_interaction({"source": "training_api", "action": "run_test_split", "job_id": job_id, "run_dir": result["run_dir"]})
 
         threading.Thread(target=worker, name=f"test-split-{job_id}", daemon=True).start()
