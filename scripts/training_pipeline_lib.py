@@ -3615,8 +3615,17 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
         warnings.append("process.json could not be parsed; inferred terminal state from run artifacts")
 
     log_path = target / TRAINING_LOG_FILENAME
+    if record.get("log_path"):
+        recorded_log = safe_file_in_roots(record["log_path"], [target])
+        if recorded_log is None:
+            warnings.append("process log_path is outside the run directory; using default train.log")
+        else:
+            log_path = recorded_log
+    safe_log = safe_file_in_roots(log_path, [target])
+    if safe_log is None:
+        warnings.append("train.log is outside the run directory; log unavailable")
     # A completion check needs the whole log, but only a tail is returned.
-    all_lines = read_log_tail(log_path, max_lines=100000)
+    all_lines = read_log_tail(safe_log, max_lines=100000) if safe_log is not None else []
     tail = all_lines[-log_lines:] if log_lines else []
     series = load_training_results_series(target / "results.csv")
     summary = results_summary(series, target)
@@ -3654,7 +3663,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
         "ended_at": record.get("ended_at"),
         "expected_epochs": record.get("expected_epochs"),
         "command_line": list(record.get("command_line") or []),
-        "log_path": repo_relative(log_path) if log_path.is_file() else None,
+        "log_path": repo_relative(safe_log) if safe_log is not None and safe_log.is_file() else None,
         "log_tail": tail,
         "results": series,
         "current_epoch": summary["current_epoch"],
@@ -4003,6 +4012,8 @@ def run_test_split(
     interpreter = str(python_executable or (ROOT_DIR / ".venv" / "bin" / "python"))
     output_path = target / TEST_METRICS_FILENAME
     log_path = target / "test_eval.log"
+    if safe_file_in_roots(log_path, [target]) is None:
+        raise ValueError("test_eval.log must be inside the run directory")
     argv = [interpreter, "-c", VAL_METRICS_SNIPPET, str(weights), str(data_yaml), str(imgsz), str(device), "test", str(output_path)]
     with log_path.open("a", encoding="utf-8") as log_handle:
         log_handle.write(f"# run_test_split {utcnow_iso_for_training()}\n")
