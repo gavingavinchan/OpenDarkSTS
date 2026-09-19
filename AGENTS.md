@@ -34,3 +34,13 @@ Every training-pipeline GUI function should have a corresponding backend helper 
 # GUI Interaction Logging Rule
 
 Training-pipeline GUI actions should emit lightweight debug logs for user presses, clicks, selections, uploads, and destructive confirmations so UI problems can be diagnosed from `workspace/reports/` without relying only on browser inspection. Logs must avoid binary payloads and secrets, but should include timestamps, action names, selected ids/counts, current filters, job ids, and error messages where useful. When changing GUI behavior, update or preserve this logging path.
+
+# Academic Writing Tone Rule
+
+Unless explicitly told otherwise, treat all prose writing (the paper, draft sections, abstracts, captions, and similar) as text for the academic paper and write it in a formal, academic register. Use precise, impersonal phrasing; avoid contractions, colloquialisms, casual asides, marketing language, and analogies aimed at a general audience. This rule governs tone and wording only; it does not change the factual content the user asks for.
+
+# Paper Audience Rule
+
+Most readers of the paper want to learn how to use the tool; only a minority read it to understand how the tool is implemented. Write accordingly: lead with the user-facing overview (what the tool does and how it is operated), and place implementation detail after it or in clearly secondary positions. When a section opens, prefer an overview-first ordering, with whole-tool implementation notes following the user-perspective material.
+
+The readership is the SNAME maritime and ocean-engineering community, not computer scientists. Use technical terms that an engineer from any background will understand, and avoid computer-science jargon: prefer "dataset" or "the reviewed images" over "corpus", and "a grid of image thumbnails" over "contact sheet". If a specialized term is unavoidable, explain it plainly on first use.
