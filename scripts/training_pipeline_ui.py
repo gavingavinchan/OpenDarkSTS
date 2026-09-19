@@ -1251,8 +1251,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         self._respond_json(result, status=202)
 
     def _handle_training_run_status(self, run_group: str, run_name: str, parsed) -> None:
-        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
         try:
+            run_dir = pipeline.resolve_training_run_ref(pipeline.DEFAULT_RUNS_DIR, run_group, run_name)
             result = pipeline.training_status(run_dir)
         except ValueError as exc:
             self._respond_json({"error": str(exc)}, status=404)
@@ -1263,8 +1263,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         self._respond_json(result)
 
     def _handle_stop_training_run(self, run_group: str, run_name: str) -> None:
-        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
         try:
+            run_dir = pipeline.resolve_training_run_ref(pipeline.DEFAULT_RUNS_DIR, run_group, run_name)
             result = pipeline.stop_training_run(run_dir)
         except ValueError as exc:
             self._respond_json({"error": str(exc)}, status=404)
@@ -1376,8 +1376,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_run_test_split(self, run_group: str, run_name: str) -> None:
-        run_dir = pipeline.repo_resolve(pipeline.DEFAULT_RUNS_DIR) / run_group / run_name
         try:
+            run_dir = pipeline.resolve_training_run_ref(pipeline.DEFAULT_RUNS_DIR, run_group, run_name)
             payload = self._json_body()
         except Exception as exc:
             self._respond_json({"error": str(exc)}, status=400)

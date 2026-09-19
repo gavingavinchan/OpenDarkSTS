@@ -83,7 +83,7 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert imported["member_status"] == "added_imported"
     assert Path(imported["cache_path"]).is_file()
     assert imported["review_stub_status"] == "created"
-    assert imported["review_stub_path"] == str(reviews_dir / "tester" / f"{imported['image_key']}.json")
+    assert (ROOT_DIR / imported["review_stub_path"]).resolve() == reviews_dir / "tester" / f"{imported['image_key']}.json"
     assert Path(result["import_log_path"]).is_file()
     assert Path(result["import_summary_path"]).is_file()
 
@@ -103,7 +103,7 @@ def test_cli_import_data_writes_manifest_and_browser_cache(tmp_path: Path) -> No
     assert manifest["manifest_type"] == "training_import"
     assert manifest["created_at"]
     assert manifest["updated_at"]
-    assert manifest["cache_dir"] == str(cache_dir)
+    assert (ROOT_DIR / manifest["cache_dir"]).resolve() == cache_dir
     entry = manifest["images"][imported["image_key"]]
     assert entry["schema_version"] == 1
     assert entry["image_filename"] == f"{imported['image_key']}.png"
@@ -943,7 +943,7 @@ def test_cli_save_dataset_selection_writes_step4_manifest(tmp_path: Path) -> Non
     assert selection["dataset_name"] == "Fixture Data"
     assert selection["dataset_version"] == "v2"
     assert selection["selection_mode"] == "image"
-    assert selection["export"]["output_dir"] == str(datasets_dir / "fixture_data_v2")
+    assert (ROOT_DIR / selection["export"]["output_dir"]).resolve() == datasets_dir / "fixture_data_v2"
     assert [item["image_key"] for item in selection["items"]] == ["img_a", "img_b"]
 
 

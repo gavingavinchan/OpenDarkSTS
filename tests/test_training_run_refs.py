@@ -13,6 +13,7 @@ from test_training_pipeline_ui import (
 from _helpers import write_json
 
 import urllib.parse
+import pytest
 
 
 def test_training_run_routes_percent_decode_path_segments(tmp_path: Path, monkeypatch) -> None:
@@ -58,6 +59,21 @@ def test_run_group_route_percent_decodes_the_group_name(tmp_path: Path, monkeypa
 
     assert detail["run_group"] == run_group
     assert [run["run_name"] for run in detail["runs"]] == ["run_a"]
+
+
+@pytest.mark.parametrize("action", ["status", "stop", "test-split"])
+def test_run_routes_reject_encoded_path_traversal(tmp_path: Path, monkeypatch, action) -> None:
+    from scripts import training_pipeline_ui as ui
+
+    monkeypatch.setattr(ui.pipeline, "DEFAULT_RUNS_DIR", tmp_path / "runs")
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        url = f"{server.base_url}/api/training/runs/..%2Foutside/run/{action}"
+        if action == "status":
+            status, payload = get_json_capture(url)
+        else:
+            status, payload = post_json_capture(url, {"background": True})
+    assert status in {400, 404}
+    assert payload["error"]
 
 
 def test_save_training_config_rejects_whitespace_in_run_names(tmp_path: Path, monkeypatch) -> None:

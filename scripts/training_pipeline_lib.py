@@ -2442,6 +2442,32 @@ def yaml_defines_required_classes(data_yaml: Path) -> bool:
     return "0: ship" in content and "1: ships" in content
 
 
+def resolve_training_run_dir(run_dir: str | Path) -> Path:
+    resolved = repo_resolve(run_dir).resolve()
+    runs_root = repo_resolve(WORKSPACE_DIR / "runs").resolve()
+    if not path_is_relative_to(resolved, runs_root):
+        raise ValueError(f"run_dir must be inside {repo_relative(runs_root)}: {run_dir}")
+    return resolved
+
+
+def validate_run_segment(value: str, label: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or "\\" in value or Path(value).drive:
+        raise ValueError(f"{label} must be a single path segment: {value!r}")
+    return value
+
+
+def resolve_training_run_ref(runs_dir: str | Path, run_group: str, run_name: str | None = None) -> Path:
+    root = resolve_training_run_dir(runs_dir)
+    group = validate_run_segment(str(run_group), "run_group")
+    target = root / group
+    if run_name is not None:
+        target /= validate_run_segment(str(run_name), "run_name")
+    resolved = resolve_training_run_dir(target)
+    if not path_is_relative_to(resolved, root):
+        raise ValueError(f"Run reference must stay inside {repo_relative(root)}")
+    return resolved
+
+
 def split_has_images(dataset_dir: Path, split: str) -> bool:
     image_dir = dataset_dir / "images" / split
     if not image_dir.is_dir():
@@ -2515,7 +2541,7 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
     run_group = config.get("run_group") or "default"
     output_root = config.get("output_dir") or ROOT_DIR / "workspace" / "runs"
     if run_name:
-        run_dir = repo_resolve(output_root) / str(run_group) / str(run_name)
+        run_dir = resolve_training_run_ref(output_root, str(run_group), str(run_name))
         if run_dir.exists() and not bool(config.get("overwrite")):
             missing.append("output run name would overwrite an existing run; enable overwrite to proceed")
 
@@ -2538,6 +2564,7 @@ def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str |
     run_group = str(config_value(training_config, "run_group", "default"))
     run_name = str(training_config["run_name"])
     output_root = repo_resolve(config_value(training_config, "output_dir", WORKSPACE_DIR / "runs"))
+    resolve_training_run_ref(output_root, run_group, run_name)
     command = [
         "yolo",
         "detect",
@@ -2835,7 +2862,7 @@ def write_training_metadata(
     started_at: str,
     ended_at: str | None = None,
 ) -> Path:
-    output_run_dir = repo_resolve(run_dir)
+    output_run_dir = resolve_training_run_dir(run_dir)
     output_run_dir.mkdir(parents=True, exist_ok=True)
     config_file = repo_resolve(training_config_path)
     dataset_manifest_file = repo_resolve(dataset_manifest_path)
@@ -2926,6 +2953,7 @@ def write_evaluation_report(
     promotion_reason: str,
     generated_at: str | None = None,
 ) -> dict[str, Path]:
+    validate_run_segment(str(run_group), "run_group")
     output_dir = repo_resolve(reports_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     report = {
@@ -3079,10 +3107,11 @@ def list_starting_weights(
     if weights_root.is_dir():
         for path in sorted(weights_root.glob("*.pt")):
             add(path, "model_weights")
-    runs_root = repo_resolve(runs_dir)
+    runs_root = resolve_training_run_dir(runs_dir)
     if runs_root.is_dir():
         for path in sorted(runs_root.glob("**/weights/best.pt")):
-            add(path, "run_best")
+            if path_is_relative_to(path, runs_root):
+                add(path, "run_best")
     return entries
 
 
@@ -3197,6 +3226,7 @@ def save_training_config(
         "overwrite": bool(overwrite),
     }
 
+    run_dir_for_config(config)
     warnings: list[str] = []
     model_path = repo_resolve(clean_model)
     if model_path.is_file():
@@ -3353,7 +3383,7 @@ def run_dir_for_config(config: dict[str, Any]) -> Path:
     run_group = str(config_value(config, "run_group", "default"))
     run_name = str(config["run_name"])
     output_root = repo_resolve(config_value(config, "output_dir", DEFAULT_RUNS_DIR))
-    return output_root / run_group / run_name
+    return resolve_training_run_ref(output_root, run_group, run_name)
 
 
 def read_log_tail(log_path: Path, max_lines: int = 40) -> list[str]:
@@ -3368,6 +3398,7 @@ def read_log_tail(log_path: Path, max_lines: int = 40) -> list[str]:
 
 def active_run_process(run_dir: Path) -> dict[str, Any] | None:
     """Return the recorded process for `run_dir` when it is still alive, else None."""
+    run_dir = resolve_training_run_dir(run_dir)
     process_path = run_dir / PROCESS_RECORD_FILENAME
     if not process_path.is_file():
         return None
@@ -3388,6 +3419,7 @@ def new_launch_id() -> str:
 
 def rotate_previous_launch_artifacts(run_dir: Path, previous_launch_id: str | None) -> list[str]:
     """Move the previous launch's regenerable artifacts aside so this launch starts clean."""
+    run_dir = resolve_training_run_dir(run_dir)
     suffix = str(previous_launch_id or "previous")
     rotated: list[str] = []
     for filename in ROTATED_RUN_ARTIFACTS:
@@ -3511,6 +3543,7 @@ def start_training_run(
 
 
 def update_training_metadata_status(run_dir: Path, status: str, *, ended_at: str | None = None, reason: str | None = None) -> None:
+    run_dir = resolve_training_run_dir(run_dir)
     metadata_path = run_dir / TRAINING_METADATA_FILENAME
     if not metadata_path.is_file():
         return
@@ -3530,6 +3563,7 @@ def update_training_metadata_status(run_dir: Path, status: str, *, ended_at: str
 
 
 def results_summary(series: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    run_dir = resolve_training_run_dir(run_dir)
     data = series.get("series") or {}
     epochs = [point[0] for points in data.values() for point in points]
     current_epoch = max(epochs) if epochs else 0
@@ -3552,6 +3586,7 @@ def results_summary(series: dict[str, Any], run_dir: Path) -> dict[str, Any]:
 
 
 def training_completed_successfully(run_dir: Path, log_lines: list[str], summary: dict[str, Any], expected_epochs: int) -> bool:
+    run_dir = resolve_training_run_dir(run_dir)
     if any(marker in line for line in log_lines for marker in TRAINING_COMPLETION_MARKERS):
         return True
     best_weights = run_dir / "weights" / "best.pt"
@@ -3561,7 +3596,7 @@ def training_completed_successfully(run_dir: Path, log_lines: list[str], summary
 
 
 def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, Any]:
-    target = repo_resolve(run_dir)
+    target = resolve_training_run_dir(run_dir)
     process_path = target / PROCESS_RECORD_FILENAME
     if not process_path.is_file():
         raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
@@ -3620,7 +3655,7 @@ def training_status(run_dir: str | Path, *, log_lines: int = 40) -> dict[str, An
 
 
 def stop_training_run(run_dir: str | Path, *, grace_seconds: float = 10.0) -> dict[str, Any]:
-    target = repo_resolve(run_dir)
+    target = resolve_training_run_dir(run_dir)
     process_path = target / PROCESS_RECORD_FILENAME
     if not process_path.is_file():
         raise ValueError(f"No pipeline-managed training run found at {repo_relative(target)}")
@@ -3678,11 +3713,13 @@ def stop_training_run(run_dir: str | Path, *, grace_seconds: float = 10.0) -> di
 
 
 def list_training_runs(runs_dir: str | Path = DEFAULT_RUNS_DIR, *, active_only: bool = False) -> list[dict[str, Any]]:
-    root = repo_resolve(runs_dir)
+    root = resolve_training_run_dir(runs_dir)
     runs: list[dict[str, Any]] = []
     if not root.is_dir():
         return runs
     for process_path in sorted(root.glob("*/*/" + PROCESS_RECORD_FILENAME)):
+        if not path_is_relative_to(process_path, root):
+            continue
         try:
             status = training_status(process_path.parent, log_lines=5)
         except Exception:
@@ -3808,7 +3845,7 @@ def best_results_row(results_csv: str | Path) -> tuple[dict[str, float], int | N
 
 
 def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
-    target = repo_resolve(run_dir)
+    target = resolve_training_run_dir(run_dir)
     weights = target / "weights" / "best.pt"
     test_metrics_path = target / TEST_METRICS_FILENAME
     test_metrics = None
@@ -3834,14 +3871,14 @@ def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
 
 def list_run_groups(runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, Any]]:
     """List evaluatable run groups: any runs_dir child holding at least one run with results.csv."""
-    root = repo_resolve(runs_dir)
+    root = resolve_training_run_dir(runs_dir)
     groups: list[dict[str, Any]] = []
     if not root.is_dir():
         return groups
     for group_dir in sorted(root.iterdir()):
-        if not group_dir.is_dir():
+        if not path_is_relative_to(group_dir, root) or not group_dir.is_dir():
             continue
-        run_names = [child.name for child in sorted(group_dir.iterdir()) if child.is_dir() and (child / "results.csv").is_file()]
+        run_names = [child.name for child in sorted(group_dir.iterdir()) if path_is_relative_to(child, root) and child.is_dir() and (child / "results.csv").is_file()]
         if not run_names:
             continue
         report_path = repo_resolve(WORKSPACE_DIR / "reports") / f"{group_dir.name}_evaluation.md"
@@ -3859,12 +3896,12 @@ def list_run_groups(runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, A
 
 
 def collect_run_group_summaries(run_group: str, runs_dir: str | Path = DEFAULT_RUNS_DIR) -> list[dict[str, Any]]:
-    group_dir = repo_resolve(runs_dir) / str(run_group)
+    group_dir = resolve_training_run_ref(runs_dir, run_group)
     if not group_dir.is_dir():
         raise ValueError(f"Run group not found: {repo_relative(group_dir)}")
     summaries = []
     for child in sorted(group_dir.iterdir()):
-        if child.is_dir() and (child / "results.csv").is_file():
+        if path_is_relative_to(child, group_dir) and child.is_dir() and (child / "results.csv").is_file():
             summaries.append(run_evaluation_summary(child))
     return summaries
 
@@ -3930,7 +3967,7 @@ def run_test_split(
     python_executable: str | Path | None = None,
     timeout_seconds: float | None = 3600.0,
 ) -> dict[str, Any]:
-    target = repo_resolve(run_dir)
+    target = resolve_training_run_dir(run_dir)
     weights = target / "weights" / "best.pt"
     if not weights.is_file():
         raise ValueError(f"Run has no best.pt to evaluate: {repo_relative(weights)}")
@@ -3992,7 +4029,8 @@ def promote_weight(
     if "/" in clean_target or "\\" in clean_target:
         raise ValueError("target_name must be a bare filename, not a path")
 
-    source = repo_resolve(runs_dir) / str(run_group) / str(run_name) / "weights" / "best.pt"
+    run_dir = resolve_training_run_ref(runs_dir, run_group, run_name)
+    source = resolve_training_run_dir(run_dir / "weights" / "best.pt")
     if not source.is_file():
         raise ValueError(f"Run weights not found: {repo_relative(source)}")
 

@@ -518,7 +518,7 @@ def resolved_run_dir(args: argparse.Namespace) -> str:
     if not run_group or not run_name:
         raise ValueError("Provide --run-dir, or both --run-group and --run-name")
     runs_dir = getattr(args, "runs_dir", None) or pipeline.DEFAULT_RUNS_DIR
-    return str(pipeline.repo_resolve(runs_dir) / str(run_group) / str(run_name))
+    return str(pipeline.resolve_training_run_ref(runs_dir, str(run_group), str(run_name)))
 
 
 def command_save_training_config(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
