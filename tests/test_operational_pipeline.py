@@ -31,6 +31,7 @@ def write_pil_geotiff(path: Path, width: int, height: int, bbox: tuple[float, fl
         tiffinfo={
             33550: (scale_x, scale_y, 0.0),
             33922: (0.0, 0.0, 0.0, lon_min, lat_max, 0.0),
+            34735: (1, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326),
         },
     )
 
@@ -458,7 +459,7 @@ def test_write_detection_preview_draws_box_and_lists_ais(tmp_path: Path) -> None
     captions = pipeline._caption_lines(result)
     assert any("111111111" in line for line in captions)
     assert any("2020-01-04T16:30:00" in line for line in captions)
-    assert any("PARTIALLY_DARK" in line for line in captions)
+    assert any("AIS vessels within" in line for line in captions)
 
 
 def test_write_detection_preview_handles_a_box_at_the_image_edge(tmp_path: Path) -> None:
@@ -532,9 +533,12 @@ def test_run_pipeline_end_to_end_with_mocked_yolo(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setattr(pipeline, "detect_images", fake_detect_images)
 
+    weight = tmp_path / "fixture.pt"
+    weight.write_bytes(b"test checkpoint")
     results = pipeline.run_pipeline(
         image_inputs=[str(tiles)],
-        weights="unused.pt",
+        weights=weight,
+        record_path=tmp_path / "run.json",
         ais_dir=tmp_path / "ais",
         date="2020-01-04",
         preview_dir=tmp_path / "out" / "previews",

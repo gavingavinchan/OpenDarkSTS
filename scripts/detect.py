@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,7 +14,16 @@ except ImportError:
     from sts_utils import load_image_size, parse_image_date, resolve_image_inputs, write_json
 
 
+def require_ships_class(names: Any) -> set[int]:
+    mapping = dict(enumerate(names)) if isinstance(names, (list, tuple)) else names
+    ships_ids = {int(key) for key, value in (mapping or {}).items() if value == "ships"}
+    if not ships_ids:
+        raise ValueError("The loaded YOLO model does not expose a 'ships' class; select a trained STS checkpoint")
+    return ships_ids
+
+
 def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> list[dict[str, Any]]:
+    require_ships_class(model.names)
     image_path = Path(image_path).resolve()
     image_width, image_height = load_image_size(image_path)
     image_date = parse_image_date(image_path)
@@ -24,11 +34,8 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
 
     result = results[0]
     names = getattr(result, "names", {}) or {}
-    ships_ids = {class_id for class_id, class_name in names.items() if class_name == "ships"}
-    if not ships_ids and 1 in names:
-        ships_ids = {1}
-    if not ships_ids:
-        raise ValueError("The loaded YOLO model does not expose a 'ships' class")
+    ships_ids = require_ships_class(names)
+    image_id = hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:20]
 
     detections: list[dict[str, Any]] = []
     boxes = getattr(result, "boxes", None)
@@ -43,7 +50,7 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
         xywh = box.xywh[0].tolist()
         detections.append(
             {
-                "detection_id": f"{image_path.stem}:{index}",
+                "detection_id": f"{image_path.stem}_{image_id}:{index}",
                 "image_path": str(image_path),
                 "date": image_date,
                 "cx_px": round(float(xywh[0]), 4),

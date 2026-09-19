@@ -1331,6 +1331,11 @@ def load_yolo_models(model_paths: dict[str, str | Path]) -> dict[str, Any]:
         if not resolved.exists():
             raise FileNotFoundError(f"Model weights not found for {model_name}: {resolved}")
         models[model_name] = yolo_module.YOLO(str(resolved))
+        try:
+            from .detect import require_ships_class
+        except ImportError:
+            from detect import require_ships_class
+        require_ships_class(models[model_name].names)
     return models
 
 

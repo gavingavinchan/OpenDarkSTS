@@ -25,6 +25,9 @@ PIPELINE_CSV_FIELDS = [
     "confidence",
     "ais_count",
     "dark_status",
+    "ais_status_text",
+    "ais_error",
+    "ais_file",
     "preview_png",
     "vessel_1_mmsi",
     "vessel_1_name",
@@ -92,6 +95,9 @@ def load_bbox_for_image(image_path: str | Path, bbox_path: str | Path | None = N
 
         if rasterio is not None:
             with rasterio.open(image_path) as dataset:
+                transform = dataset.transform
+                if dataset.crs != rasterio.crs.CRS.from_epsg(4326) or transform.b != 0 or transform.d != 0 or transform.a <= 0 or transform.e >= 0:
+                    raise ValueError("Imagery must be north-up EPSG:4326; reproject the raster before running detection")
                 bounds = dataset.bounds
             return float(bounds.left), float(bounds.bottom), float(bounds.right), float(bounds.top)
 
@@ -101,6 +107,10 @@ def load_bbox_for_image(image_path: str | Path, bbox_path: str | Path | None = N
                 raise RuntimeError("GeoTIFF georeferencing tags are not available from this TIFF reader")
             tiepoint = tags.get(33922)
             pixel_scale = tags.get(33550)
+            keys = tags.get(34735) or ()
+            geokeys = {int(keys[i]): tuple(keys[i + 1:i + 4]) for i in range(4, len(keys) - 3, 4)}
+            if geokeys.get(2048) != (0, 1, 4326) or tags.get(34264) is not None:
+                raise ValueError("Imagery must be north-up EPSG:4326; install rasterio for other GeoTIFF encodings")
             if tiepoint is None or pixel_scale is None:
                 raise RuntimeError(
                     "GeoTIFF georeferencing requires rasterio or GeoTIFF ModelTiepoint/ModelPixelScale tags."
@@ -111,6 +121,8 @@ def load_bbox_for_image(image_path: str | Path, bbox_path: str | Path | None = N
             model_y = float(tiepoint[4])
             scale_x = float(pixel_scale[0])
             scale_y = float(pixel_scale[1])
+            if scale_x <= 0 or scale_y <= 0 or any(float(value) != 0 for value in tiepoint[:3]):
+                raise ValueError("Imagery must be north-up EPSG:4326 with an upper-left tiepoint")
 
         lon_min = model_x
         lat_max = model_y
@@ -129,6 +141,8 @@ def load_bbox_for_image(image_path: str | Path, bbox_path: str | Path | None = N
     if not isinstance(bbox, list) or len(bbox) != 4:
         raise ValueError(f"Invalid bbox metadata in {sidecar_path}; expected {{\"bbox\": [lon_min, lat_min, lon_max, lat_max]}}")
     lon_min, lat_min, lon_max, lat_max = [float(value) for value in bbox]
+    if payload.get("crs", "EPSG:4326") != "EPSG:4326" or not (-180 <= lon_min < lon_max <= 180 and -90 <= lat_min < lat_max <= 90):
+        raise ValueError("Image bounds must be valid north-up EPSG:4326 longitude/latitude bounds")
     return lon_min, lat_min, lon_max, lat_max
 
 
@@ -191,6 +205,9 @@ def flatten_pipeline_result(result: dict[str, Any]) -> dict[str, Any]:
         "confidence": result.get("confidence", ""),
         "ais_count": result.get("ais_count", 0),
         "dark_status": result.get("dark_status", ""),
+        "ais_status_text": result.get("ais_status_text", ""),
+        "ais_error": result.get("ais_error", ""),
+        "ais_file": result.get("ais_file", ""),
         "preview_png": result.get("preview_png", ""),
     }
     for index, vessel in ((1, vessel_1), (2, vessel_2)):
@@ -277,4 +294,6 @@ def resolve_ais_file(ais_dir: str | Path, date_str: str) -> Path:
     matches = sorted(ais_path.rglob(expected_name))
     if not matches:
         raise FileNotFoundError(f"Could not find {expected_name} under {ais_path}")
+    if len(matches) > 1:
+        raise ValueError(f"Multiple AIS files match {date_str}; select a specific CSV: " + ", ".join(map(str, matches)))
     return matches[0]

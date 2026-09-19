@@ -101,9 +101,9 @@ Dark status per detection:
 
 | AIS vessels within radius | Status | Reading |
 |---|---|---|
-| 0 | `FULLY_DARK` | Two hulls visible, nobody transmitting |
-| 1 | `PARTIALLY_DARK` | One side transmitting, the other dark |
-| 2+ | `AIS_PRESENT` | Both sides accounted for; check type/size/speed for inconsistencies |
+| 0 | `FULLY_DARK` | No AIS vessels within the radius that day |
+| 1 | `PARTIALLY_DARK` | One AIS vessel within the radius that day |
+| 2+ | `AIS_PRESENT` | Two or more AIS vessels within the radius that day |
 
 Each output row carries `MMSI`, `VesselName`, `BaseDateTime` (the matched ping, UTC),
 `VesselType`, `SOG`, `COG`, `Length` and `distance_m` for the two closest vessels; the

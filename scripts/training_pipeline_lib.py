@@ -24,8 +24,10 @@ from PIL import Image
 
 try:
     from . import visual_review_lib as review_lib
+    from .workspace import current_model, set_current_model, WORKSPACE_DIR
 except ImportError:
     import visual_review_lib as review_lib
+    from workspace import current_model, set_current_model, WORKSPACE_DIR
 
 try:
     from .dataset_splits import GroupStats, assign_groups_to_splits, check_no_group_overlap, group_key, parse_source_name
@@ -36,7 +38,6 @@ except ImportError:
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-WORKSPACE_DIR = ROOT_DIR / "workspace"
 SCHEMA_VERSION = 1
 SPLITS = ("train", "val", "test")
 SUPPORTED_IMPORT_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
@@ -48,7 +49,7 @@ DEFAULT_REVIEW_QUEUE_PRUNE_REPORTS_DIR = WORKSPACE_DIR / "reports" / "review_que
 DEFAULT_IMAGE_REMOVAL_REPORTS_DIR = WORKSPACE_DIR / "reports" / "image_removals"
 DEFAULT_DATASET_SELECTIONS_DIR = WORKSPACE_DIR / "dataset_selections"
 DEFAULT_DATASETS_DIR = WORKSPACE_DIR / "datasets"
-DEFAULT_AUTO_DETECT_YOLOV8 = WORKSPACE_DIR / "runs" / "madhulika_manual_sts_balanced_v2_e150_img960" / "yolov8n_rectbbox_e150_img960" / "weights" / "best.pt"
+DEFAULT_AUTO_DETECT_YOLOV8 = WORKSPACE_DIR / "model_weights" / "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
 DEFAULT_AUTO_DETECT_MODEL_PATHS = {"yolov8n": DEFAULT_AUTO_DETECT_YOLOV8}
 DEFAULT_AUTO_DETECT_CONFIDENCE = 0.25
 DEFAULT_AUTO_DETECT_IOU = 0.5
@@ -1001,7 +1002,7 @@ def attach_review_stub_result(
 
 
 def normalize_auto_detect_model_paths(model_paths: dict[str, str | Path] | None = None) -> dict[str, str | Path]:
-    paths = model_paths or DEFAULT_AUTO_DETECT_MODEL_PATHS
+    paths = model_paths or {"current": current_model(WORKSPACE_DIR / "model_weights")}
     return {str(name): path for name, path in paths.items() if str(name).strip() and str(path).strip()}
 
 
@@ -4123,6 +4124,7 @@ def promote_weight(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+    set_current_model(destination, run_group=run_group, run_name=run_name, metrics=run_evaluation_summary(run_dir)["validation_metrics"])
     return {
         "run_group": str(run_group),
         "run_name": str(run_name),

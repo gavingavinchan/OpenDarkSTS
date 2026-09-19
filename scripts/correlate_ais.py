@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,26 @@ def _prepare_detection_windows(detections: list[dict[str, Any]], radius_m: float
     return prepared, (min_lat, max_lat, min_lon, max_lon)
 
 
+class InvalidAIS(ValueError):
+    pass
+
+
+def validate_ais_header(fieldnames: list[str] | None) -> None:
+    required = {"MMSI", "BaseDateTime", "LAT", "LON"}
+    missing = required - set(fieldnames or [])
+    if missing:
+        raise InvalidAIS("AIS missing required columns: " + ", ".join(sorted(missing)))
+
+
+def unavailable_results(detections: list[dict[str, Any]], status: str, reason: str) -> list[dict[str, Any]]:
+    return [{**item, "ais_count": None, "ais_vessels": [], "dark_status": status,
+             "ais_error": reason, "ais_status_text": "AIS missing / invalid; vessel presence cannot be assessed"}
+            for item in detections]
+
+
 def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, radius_m: float = 1000.0) -> list[dict[str, Any]]:
+    if not math.isfinite(radius_m) or radius_m <= 0:
+        raise ValueError("AIS radius must be positive and finite")
     if not detections:
         return []
 
@@ -69,46 +89,65 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
 
     correlated: list[dict[str, Any]] = []
     for date_str, date_detections in sorted(grouped.items()):
-        ais_file = resolve_ais_file(ais_dir=ais_dir, date_str=date_str)
+        try:
+            ais_file = resolve_ais_file(ais_dir=ais_dir, date_str=date_str)
+        except FileNotFoundError as exc:
+            correlated.extend(unavailable_results(date_detections, "AIS_MISSING", str(exc)))
+            continue
         prepared, global_window = _prepare_detection_windows(date_detections, radius_m=radius_m)
         global_lat_min, global_lat_max, global_lon_min, global_lon_max = global_window
 
-        with ais_file.open(newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                lat_text = (row.get("LAT") or "").strip()
-                lon_text = (row.get("LON") or "").strip()
-                if not lat_text or not lon_text:
-                    continue
-
-                try:
-                    row_lat = float(lat_text)
-                    row_lon = float(lon_text)
-                except ValueError:
-                    continue
-
-                if row_lat < global_lat_min or row_lat > global_lat_max or row_lon < global_lon_min or row_lon > global_lon_max:
-                    continue
-
-                for candidate in prepared:
-                    if row_lat < candidate["lat_min"] or row_lat > candidate["lat_max"]:
-                        continue
-                    if row_lon < candidate["lon_min"] or row_lon > candidate["lon_max"]:
+        try:
+            with ais_file.open(newline="", encoding="utf-8-sig") as handle:
+                reader = csv.DictReader(handle, strict=True)
+                validate_ais_header(reader.fieldnames)
+                valid_rows = 0
+                for row in reader:
+                    lat_text = (row.get("LAT") or "").strip()
+                    lon_text = (row.get("LON") or "").strip()
+                    if not lat_text or not lon_text:
                         continue
 
-                    distance_m = haversine_m(candidate["lat"], candidate["lon"], row_lat, row_lon)
-                    if distance_m > radius_m:
+                    try:
+                        row_lat = float(lat_text)
+                        row_lon = float(lon_text)
+                    except ValueError:
                         continue
 
-                    vessel_key = build_vessel_key(row)
-                    match_record = {field: (row.get(field) or "").strip() for field in AIS_MATCH_FIELDS}
-                    match_record["LAT"] = row_lat
-                    match_record["LON"] = row_lon
-                    match_record["distance_m"] = round(distance_m, 3)
+                    if not (math.isfinite(row_lat) and math.isfinite(row_lon) and -90 <= row_lat <= 90 and -180 <= row_lon <= 180):
+                        continue
+                    if not (row.get("MMSI") or "").strip() or not (row.get("BaseDateTime") or "").startswith(date_str + "T"):
+                        continue
+                    valid_rows += 1
 
-                    existing = candidate["matches"].get(vessel_key)
-                    if existing is None or match_record["distance_m"] < existing["distance_m"]:
-                        candidate["matches"][vessel_key] = match_record
+                    if row_lat < global_lat_min or row_lat > global_lat_max or row_lon < global_lon_min or row_lon > global_lon_max:
+                        continue
+
+                    for candidate in prepared:
+                        if row_lat < candidate["lat_min"] or row_lat > candidate["lat_max"]:
+                            continue
+                        if row_lon < candidate["lon_min"] or row_lon > candidate["lon_max"]:
+                            continue
+
+                        distance_m = haversine_m(candidate["lat"], candidate["lon"], row_lat, row_lon)
+                        if distance_m > radius_m:
+                            continue
+
+                        vessel_key = build_vessel_key(row)
+                        match_record = {field: (row.get(field) or "").strip() for field in AIS_MATCH_FIELDS}
+                        match_record["LAT"] = row_lat
+                        match_record["LON"] = row_lon
+                        match_record["distance_m"] = round(distance_m, 3)
+
+                        existing = candidate["matches"].get(vessel_key)
+                        if existing is None or match_record["distance_m"] < existing["distance_m"]:
+                            candidate["matches"][vessel_key] = match_record
+
+                if valid_rows == 0:
+                    raise InvalidAIS("AIS file has no valid vessel positions for the requested day")
+        except (InvalidAIS, OSError, UnicodeError, csv.Error) as exc:
+            correlated.extend(unavailable_results(date_detections, "AIS_INVALID", str(exc)))
+            continue
 
         for candidate in prepared:
             ais_vessels = sorted(candidate["matches"].values(), key=lambda vessel: vessel["distance_m"])
@@ -117,6 +156,10 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
             result["ais_vessels"] = ais_vessels
             result["ais_count"] = len(ais_vessels)
             result["dark_status"] = classify_dark_status(result["ais_count"])
+            count_text = "no" if not ais_vessels else "one" if len(ais_vessels) == 1 else "two or more"
+            result["ais_radius_m"] = radius_m
+            result["ais_status_text"] = f"{count_text} AIS vessels within {radius_m:g} metres that day"
+            result["ais_error"] = None
             correlated.append(result)
 
     return correlated

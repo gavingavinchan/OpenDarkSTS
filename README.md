@@ -2,7 +2,7 @@
 
 Detect dark ship-to-ship (STS) transfers. A YOLO detector finds STS pairs in Sentinel-2
 imagery; each detection is then cross-checked against US AIS records for the same day and
-location. Two visible hulls with no AIS behind them are a dark STS candidate.
+location. Results are candidates for human review, not evidence of wrongdoing.
 
 - System overview, as built: [`docs/grand_plan_v3.md`](docs/grand_plan_v3.md)
 - Training pipeline plan: [`docs/training_pipeline_plan.md`](docs/training_pipeline_plan.md)
@@ -61,8 +61,11 @@ them, and cross-check the matching US AIS day file:
 - `previews/<detection_id>.png` — the crop around each detection with the box drawn in red
   and the AIS matches printed underneath, for human adjudication.
 
-Each detection is labelled `FULLY_DARK` (no AIS vessel within the radius),
-`PARTIALLY_DARK` (one), or `AIS_PRESENT` (two or more).
+Each detection is labelled `FULLY_DARK` (no AIS vessel within the radius that day),
+`PARTIALLY_DARK` (one), or `AIS_PRESENT` (two or more). Missing or unusable AIS is
+reported separately as `AIS_MISSING` or `AIS_INVALID`, with an unknown vessel count.
+Ambiguous AIS paths require selecting a specific CSV. Only north-up EPSG:4326 imagery
+is accepted. Each run writes the weight checksum, inputs, and settings to `run.json`.
 
 Individual stages can also be run on their own: `scripts/detect.py`,
 `scripts/georeference.py`, `scripts/correlate_ais.py`.

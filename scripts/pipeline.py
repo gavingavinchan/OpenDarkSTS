@@ -9,12 +9,16 @@ candidates plus one annotated PNG per detection so a human can check every hit.
 from __future__ import annotations
 
 import argparse
+import math
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from PIL import Image, ImageDraw
 
 try:
+    from .workspace import current_model, atomic_json, sha256, WORKSPACE_DIR
     from .correlate_ais import correlate_detections
     from .detect import detect_images
     from .georeference import georeference_detections
@@ -23,11 +27,13 @@ try:
         filter_readable_images,
         flatten_pipeline_result,
         parse_image_date,
+        load_bbox_for_image,
         resolve_image_inputs,
         write_csv_rows,
         write_json,
     )
 except ImportError:
+    from workspace import current_model, atomic_json, sha256, WORKSPACE_DIR
     from correlate_ais import correlate_detections
     from detect import detect_images
     from georeference import georeference_detections
@@ -36,6 +42,7 @@ except ImportError:
         filter_readable_images,
         flatten_pipeline_result,
         parse_image_date,
+        load_bbox_for_image,
         resolve_image_inputs,
         write_csv_rows,
         write_json,
@@ -43,7 +50,7 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_WEIGHTS = REPO_ROOT / "workspace" / "model_weights" / "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
+DEFAULT_WEIGHTS = WORKSPACE_DIR / "model_weights" / "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
 PREVIEW_MARGIN_PX = 120
 PREVIEW_MIN_SIDE_PX = 480
 PREVIEW_CAPTION_LINE_PX = 14
@@ -86,11 +93,11 @@ def _caption_lines(result: dict[str, Any]) -> list[str]:
     lines = [
         f"{result.get('detection_id', '')}  conf={result.get('confidence', '')}",
         f"{result.get('date', '')}  lat={result.get('center_lat', '')}  lon={result.get('center_lon', '')}",
-        f"dark_status={result.get('dark_status', '')}  ais_count={result.get('ais_count', 0)}",
+        str(result.get("ais_status_text") or f"AIS vessels within search radius that day: {result.get('ais_count', 0)}"),
     ]
     vessels = result.get("ais_vessels") or []
-    if not vessels:
-        lines.append("no AIS vessel within radius")
+    if result.get("ais_error"):
+        lines.append(str(result["ais_error"]))
     for vessel in vessels[:6]:
         lines.append(
             "MMSI {mmsi} {name} t={time} type={vtype} SOG={sog} COG={cog} len={length} d={dist}m".format(
@@ -172,7 +179,7 @@ def write_detection_previews(results: list[dict[str, Any]], preview_dir: str | P
 
 def run_pipeline(
     image_inputs: list[str],
-    weights: str | Path = DEFAULT_WEIGHTS,
+    weights: str | Path | None = None,
     ais_dir: str | Path = "",
     conf: float = 0.25,
     radius_m: float = 1000.0,
@@ -180,20 +187,47 @@ def run_pipeline(
     date: str | None = None,
     preview_dir: str | Path | None = None,
     warn: Callable[[str], None] | None = None,
+    record_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     image_paths = select_images(image_inputs, date=date, warn=warn)
     if not image_paths:
         raise FileNotFoundError("No readable input images were found")
 
-    detections = detect_images(image_paths=image_paths, weights=weights, conf=conf)
-    if not detections:
-        return []
+    if bbox_json is not None and len(image_paths) > 1:
+        raise ValueError("A bbox override can only be used with one image")
+    for image_path in image_paths:
+        load_bbox_for_image(image_path, bbox_json)
+    if not math.isfinite(conf) or not 0 <= conf <= 1:
+        raise ValueError("Confidence must be between zero and one")
+    if not math.isfinite(radius_m) or radius_m <= 0:
+        raise ValueError("AIS radius must be positive and finite")
+    weight_path = Path(weights or current_model()).resolve()
+    run_id = uuid.uuid4().hex
+    record_path = Path(record_path or WORKSPACE_DIR / "reports" / "operational" / run_id / "run.json")
+    record = {"run_id": run_id, "started_at": datetime.now(timezone.utc).isoformat(),
+              "weight": str(weight_path), "weight_sha256": sha256(weight_path), "confidence": conf,
+              "ais_radius_m": radius_m, "ais_source": str(ais_dir), "date": date,
+              "inputs": [str(path) for path in image_paths], "bbox_override": str(bbox_json) if bbox_json else None,
+              "matching_policy": "same UTC day, radius only", "status": "running"}
+    atomic_json(record_path, record)
+    try:
+        detections = detect_images(image_paths=image_paths, weights=weight_path, conf=conf)
+        georeferenced = georeference_detections(detections=detections, bbox_path=bbox_json)
+        results = correlate_detections(detections=georeferenced, ais_dir=ais_dir, radius_m=radius_m)
+        for item in results:
+            item.update(run_id=run_id, run_record=str(record_path))
+        if preview_dir is not None:
+            write_detection_previews(results, preview_dir)
+        record.update(status="completed", detection_count=len(results),
+                      ais_files=sorted({item["ais_file"] for item in results if item.get("ais_file")}))
+        return results
+    except Exception as exc:
+        record.update(status="failed", error=str(exc))
+        raise
+    finally:
+        record["ended_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(record_path, record)
 
-    georeferenced = georeference_detections(detections=detections, bbox_path=bbox_json)
-    results = correlate_detections(detections=georeferenced, ais_dir=ais_dir, radius_m=radius_m)
-    if preview_dir is not None:
-        write_detection_previews(results, preview_dir)
-    return results
 
 
 def write_pipeline_output(output_path: str | Path, results: list[dict[str, Any]]) -> None:
@@ -210,8 +244,8 @@ def summarise_results(results: list[dict[str, Any]]) -> dict[str, int]:
     summary = {"detections": len(results), "FULLY_DARK": 0, "PARTIALLY_DARK": 0, "AIS_PRESENT": 0}
     for result in results:
         status = result.get("dark_status", "")
-        if status in summary:
-            summary[status] += 1
+        if status:
+            summary[status] = summary.get(status, 0) + 1
     return summary
 
 
@@ -220,7 +254,7 @@ def main() -> None:
     parser.add_argument("--images", nargs="+", required=True, help="Image path(s), directories, or glob patterns")
     parser.add_argument(
         "--weights",
-        default=str(DEFAULT_WEIGHTS),
+        default=None,
         help=f"Path to YOLO .pt weights (default: {DEFAULT_WEIGHTS})",
     )
     parser.add_argument("--ais-dir", required=True, help="AIS directory or specific AIS CSV file")
@@ -256,6 +290,7 @@ def main() -> None:
         bbox_json=args.bbox_json,
         date=args.date,
         preview_dir=preview_dir,
+        record_path=output_path.parent / "run.json",
     )
     write_pipeline_output(output_path, results)
     if args.also_write:
@@ -267,9 +302,7 @@ def main() -> None:
         print(f"Wrote {len(results)} pipeline results to {args.also_write}")
     if preview_dir is not None and results:
         print(f"Wrote {len(results)} annotated previews to {preview_dir}")
-    print(
-        "Dark status: FULLY_DARK={FULLY_DARK} PARTIALLY_DARK={PARTIALLY_DARK} AIS_PRESENT={AIS_PRESENT}".format(**summary)
-    )
+    print(f"AIS vessels within {args.radius:g} metres that day: no={summary['FULLY_DARK']} one={summary['PARTIALLY_DARK']} two-or-more={summary['AIS_PRESENT']}; missing/invalid={summary.get('AIS_MISSING', 0) + summary.get('AIS_INVALID', 0)}")
 
 
 if __name__ == "__main__":
