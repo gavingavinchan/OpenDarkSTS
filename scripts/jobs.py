@@ -107,7 +107,7 @@ def list_jobs(*, include_training=False):
     return sorted(records, key=lambda item: item["created_at"], reverse=True)
 
 
-def submit_job(kind, options):
+def submit_job(kind, options, *, project_update=None):
     options = validate_options(kind, options)
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     try:
@@ -119,6 +119,8 @@ def submit_job(kind, options):
             directory = job_dir(job_id)
             directory.mkdir()
             record = {"job_id": job_id, "kind": kind, "options": options, "status": "queued", "created_at": now()}
+            if project_update:
+                record['project_update'] = project_update
             atomic_json(directory / "job.json", record)
             try:
                 with (directory / "job.log").open("w", encoding="utf-8") as output:
@@ -171,6 +173,9 @@ def worker(job_id):
     write_job(job_id, record)
     try:
         record["result"] = execute_job(record["kind"], record["options"], log=lambda message: print(message, flush=True))
+        if record.get('project_update') and record['result'].get('files'):
+            from .operations import apply_project_update
+            record['project_update_applied'] = apply_project_update(record['project_update'])
         record["status"] = "completed"
     except Exception as exc:
         record.update(status="failed", error=str(exc))

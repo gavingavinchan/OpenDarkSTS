@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .workspace import WORKSPACE_DIR, atomic_json, current_model
+from .workspace import WORKSPACE_DIR, atomic_json, current_model, exclusive_lock
 from .acquisition import validate_bbox, date_range, cache_key
 from . import jobs
 
@@ -26,6 +26,20 @@ def project():
 
 
 def save_project(payload):
+    with exclusive_lock(PROJECT_PATH.with_suffix('.lock'), blocking=True):
+        return _save_project(payload)
+
+
+def apply_project_update(update):
+    """Select acquired inputs only if the user has not edited the project meanwhile."""
+    with exclusive_lock(PROJECT_PATH.with_suffix('.lock'), blocking=True):
+        if project() != update['expected_project']:
+            return False
+        _save_project(update['updates'])
+        return True
+
+
+def _save_project(payload):
     allowed = set(project())
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("Unknown project settings")
@@ -94,9 +108,9 @@ def submit_project_job(kind):
             options["output_dir"] = str(WORKSPACE_DIR / "inputs" / "ais")
     else:
         raise ValueError("Unknown job type")
-    job = jobs.submit_job(kind, options)
+    updates = None
     if kind == "imagery":
-        save_project({"images": options["output_dir"]})
+        updates = {"images": options["output_dir"]}
     elif kind == "ais":
-        save_project({"ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full")})
-    return job
+        updates = {"ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full")}
+    return jobs.submit_job(kind, options, project_update={"expected_project": settings, "updates": updates} if updates else None)

@@ -95,15 +95,38 @@ def test_detection_output_refuses_to_overwrite_reviewed_run(isolated):
     assert (root/'run.json').read_text() == '{"status":"completed"}'
 
 
-def test_gui_download_areas_have_distinct_selected_folders(isolated, monkeypatch):
+@pytest.mark.parametrize("kind", ["imagery", "ais"])
+@pytest.mark.parametrize("outcome", ["success", "empty", "failure", "edited"])
+def test_download_selects_inputs_only_after_success(isolated, monkeypatch, kind, outcome):
+    operations.save_project({"images": str(isolated / "custom_images"), "ais_dir": str(isolated / "custom_ais")})
+    original = operations.project()
+    monkeypatch.setattr(jobs.subprocess, "Popen", lambda *a, **kw: type("Process", (), {"pid": 12345})())
+    record = operations.submit_project_job(kind)
+    assert operations.project() == original
+    if outcome == "edited":
+        operations.save_project({"images": str(isolated / "new_choice")})
+    expected = operations.project()
+    def execute(*args, **kwargs):
+        if outcome == "failure":
+            raise ValueError("Acquisition failed")
+        return {"files": [] if outcome == "empty" else [{"path": "acquired"}]}
+    monkeypatch.setattr(jobs, "execute_job", execute)
+    jobs.worker(record["job_id"])
+    if outcome == "success":
+        key = "images" if kind == "imagery" else "ais_dir"
+        assert operations.project()[key] == record["project_update"]["updates"][key]
+    else:
+        assert operations.project() == expected
+    assert jobs.read_job(record["job_id"])["status"] == ("failed" if outcome == "failure" else "completed")
+
+
+def test_gui_download_areas_have_distinct_destinations(isolated, monkeypatch):
     submitted = []
-    def submit(kind, options):
+    def submit(kind, options, **kwargs):
         submitted.append(options)
-        return {'job_id':'fixture'}
-    monkeypatch.setattr(jobs, 'submit_job', submit)
-    operations.submit_project_job('imagery')
-    first = operations.project()['images']
-    operations.save_project({'bbox':[-95,28,-94.9,28.1]})
-    operations.submit_project_job('imagery')
-    assert operations.project()['images'] != first
-    assert submitted[-1]['output_dir'] == operations.project()['images']
+        return {"job_id": "fixture"}
+    monkeypatch.setattr(jobs, "submit_job", submit)
+    operations.submit_project_job("imagery")
+    operations.save_project({"bbox": [-95, 28, -94.9, 28.1]})
+    operations.submit_project_job("imagery")
+    assert submitted[0]["output_dir"] != submitted[1]["output_dir"]
