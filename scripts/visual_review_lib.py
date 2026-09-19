@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote
 
 from PIL import Image
 
@@ -95,6 +96,24 @@ def repo_resolve(path_value: str | Path) -> Path:
     if path.is_absolute():
         return path
     return (ROOT_DIR / path).resolve()
+
+
+def cache_url_for(path):
+    target = repo_resolve(path).resolve()
+    root = (WORKSPACE_DIR / "cache").resolve()
+    if not target.is_relative_to(root):
+        return None
+    return "/cache/workspace/cache/" + quote(target.relative_to(root).as_posix(), safe="/")
+
+
+def resolve_cache_resource(resource):
+    cleaned = unquote(resource).replace("\\", "/")
+    if cleaned.startswith("workspace/"):
+        cleaned = cleaned[len("workspace/"):]
+    target = (WORKSPACE_DIR / cleaned).resolve()
+    if not target.is_relative_to((WORKSPACE_DIR / "cache").resolve()) or not target.is_file():
+        return None
+    return target
 
 
 def json_default(value: Any) -> Any:

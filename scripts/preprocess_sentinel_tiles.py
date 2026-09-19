@@ -44,12 +44,10 @@ except ImportError:
     )
 
 
-# Default prefill weights. The YOLO26n default is the first weight trained on a
-# verified leak-free split (see docs/progress.md, "Clean Evaluation v1"); the
-# YOLOv8n default still comes from a contaminated balanced dataset and should be
-# retrained on sts_clean_v1 or dropped from the prefill.
-DEFAULT_YOLOV8 = Path("workspace/runs/madhulika_manual_sts_balanced_v2_e150_img960/yolov8n_rectbbox_e150_img960/weights/best.pt")
-DEFAULT_YOLO26 = Path("workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt")
+try:
+    from .workspace import current_model
+except ImportError:
+    from workspace import current_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,8 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR), help="Cache directory for tile PNG review images")
     parser.add_argument("--reviews-dir", default=str(DEFAULT_REVIEWS_DIR), help="Root directory for per-image review JSON files")
     parser.add_argument("--reviewer", default=DEFAULT_REVIEWER, help="Reviewer name used for initial review stub output")
-    parser.add_argument("--weights-yolov8n", default=str(DEFAULT_YOLOV8), help="YOLOv8n weights path")
-    parser.add_argument("--weights-yolo26n", default=str(DEFAULT_YOLO26), help="YOLO26n weights path")
+    parser.add_argument("--weights-yolov8n", help="Optional additional trained STS weight")
+    parser.add_argument("--weights-yolo26n", help="Override the current model")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold for model inference")
     parser.add_argument("--iou", type=float, default=0.5, help="IoU threshold for class-aware NMS")
     parser.add_argument("--date", action="append", dest="dates", help="Only preprocess specific date(s), repeatable")
@@ -83,10 +81,9 @@ def main() -> None:
     if not dates:
         raise ValueError("No dates matched the requested filters")
 
-    model_paths = {
-        "yolov8n": args.weights_yolov8n,
-        "yolo26n": args.weights_yolo26n,
-    }
+    model_paths = {"current": args.weights_yolo26n or str(current_model())}
+    if args.weights_yolov8n:
+        model_paths["additional"] = args.weights_yolov8n
     models = load_yolo_models(model_paths)
 
     processed = 0

@@ -2588,7 +2588,7 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
 
     run_name = config.get("run_name")
     run_group = config.get("run_group") or "default"
-    output_root = config.get("output_dir") or ROOT_DIR / "workspace" / "runs"
+    output_root = config.get("output_dir") or WORKSPACE_DIR / "runs"
     if run_name:
         run_dir = resolve_training_run_ref(output_root, str(run_group), str(run_name))
         if run_dir.exists() and not bool(config.get("overwrite")):
@@ -3039,6 +3039,8 @@ DEFAULT_TRAINING_CONFIGS_DIR = WORKSPACE_DIR / "training_configs"
 DEFAULT_RUNS_DIR = WORKSPACE_DIR / "runs"
 DEFAULT_MODEL_WEIGHTS_DIR = WORKSPACE_DIR / "model_weights"
 WEIGHT_RECREATION_DOC = ROOT_DIR / "docs" / "yolo_weight_recreation.md"
+if not WEIGHT_RECREATION_DOC.is_file():
+    WEIGHT_RECREATION_DOC = WORKSPACE_DIR / "model_weights" / "weight_recreation.md"
 ALLOWED_AUGMENTATION_KEYS = (
     "hsv_h",
     "hsv_s",

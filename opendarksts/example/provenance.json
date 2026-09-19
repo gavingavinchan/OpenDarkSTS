@@ -1,0 +1,31 @@
+{
+  "image_source_filename": "2020-01-24_scene1_tile_3_3.tiff",
+  "image_source_sha256": "9c0b81f7bcc4af18f9ec39b6a0b00da989d5a50b172a84d3fabd4a9c1eac42bf",
+  "image_sha256": "c59dcf5666b0599d29b04a7ac8f5a1671db588c44ef6f3ed20329f7c84f5325c",
+  "crop_pixels": [
+    0,
+    320,
+    1024,
+    1024
+  ],
+  "attribution": "Contains modified Copernicus Sentinel data 2020; NOAA Office for Coastal Management AIS data.",
+  "acquisition_date": "2020-01-24",
+  "product_id": null,
+  "known_gaps": "Original Sentinel product identifier, acquisition time and rendering request were not retained. Date is from the source filename. No inference performance claim is made from this example.",
+  "ais": {
+    "complete": true,
+    "identity": {
+      "date": "2020-01-24",
+      "bbox": [
+        -94.387,
+        28.587508860759492,
+        -94.24340677966103,
+        28.720835443037974
+      ],
+      "source_sha256": "fd683b88370627c5a2635a199efb817f72e812794fe17457370cf595f2a661e9"
+    },
+    "sha256": "d17c531639aa074101ffd08d996c357558a9176b97b8641d65f4b2cf432ea054",
+    "row_count": 1653,
+    "source_url": "https://noaaocm.blob.core.windows.net/ais/csv2/csv2020/ais-2020-01-24.csv.zst"
+  }
+}

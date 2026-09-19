@@ -33,6 +33,8 @@ try:
         navigate_detail_cursor,
         queue_progress,
         repo_relative,
+        cache_url_for,
+        resolve_cache_resource,
         repo_resolve,
         review_counts,
         review_file_path,
@@ -68,6 +70,8 @@ except ImportError:
         navigate_detail_cursor,
         queue_progress,
         repo_relative,
+        cache_url_for,
+        resolve_cache_resource,
         repo_resolve,
         review_counts,
         review_file_path,
@@ -320,7 +324,7 @@ def build_state(image_id: str | None, album_id: str | None = None) -> dict:
             "tile_count": 1,
             "review_status": review["review_status"],
             "detail_cursor": review.get("detail_cursor"),
-            "cache_url": "/cache/" + repo_relative(cache_path),
+            "cache_url": cache_url_for(cache_path),
         },
         "detections": detections,
         "detail_queue": detail_payload,
@@ -2096,9 +2100,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         return value or None
 
     def _serve_cache_file(self, relative_path: str) -> None:
-        target = repo_resolve(relative_path)
-        cache_root = repo_resolve("workspace/cache")
-        if not target.exists() or cache_root not in target.parents:
+        target = resolve_cache_resource(relative_path)
+        if target is None:
             self._respond_json({"error": "cache file not found"}, status=404)
             return
 

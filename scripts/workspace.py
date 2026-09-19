@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WORKSPACE_DIR = Path(os.environ.get("OPENDARKSTS_WORKSPACE", REPO_ROOT / "workspace")).expanduser().resolve()
+WORKSPACE_DIR = Path(os.environ.get("OPENDARKSTS_WORKSPACE", Path.cwd() / "workspace")).expanduser().resolve()
 DEFAULT_WEIGHT_NAME = "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
 
 

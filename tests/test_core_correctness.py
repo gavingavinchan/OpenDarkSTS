@@ -79,3 +79,15 @@ def test_zero_detection_run_still_records_provenance(tmp_path, monkeypatch):
     assert payload["weight_sha256"] == workspace.sha256(weight)
     assert payload["inputs"] == [str(image)]
     assert payload["status"] == "completed"
+
+
+def test_area_filtered_ais_requires_coverage_of_entire_radius(tmp_path):
+    from scripts.correlate_ais import correlate_detections
+    from scripts.workspace import atomic_json, sha256
+    csv = tmp_path / 'AIS_2020_01_04.csv'
+    csv.write_text('MMSI,BaseDateTime,LAT,LON\n123,2020-01-04T12:00:00,29.15,-94.65\n')
+    atomic_json(csv.with_suffix('.csv.json'), {'complete': True, 'identity': {'bbox': [-94.66,29.14,-94.64,29.16]}, 'sha256': sha256(csv)})
+    result = correlate_detections([{'date':'2020-01-04', 'center_lat':29.15, 'center_lon':-94.65}], csv, radius_m=5000)[0]
+    assert result['dark_status'] == 'AIS_INVALID'
+    assert result['ais_count'] is None
+    assert 'full search radius' in result['ais_error']

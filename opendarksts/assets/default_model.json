@@ -1,0 +1,9 @@
+{
+  "filename": "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt",
+  "sha256": "080179e28767af1c10f5da297aa667ba2ee1f5846ca76c6765f6f577228433c9",
+  "url": "https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt",
+  "release_status": "Publication pending contributor review; this asset is not yet published.",
+  "metrics": {"split": "test", "dataset": "sts_clean_v1", "mAP50": 0.868, "mAP50_95": 0.583, "ships_mAP50": 0.839},
+  "architecture": "yolo26n",
+  "classes": ["ship", "ships"]
+}

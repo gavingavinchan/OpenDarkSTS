@@ -43,7 +43,7 @@
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
       $('modelName').textContent = dashboard.model ? dashboard.model.filename : 'No model selected';
-      $('modelInfo').textContent = dashboard.model_error || (dashboard.model.metrics && dashboard.model.metrics.mAP50 ? 'Validation mAP50: ' + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
+      $('modelInfo').textContent = dashboard.model_error || (dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Clean test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
       $('inventorySummary').textContent = dashboard.inventory.images + ' images / ' + dashboard.inventory.ais_dir + ' AIS files';
       $('pendingReviews').textContent = dashboard.pending_reviews + ' images waiting for review in Improve.';
       $('recentRuns').innerHTML = dashboard.jobs.slice(0,3).map(j => '<li><a href="/jobs?job='+encodeURIComponent(j.job_id)+'">'+P.esc(j.kind+' / '+j.status)+'</a></li>').join('');

@@ -1,0 +1,47 @@
+"""Start the single local server as a detached process."""
+import json
+import os
+import subprocess
+import sys
+import time
+from urllib.request import urlopen
+
+from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock
+from .process_support import detached_options
+from .training_pipeline_lib import process_is_alive, read_process_start_ticks
+
+
+def serve(port=8766):
+    if not 1 <= port <= 65535:
+        raise ValueError("Port must be between 1 and 65535")
+    root = contained(WORKSPACE_DIR / "reports" / "server", WORKSPACE_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    record_path = root / "service.json"
+    with exclusive_lock(root / ".launch.lock"):
+        if record_path.is_file():
+            record = json.loads(record_path.read_text())
+            if process_is_alive(record.get("pid"), record.get("start_ticks")):
+                return {**record, "already_running": True}
+        log_path = root / "server.log"
+        with log_path.open("a", encoding="utf-8") as output:
+            child = subprocess.Popen([sys.executable, "-m", "scripts.training_pipeline_ui", "--port", str(port)],
+                         stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, **detached_options())
+        record = {"pid": child.pid, "start_ticks": read_process_start_ticks(child.pid),
+                  "url": f"http://127.0.0.1:{port}", "log": str(log_path), "workspace": str(WORKSPACE_DIR)}
+        for _ in range(50):
+            if child.poll() is not None:
+                raise RuntimeError(f"Server could not start. Check {log_path}")
+            try:
+                with urlopen(record["url"] + "/api/operations/project", timeout=.2) as response:
+                    if response.status == 200:
+                        # Give an occupied port time to fail in the newly launched child.
+                        time.sleep(.1)
+                        if child.poll() is None:
+                            atomic_json(record_path, record)
+                            return record
+            except OSError:
+                pass
+            time.sleep(.1)
+        child.terminate()
+        child.wait(timeout=5)
+        raise RuntimeError(f"Server did not become ready. Check {log_path}")

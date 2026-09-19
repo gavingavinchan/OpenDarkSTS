@@ -706,3 +706,13 @@ Known gaps:
 When adding, moving, renaming, promoting, or deleting a YOLO `*.pt` file, update this document in the same change. If a weight has an adjacent doc instead, that doc must include the same reproduction fields and this registry should still point to it.
 
 If exact recreation is impossible, state the reason explicitly. Acceptable gaps include missing upstream URLs, external proprietary artifacts, unavailable hardware details, or unknown package versions, but the gap must be documented rather than left implicit.
+
+## Installed application copies (release preparation)
+
+`opendarksts init` copies or downloads the clean STS checkpoint named above into
+`<workspace>/model_weights/`, verifies its recorded SHA-256, and writes accompanying
+`model_card.md` and `weight_recreation.md`. These are packaged under
+`opendarksts/assets/`; `default_model.json` specifies the proposed GitHub release
+asset. The asset is not published yet. Local review workspaces use byte-identical
+copies of the existing promoted weight and the same documentation. Initialization
+does not reset an already promoted current model. No weight file is added to git.

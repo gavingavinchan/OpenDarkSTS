@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import sys
-import uuid
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
@@ -13,6 +13,12 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="opendarksts")
     parser.add_argument("--workspace", help="Workspace directory (or OPENDARKSTS_WORKSPACE)")
     commands = parser.add_subparsers(dest="command", required=True)
+    initialize = commands.add_parser("init")
+    initialize.add_argument("--weights", help="Local copy of the documented default checkpoint")
+    initialize.add_argument("--no-model", action="store_true", help="Prepare workspace and example without weights")
+    initialize.add_argument("--no-example", action="store_true")
+    serve = commands.add_parser("serve")
+    serve.add_argument("--port", type=int, default=8766)
     acquire = commands.add_parser("acquire").add_subparsers(dest="kind", required=True)
     for kind in ["ais", "imagery"]:
         command = acquire.add_parser(kind)
@@ -52,6 +58,12 @@ def build_parser():
 
 
 def execute(args):
+    if args.command == "init":
+        from .initialization import initialize
+        return initialize(weights=args.weights, no_model=args.no_model, example=not args.no_example)
+    if args.command == "serve":
+        from .service import serve
+        return serve(args.port)
     from . import jobs, operations
     if args.command == "results":
         from . import results
@@ -84,14 +96,21 @@ def execute(args):
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+        if code:
+            print(json.dumps({"ok": False, "command": "", "result": {}, "errors": ["Invalid command-line arguments"]}))
+        return code
     if args.workspace:
         os.environ["OPENDARKSTS_WORKSPACE"] = str(Path(args.workspace).expanduser().resolve())
     if args.command == "training":
         from .training_pipeline_cli import main as training_main
         return training_main(args.arguments)
     try:
-        result = execute(args)
+        with redirect_stdout(sys.stderr):
+            result = execute(args)
         payload, code = {"ok": True, "command": args.command, "result": result, "errors": []}, 0
     except Exception as exc:
         payload = {"ok": False, "command": args.command, "result": {}, "errors": [str(exc)]}

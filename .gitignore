@@ -86,3 +86,8 @@ opencode.jsonc
 SKILL.md
 skills-lock.json
 
+
+*.egg-info/
+# Small, documented release example assets
+!opendarksts/example/*.tiff
+!opendarksts/example/*.csv

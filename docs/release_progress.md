@@ -28,7 +28,14 @@ session. The experimental Results page remains hidden pending review.
   supplies YOLO and test evaluation. Validation: 280 passed, 2 skipped on Linux, including
   mocked Windows process checks. Actual Windows run remains pending (see
   `windows_validation.md`).
-- Phases 6–7: in progress.
+- Phase 6: installable package, `opendarksts init/serve` and shared CLI families,
+  checksum-verified default weight setup, packaged model documentation and a small
+  Sentinel/NOAA example implemented. The installed wheel was exercised outside the
+  repository root. Validation: 283 passed, 3 skipped with the requested interpreter;
+  286 passed with all inference dependencies, including a genuine example run.
+  Default weight publication remains pending; local initialization accepts its exact
+  existing checkpoint. Area-filtered AIS now requires coverage of the whole radius.
+- Phase 7: in progress.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.

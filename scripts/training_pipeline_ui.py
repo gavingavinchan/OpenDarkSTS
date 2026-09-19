@@ -336,16 +336,7 @@ def start_import_job(
 
 
 def cache_url_for(cache_path: str | None) -> str | None:
-    if not cache_path:
-        return None
-    try:
-        resolved = repo_resolve(cache_path).resolve()
-        cache_root = repo_resolve("workspace/cache").resolve()
-    except OSError:
-        return None
-    if resolved == cache_root or cache_root in resolved.parents:
-        return "/cache/" + pipeline.repo_relative(resolved)
-    return None
+    return pipeline.review_lib.cache_url_for(cache_path) if cache_path else None
 
 
 def review_summary_from_document(review: dict, review_path: Path) -> dict:
@@ -1626,18 +1617,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         self.wfile.write(resolved.read_bytes())
 
     def _serve_cache_file(self, relative_path: str) -> None:
-        cleaned = relative_path.lstrip("/")
-        candidates = [repo_resolve(cleaned)] if cleaned.startswith("workspace/") else [repo_resolve("workspace") / cleaned]
-        cache_root = repo_resolve("workspace/cache").resolve()
-        target_resolved = None
-        for candidate in candidates:
-            try:
-                resolved = candidate.resolve()
-            except OSError:
-                continue
-            if resolved.exists() and (resolved == cache_root or cache_root in resolved.parents):
-                target_resolved = resolved
-                break
+        target_resolved = pipeline.review_lib.resolve_cache_resource(relative_path)
         if target_resolved is None:
             self._respond_json({"error": "cache file not found"}, status=404)
             return

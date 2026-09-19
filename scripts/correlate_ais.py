@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,24 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
         global_lat_min, global_lat_max, global_lon_min, global_lon_max = global_window
 
         try:
+            sidecar = ais_file.with_suffix(".csv.json")
+            if sidecar.is_file():
+                try:
+                    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+                    if not isinstance(metadata, dict) or metadata.get("complete") is not True:
+                        raise InvalidAIS("AIS download is not marked complete")
+                    bounds = metadata.get("identity", {}).get("bbox")
+                    if bounds is not None:
+                        try:
+                            from .workspace import sha256
+                        except ImportError:
+                            from workspace import sha256
+                        if len(bounds) != 4 or sha256(ais_file) != metadata.get("sha256"):
+                            raise InvalidAIS("Area-filtered AIS checksum or coverage is invalid")
+                        if not (bounds[0] <= global_lon_min <= global_lon_max <= bounds[2] and bounds[1] <= global_lat_min <= global_lat_max <= bounds[3]):
+                            raise InvalidAIS("Area-filtered AIS does not cover the full search radius; use a full-day file or a larger area")
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise InvalidAIS(str(exc)) from exc
             with ais_file.open(newline="", encoding="utf-8-sig") as handle:
                 reader = csv.DictReader(handle, strict=True)
                 validate_ais_header(reader.fieldnames)

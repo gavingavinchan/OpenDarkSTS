@@ -1,115 +1,134 @@
 # OpenDarkSTS
 
-Detect dark ship-to-ship (STS) transfers. A YOLO detector finds STS pairs in Sentinel-2
-imagery; each detection is then cross-checked against US AIS records for the same day and
-location. Results are candidates for human review, not evidence of wrongdoing.
+Find candidate ship-to-ship transfers in satellite imagery and compare them with
+nearby US AIS vessel records from the same day. OpenDarkSTS runs locally: one web
+application provides data acquisition, detection, training, and job logs.
+Results are candidates for human review, not evidence of wrongdoing.
 
-- System overview, as built: [`docs/grand_plan_v3.md`](docs/grand_plan_v3.md)
-- Training pipeline plan: [`docs/training_pipeline_plan.md`](docs/training_pipeline_plan.md)
-- Training pipeline CLI reference: [`docs/training_pipeline_cli.md`](docs/training_pipeline_cli.md)
-- Running log of results and decisions: [`docs/progress.md`](docs/progress.md)
+This branch prepares version 0.1. The release checkpoint has not yet been published,
+and contributor approval of the proposed licence is pending. See the
+[release status](docs/release_progress.md).
 
-## Environment
+## Install and start
 
-Two interpreters, on purpose:
-
-| Interpreter | Use it for | Why |
-|---|---|---|
-| `.venv/bin/python` | anything touching `ultralytics`, `torch`, `rasterio` — inference, training, the operational pipeline, the training GUI | the project venv (see [`docs/local-venv.md`](docs/local-venv.md)) |
-| `/home/gavin/anaconda3/bin/python3` | `pytest` | the venv has no `pytest`; anaconda has no `ultralytics`/`rasterio` |
-
-The venv's `sqlite3` module is broken — do not use sqlite from `.venv/bin/python`.
+Use Python 3.11–3.13 (3.12 recommended), on Linux or Windows. Create one environment
+for the application, training and tests. A GPU is optional for inference; downloading
+PyTorch can take several minutes.
 
 ```bash
-# tests
-/home/gavin/anaconda3/bin/python3 -m pytest -q
+python -m venv .venv
+# Linux
+source .venv/bin/activate
+# Windows PowerShell, instead:
+# .venv\Scripts\Activate.ps1
+python -m pip install -e ".[test]"
 ```
 
-Tests that need `rasterio` or `ultralytics` skip themselves under anaconda, so the suite
-runs green without the heavy dependencies.
-
-## Operational pipeline (one command)
-
-Given a folder of Sentinel-2 GeoTIFF tiles for a date, detect STS pairs, georeference
-them, and cross-check the matching US AIS day file:
+From the folder where the workspace should live:
 
 ```bash
-.venv/bin/python scripts/pipeline.py \
-  --images workspace/inputs/2020_01_14 \
-  --ais-dir "/home/gavin/Downloads/AIS data" \
-  --date 2020-01-14 \
-  --output workspace/reports/operational/2020-01-14/dark_sts.csv \
-  --also-write workspace/reports/operational/2020-01-14/dark_sts.json
+opendarksts init
+opendarksts serve
 ```
 
-- `--weights` defaults to the promoted weight
-  `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`.
-- `--date` is optional; without it the date is inferred per file from the filename.
-- `--radius` (default `1000` m) is the AIS search radius; `--conf` (default `0.25`) is the
-  YOLO confidence threshold.
-- Zero-byte and unreadable rasters are skipped with a warning.
-- Non-GeoTIFF inputs need a sidecar `<image>.json` of
-  `{"bbox": [lon_min, lat_min, lon_max, lat_max]}`.
+Open the URL printed by `serve` (normally http://127.0.0.1:8766). The server runs in
+the background and writes its log to `workspace/reports/server/`. Repeating `serve`
+returns the existing server. Every command accepts `--workspace PATH` before its
+subcommand, or reads `OPENDARKSTS_WORKSPACE`.
 
-### Where outputs land
+`init` downloads and checks the default model from the GitHub release. **Before that
+asset is published**, use `opendarksts init --weights PATH_TO_THE_DEFAULT_CHECKPOINT`.
+The expected file and SHA-256 are in the [model card](opendarksts/assets/model_card.md).
+`init --no-model` prepares the folders and example without downloading weights.
 
-`workspace/reports/operational/<date>/`:
+## Try the bundled example
 
-- `dark_sts.csv` — one row per detection, flattened, with the two closest AIS vessels
-  (`MMSI`, name, matched `BaseDateTime`, `VesselType`, `SOG`, `COG`, `Length`, distance).
-- `dark_sts.json` — the same detections with **every** AIS match, not just the closest two.
-- `previews/<detection_id>.png` — the crop around each detection with the box drawn in red
-  and the AIS matches printed underneath, for human adjudication.
-
-Each detection is labelled `FULLY_DARK` (no AIS vessel within the radius that day),
-`PARTIALLY_DARK` (one), or `AIS_PRESENT` (two or more). Missing or unusable AIS is
-reported separately as `AIS_MISSING` or `AIS_INVALID`, with an unknown vessel count.
-Ambiguous AIS paths require selecting a specific CSV. Only north-up EPSG:4326 imagery
-is accepted. Each run writes the weight checksum, inputs, and settings to `run.json`.
-
-Individual stages can also be run on their own: `scripts/detect.py`,
-`scripts/georeference.py`, `scripts/correlate_ais.py`.
-
-## Training pipeline
-
-GUI (steps 1-7: import, visual review, reviewed bboxes, dataset selection, training
-setup, training run, evaluation). Start it detached so the session stays usable:
+No CDSE credentials or additional data download are needed after initialization:
 
 ```bash
-nohup .venv/bin/python scripts/training_pipeline_ui.py --port 8766 \
-  > workspace/reports/training_pipeline_ui.log 2>&1 < /dev/null &
-# then open http://localhost:8766
+opendarksts run --images workspace/inputs/example/2020-01-24_example.tiff --ais-dir workspace/inputs/example/AIS_2020_01_24.csv
 ```
 
-Everything the GUI does is also available from the CLI, which returns JSON:
+The command prints the output directory. Inspect `dark_sts.csv`, `dark_sts.json`,
+`run.json`, and `previews/`. The example should produce a candidate near
+28.6564 N, 94.3228 W with two nearby AIS vessels that day. Its
+[provenance and limits](opendarksts/example/README.md) are included in the workspace.
+
+For the GUI, set the example imagery folder and date **2020-01-24** in Detect, set
+its AIS CSV on Data, then open Run. Jobs shows the log and output downloads.
+
+## Use your own area and dates
+
+In Detect, choose a US preset, draw a box, or enter an existing image folder. Data
+can download Sentinel-2 imagery and complete NOAA AIS days in the background.
+Sentinel downloads require `CDSE_CLIENT_ID` and `CDSE_CLIENT_SECRET` in the server's
+environment; NOAA downloads do not require credentials. Set credentials before
+starting the server. Full AIS days can be large. See [acquisition](docs/acquisition.md).
+
+The same operations are available from the CLI:
 
 ```bash
-.venv/bin/python scripts/training_pipeline_cli.py --pretty import-data --source /path/to/images --auto-detect
-.venv/bin/python scripts/training_pipeline_cli.py --pretty export-dataset --help
-.venv/bin/python scripts/training_pipeline_cli.py --pretty check-training-ready
-.venv/bin/python scripts/training_pipeline_cli.py --pretty start-training
-.venv/bin/python scripts/training_pipeline_cli.py --pretty training-status
-.venv/bin/python scripts/training_pipeline_cli.py --pretty run-test-split
-.venv/bin/python scripts/training_pipeline_cli.py --pretty promote-weight
+opendarksts acquire imagery --start 2020-01-24 --bbox -94.73 29.07 -94.57 29.205 --background
+opendarksts acquire ais --start 2020-01-24 --background
+opendarksts jobs
+opendarksts run --images workspace/inputs/imagery --ais-dir workspace/inputs/ais/full --background
 ```
 
-`--human` prints a terse summary instead of JSON. Full reference and exit-code contract:
-[`docs/training_pipeline_cli.md`](docs/training_pipeline_cli.md).
+Input images must be north-up EPSG:4326. Plain RGB images require a matching
+`IMAGE.json` containing `{"bbox": [west, south, east, north]}`. Filenames must include
+`YYYY-MM-DD`. External input folders are read only; derived files stay in the
+workspace. If several AIS files match a date, select the intended day CSV explicitly.
 
-Training artifacts land in `workspace/`: `datasets/` (exported YOLO datasets),
-`runs/` (training runs), `model_weights/` (promoted weights), `reports/` (logs and
-evaluation reports), `reviews/` (human review JSON).
+## Read the output
 
-## Data rules
+The default confidence is 0.25; the AIS radius is 1000 metres (`--conf`, `--radius`).
 
-`/home/gavin/Downloads/AIS data` is **read-only**. Copy the inputs you need into
-`workspace/inputs/<date>/` and work there. See [`AGENTS.md`](AGENTS.md) for the full set
-of repository rules.
+| Stored status | Meaning |
+|---|---|
+| `FULLY_DARK` | No AIS vessels within the radius that UTC day |
+| `PARTIALLY_DARK` | One AIS vessel within the radius that UTC day |
+| `AIS_PRESENT` | Two or more AIS vessels within the radius that UTC day |
+| `AIS_MISSING` / `AIS_INVALID` | Vessel presence cannot be assessed; count is unknown |
 
-## Known limitations
+CSV includes the two closest AIS vessels; JSON retains all matches. Each run records
+its model checksum, selected inputs and settings. Previews show detections and AIS
+context for manual inspection.
 
-- AIS matching has **no time window**: any ping from the same UTC day within the radius
-  counts. The matched `BaseDateTime` is recorded so hits can be judged by eye.
-- Sentinel-2 tiles carry no acquisition time, so there is nothing to centre a window on.
-- US AIS (NOAA MarineCadastre) only — outside US waters everything would look dark.
-- One zoom level (10 m/pixel true colour).
+This comparison has **no time window** or track association. An AIS position can be
+hours away from the satellite observation and need not belong to either visible hull.
+New downloads retain acquisition metadata, but the matcher still uses the entire day.
+US coverage, cloud, image resolution, duplicate detections and model errors limit what
+can be inferred. The [model card](opendarksts/assets/model_card.md) describes the clean
+split metrics and known limits.
+
+## Improve the model
+
+Improve provides seven steps: import, visual review, reviewed overview, dataset
+selection, training setup, training run, and evaluation/promotion. Whole region/date
+groups stay together across dataset splits. Promoting a documented checkpoint makes
+it the current model for both Detect and review prefill.
+
+```bash
+opendarksts training --pretty import-data --source PATH_TO_IMAGES --auto-detect
+opendarksts training --help
+```
+
+See the [training CLI reference](docs/training_pipeline_cli.md) and
+[training plan](docs/training_pipeline_plan.md). CLI responses are JSON; input errors
+return exit code 2, execution failures 1, and training launch conflicts 3.
+
+## Development and data terms
+
+```bash
+python -m pytest -q
+python -m build
+```
+
+Tests mock network acquisition. A real inference test uses the documented checkpoint
+when available; set `OPENDARKSTS_TEST_WEIGHTS` to its path. Actual Windows validation
+is tracked in [the Windows checklist](docs/windows_validation.md).
+
+Contains modified Copernicus Sentinel data 2020. AIS example: NOAA Office for Coastal
+Management / US Coast Guard. Third-party notices, the proposed code licence and
+training-data rights are tracked in [licensing](docs/licensing.md). The
+[release plan](docs/release_plan.md) is the plan of record.
