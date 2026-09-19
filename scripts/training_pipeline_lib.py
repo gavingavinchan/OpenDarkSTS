@@ -2146,6 +2146,7 @@ def list_dataset_candidates(
         candidates.append({
             "image_key": image_key,
             "image_filename": review.get("image_filename") or entry.get("original_filename") or f"{image_key}.png",
+            "display_filename": entry.get("original_filename") or review.get("display_filename") or review.get("image_filename") or f"{image_key}.png",
             "review_status": review.get("review_status"),
             "review_path": repo_relative(review_path),
             "cache_path": review.get("cache_path") or entry.get("cache_path"),

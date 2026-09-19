@@ -175,7 +175,7 @@
         if (filters.has_ships === 'no' && counts.exportable > 0) { return false; }
         if (filters.reviewer && (item.reviewer || '') !== filters.reviewer) { return false; }
         if (filters.search) {
-          const haystack = (String(item.image_filename || '') + ' ' + String(item.image_key || '')).toLowerCase();
+          const haystack = [item.display_filename, item.image_filename, item.image_key].filter(Boolean).join(' ').toLowerCase();
           if (haystack.indexOf(filters.search) === -1) { return false; }
         }
         return true;
@@ -224,7 +224,7 @@
           const split = state.splits[item.image_key] || '';
           return '<tr class="' + (checked ? 'selected' : '') + '" data-key="' + P.esc(item.image_key) + '">' +
             '<td><input type="checkbox" class="pick"' + checked + ' data-key="' + P.esc(item.image_key) + '"></td>' +
-            '<td>' + P.esc(item.image_filename) + '</td>' +
+            '<td>' + P.esc(item.display_filename || item.image_filename) + '</td>' +
             '<td>' + P.esc((item.album_names || []).join(', ') || '—') + '</td>' +
             '<td><span class="pill ' + (item.review_status === 'completed' ? 'ok' : 'warn') + '">' + P.esc(item.review_status || '—') + '</span></td>' +
             '<td>' + (counts.ship || 0) + '</td><td>' + (counts.ships || 0) + '</td><td>' + (counts.neither || 0) + '</td>' +

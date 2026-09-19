@@ -905,6 +905,8 @@ def test_cli_list_dataset_candidates_filters_by_album_and_label(tmp_path: Path) 
     assert result["candidate_count"] == 1
     assert result["bbox_counts"]["ships"] == 1
     assert result["candidates"][0]["image_key"] == "img_completed"
+    assert result["candidates"][0]["image_filename"] == "img_completed.png"
+    assert result["candidates"][0]["display_filename"] == "completed.png"
     assert result["candidates"][0]["album_names"] == ["Album A"]
 
 
