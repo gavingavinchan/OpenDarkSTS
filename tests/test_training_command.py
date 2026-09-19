@@ -5,8 +5,9 @@ from pathlib import Path
 from _helpers import load_training_lib
 
 
-def test_build_yolo_train_command_from_config(tmp_path: Path) -> None:
+def test_build_yolo_train_command_from_config(tmp_path: Path, monkeypatch) -> None:
     training_lib = load_training_lib()
+    monkeypatch.setattr(training_lib, 'ROOT_DIR', tmp_path)
     dataset_dir = tmp_path / "datasets" / "fixture_dataset"
     runs_dir = tmp_path / "runs"
     dataset_dir.mkdir(parents=True)

@@ -137,3 +137,27 @@ def test_cli_start_training_exits_3_when_the_run_is_already_active(tmp_path: Pat
         assert code == 3
     finally:
         training_lib.stop_training_run(run_dir, grace_seconds=2.0)
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_training_worker_can_open_repository_relative_checkpoint(tmp_path: Path, monkeypatch, nested) -> None:
+    training_lib = load_training_lib()
+    monkeypatch.setattr(training_lib, 'ROOT_DIR', tmp_path)
+    worker_dir = tmp_path / 'worker'
+    worker_dir.mkdir()
+    monkeypatch.setattr(training_lib, 'WORKSPACE_DIR', worker_dir)
+    selection_path, config_path, run_dir = build_ready_run(worker_dir)
+    checkpoint = tmp_path / ('weights/local.pt' if nested else 'local.pt')
+    checkpoint.parent.mkdir(exist_ok=True)
+    checkpoint.write_bytes(b'fixture')
+    config = training_lib.load_json(config_path)
+    config['model'] = str(checkpoint.relative_to(tmp_path))
+    write_json(config_path, config)
+    executable = fake_yolo(tmp_path / 'check_model',
+        "from pathlib import Path\n"
+        "args = dict(arg.split('=', 1) for arg in sys.argv[1:] if '=' in arg)\n"
+        "assert Path(args['model']).read_bytes() == b'fixture'\n"
+        "print('CHECKPOINT_OPENED', flush=True)")
+    record = training_lib.start_training_run(selection_path, config_path, yolo_executable=executable)
+    wait_until_dead(training_lib, record['pid'])
+    assert 'CHECKPOINT_OPENED' in (run_dir / training_lib.TRAINING_LOG_FILENAME).read_text()

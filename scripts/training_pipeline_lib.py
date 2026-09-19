@@ -2617,11 +2617,17 @@ def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str |
     run_name = str(training_config["run_name"])
     output_root = repo_resolve(config_value(training_config, "output_dir", WORKSPACE_DIR / "runs"))
     resolve_training_run_ref(output_root, run_group, run_name)
+    model = str(training_config['model'])
+    local_model = repo_resolve(Path(model).expanduser())
+    # Workers run in the workspace; local checkpoints are relative to the repo.
+    # Keep upstream aliases available when there is no matching local file.
+    if local_model.is_file() or Path(model).parent != Path('.'):
+        model = str(local_model)
     command = [
         "yolo",
         "detect",
         "train",
-        f"model={training_config['model']}",
+        f"model={model}",
         f"data={data_yaml}",
         f"imgsz={training_config['image_size']}",
         f"epochs={training_config['epochs']}",
