@@ -24,3 +24,13 @@ version 7, whose local metadata declares Public Domain, plus manually reviewed
 satellite images. A declaration in an export does not establish the provenance of
 every upstream image or annotation. The full annotation/split release requires a
 source-rights review before it is published. The model card records this gap.
+
+The complete proposed licence text is preserved at
+[`AGPL-3.0.proposed.txt`](AGPL-3.0.proposed.txt), downloaded from the GNU project's
+licence text. Moving it to `LICENSE` and declaring `AGPL-3.0-only` in package metadata
+are deferred until agreement is recorded. Third-party notices are also shipped
+inside the package in `opendarksts/assets/third_party_notices.md`.
+
+The prepared local annotation review bundle is described in `release_review.md`.
+It has 562 label files and the clean split assignments; its preparation does not
+assert permission to distribute those annotations or the original imagery.

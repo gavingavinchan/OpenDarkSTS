@@ -35,7 +35,13 @@ session. The experimental Results page remains hidden pending review.
   286 passed with all inference dependencies, including a genuine example run.
   Default weight publication remains pending; local initialization accepts its exact
   existing checkpoint. Area-filtered AIS now requires coverage of the whole radius.
-- Phase 7: in progress.
+- Phase 7: local server boundaries hardened; public README, model/data notices,
+  proposed licence text, annotation review bundle and Linux/Windows CI prepared.
+  Final validation: 297 passed, 3 skipped with the requested interpreter; 300 passed
+  in the inference environment. The installed wheel passed eight page checks,
+  repeated review transfer and mobile layout checks, with no JavaScript errors.
+  Local implementation is ready for review; publishing and external validations
+  remain pending. See `release_review.md` for the concrete review packet.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.
