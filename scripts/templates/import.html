@@ -881,6 +881,15 @@
     .conflict-actions .danger { background: var(--stamp); border-color: var(--stamp); color: var(--card); }
     .conflict-actions .primary { background: var(--green); border-color: var(--green); color: var(--card); }
 
+    .shell, main, .ledger, .layout, aside.detail { min-width: 0; }
+    .shell, .ledger { grid-template-columns: minmax(0, 1fr); }
+    .ledger-scroll { overflow-x: auto; }
+    @media (max-width: 600px) {
+      header, .compact-toolbar { padding: 16px; }
+      .canvas { padding: 16px; }
+      .compact-toolbar > * { max-width: 100%; min-width: 0; }
+      aside.detail { overflow-wrap: anywhere; }
+    }
     @media (max-width: 980px) {
       header, .compact-toolbar { position: static; grid-template-columns: 1fr; }
       .rail { justify-content: flex-start; }
@@ -1415,7 +1424,7 @@
         </tr>
       `).join('');
       return `
-        <table class="ledger-table">
+        <div class="ledger-scroll"><table class="ledger-table">
           <thead>
             <tr>
               <th class="select-cell"></th>
@@ -1430,7 +1439,7 @@
             </tr>
           </thead>
           <tbody>${rows}</tbody>
-        </table>
+        </table></div>
       `;
     }
 
