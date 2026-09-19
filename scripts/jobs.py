@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock
-from . import acquisition, pipeline
+from . import acquisition, pipeline, process_support
 from . import training_pipeline_lib as training
 from .training_pipeline_lib import process_is_alive, read_process_start_ticks
 
@@ -116,7 +116,7 @@ def submit_job(kind, options):
             record = {"job_id": job_id, "kind": kind, "options": options, "status": "queued", "created_at": now()}
             atomic_json(directory / "job.json", record)
             with (directory / "job.log").open("w", encoding="utf-8") as output:
-                kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+                kwargs = process_support.detached_options()
                 process = subprocess.Popen([sys.executable, "-m", "scripts.jobs", job_id], stdin=subprocess.DEVNULL,
                                            stdout=output, stderr=subprocess.STDOUT, **kwargs)
             record.update(pid=process.pid, start_ticks=read_process_start_ticks(process.pid))

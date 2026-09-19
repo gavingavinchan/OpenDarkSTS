@@ -24,10 +24,12 @@ from PIL import Image
 
 try:
     from . import visual_review_lib as review_lib
-    from .workspace import current_model, set_current_model, WORKSPACE_DIR
+    from .workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock
+    from . import process_support
 except ImportError:
     import visual_review_lib as review_lib
-    from workspace import current_model, set_current_model, WORKSPACE_DIR
+    from workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock
+    import process_support
 
 try:
     from .dataset_splits import GroupStats, assign_groups_to_splits, check_no_group_overlap, group_key, parse_source_name
@@ -3360,7 +3362,9 @@ class TrainingRunActiveError(RuntimeError):
 
 
 def read_process_start_ticks(pid: int) -> int | None:
-    """Linux-specific process start time, used to guard against PID reuse."""
+    """Platform-specific process identity, used to guard against PID reuse."""
+    if process_support.IS_WINDOWS:
+        return process_support.windows_start_ticks(pid)
     try:
         raw = Path(f"/proc/{int(pid)}/stat").read_text()
     except (OSError, ValueError):
@@ -3401,6 +3405,8 @@ def process_is_alive(pid: int | None, start_ticks: int | None = None) -> bool:
         return False
     if pid <= 0 or pid > sys.maxsize:
         return False
+    if process_support.IS_WINDOWS:
+        return process_support.windows_process_alive(pid, start_ticks)
     if process_state(int(pid)) == "Z":
         reap_if_child(int(pid))
         return False
@@ -3423,7 +3429,7 @@ def process_is_alive(pid: int | None, start_ticks: int | None = None) -> bool:
 def resolve_yolo_executable(executable: str | Path | None = None) -> str:
     if executable:
         return str(executable)
-    venv_yolo = ROOT_DIR / ".venv" / "bin" / "yolo"
+    venv_yolo = Path(sys.executable).parent / ("yolo.exe" if os.name == "nt" else "yolo")
     if venv_yolo.is_file():
         return str(venv_yolo)
     found = shutil.which("yolo")
@@ -3489,7 +3495,17 @@ def rotate_previous_launch_artifacts(run_dir: Path, previous_launch_id: str | No
     return rotated
 
 
-def start_training_run(
+def start_training_run(selection_path, training_config_path, *, yolo_executable=None, extra_env=None):
+    run_dir = run_dir_for_config(load_json(repo_resolve(training_config_path)))
+    token = hashlib.sha256(str(run_dir).encode()).hexdigest()
+    try:
+        with exclusive_lock(WORKSPACE_DIR / "runs" / ".launch_locks" / token):
+            return _start_training_run(selection_path, training_config_path, yolo_executable=yolo_executable, extra_env=extra_env)
+    except BlockingIOError:
+        raise TrainingRunActiveError("Another launch is in progress for this run", run_dir=repo_relative(run_dir), pid=None) from None
+
+
+def _start_training_run(
     selection_path: str | Path,
     training_config_path: str | Path,
     *,
@@ -3518,7 +3534,9 @@ def start_training_run(
         # The pipeline owns and pre-creates the run directory for train.log/process.json, so
         # Ultralytics must reuse it instead of auto-incrementing the run name to `<run_name>2`.
         command_line.append("exist_ok=True")
-    argv = [resolve_yolo_executable(yolo_executable), *command_line[1:]]
+    executable = resolve_yolo_executable(yolo_executable)
+    prefix = [sys.executable, executable] if Path(executable).suffix == ".py" else [executable]
+    argv = [*prefix, *command_line[1:]]
 
     run_dir.mkdir(parents=True, exist_ok=True)
     previous_record: dict[str, Any] = {}
@@ -3545,7 +3563,7 @@ def start_training_run(
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **process_support.detached_options(),
             env=env,
         )
 
@@ -3745,29 +3763,32 @@ def stop_training_run(run_dir: str | Path, *, grace_seconds: float = 10.0) -> di
         update_training_metadata_status(target, "failed", ended_at=record["ended_at"], reason="process_missing")
         return {"run_dir": repo_relative(target), "status": "failed", "stopped": False, "reason": "process_missing"}
 
-    escalated = False
-    try:
-        os.killpg(int(pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
+    if process_support.IS_WINDOWS:
+        escalated = process_support.stop_windows_tree(int(pid), record.get("start_ticks"), float(grace_seconds))
+    else:
+        escalated = False
         try:
-            os.kill(int(pid), signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = time.monotonic() + float(grace_seconds)
-    while time.monotonic() < deadline:
-        if not process_is_alive(pid, record.get("start_ticks")):
-            break
-        time.sleep(0.2)
-    if process_is_alive(pid, record.get("start_ticks")):
-        escalated = True
-        try:
-            os.killpg(int(pid), signal.SIGKILL)
+            os.killpg(int(pid), signal.SIGTERM)
         except (ProcessLookupError, PermissionError, OSError):
             try:
-                os.kill(int(pid), signal.SIGKILL)
+                os.kill(int(pid), signal.SIGTERM)
             except OSError:
                 pass
-        time.sleep(0.5)
+        deadline = time.monotonic() + float(grace_seconds)
+        while time.monotonic() < deadline:
+            if not process_is_alive(pid, record.get("start_ticks")):
+                break
+            time.sleep(0.2)
+        if process_is_alive(pid, record.get("start_ticks")):
+            escalated = True
+            try:
+                os.killpg(int(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except OSError:
+                    pass
+            time.sleep(0.5)
 
     ended_at = utcnow_iso_for_training()
     record["status"] = "cancelled"
@@ -4057,7 +4078,7 @@ def run_test_split(
     if not data_yaml.is_file():
         raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
 
-    interpreter = str(python_executable or (ROOT_DIR / ".venv" / "bin" / "python"))
+    interpreter = str(python_executable or sys.executable)
     output_path = target / TEST_METRICS_FILENAME
     log_path = target / "test_eval.log"
     if safe_file_in_roots(log_path, [target]) is None:

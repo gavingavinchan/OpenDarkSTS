@@ -23,7 +23,12 @@ session. The experimental Results page remains hidden pending review.
   CSV/JSON/GeoJSON exports, and idempotent transfer to Improve implemented. Parent
   observation groups are preserved. HTTP remains hidden behind the feature switch.
   Validation: 277 passed, 2 skipped. Review checklist: `experimental_results_review.md`.
-- Phases 5–7: in progress.
+- Phase 5: Windows process identity and descendant termination implemented; training
+  launch locking added; launch fixtures use Python on both platforms; active environment
+  supplies YOLO and test evaluation. Validation: 280 passed, 2 skipped on Linux, including
+  mocked Windows process checks. Actual Windows run remains pending (see
+  `windows_validation.md`).
+- Phases 6–7: in progress.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.

@@ -38,7 +38,7 @@ def test_corrupt_process_stop_refuses_to_signal(tmp_path: Path, monkeypatch, pay
     (run / "process.json").write_text(payload)
     calls = []
     monkeypatch.setattr(pipeline.os, "kill", lambda *args: calls.append(args))
-    monkeypatch.setattr(pipeline.os, "killpg", lambda *args: calls.append(args))
+    monkeypatch.setattr(pipeline.os, "killpg", lambda *args: calls.append(args), raising=False)
     with pytest.raises(ValueError, match="no process can safely be stopped"):
         pipeline.stop_training_run(run)
     assert calls == []
@@ -51,7 +51,7 @@ def test_stop_invalid_pid_does_not_signal_group(tmp_path: Path, monkeypatch, pid
     pipeline.write_json(run / "process.json", {"status": "running", "pid": pid})
     calls = []
     monkeypatch.setattr(pipeline.os, "kill", lambda *args: calls.append(args))
-    monkeypatch.setattr(pipeline.os, "killpg", lambda *args: calls.append(args))
+    monkeypatch.setattr(pipeline.os, "killpg", lambda *args: calls.append(args), raising=False)
     assert pipeline.stop_training_run(run)["stopped"] is False
     assert calls == []
 

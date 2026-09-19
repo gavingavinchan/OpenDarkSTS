@@ -381,7 +381,7 @@ def test_step5_api_saves_training_config_and_lists_setup_inputs(tmp_path: Path, 
 
 def test_step6_api_starts_polls_and_stops_training_run(tmp_path: Path, monkeypatch) -> None:
     ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
-    fake_yolo = tmp_path / "bin" / "yolo"
+    fake_yolo = tmp_path / "bin" / "yolo.py"
     fake_yolo.parent.mkdir(parents=True)
     fake_yolo.write_text(
         "#!/usr/bin/env python3\n"
@@ -433,7 +433,7 @@ def test_step6_api_starts_polls_and_stops_training_run(tmp_path: Path, monkeypat
 
 def test_step6_api_refuses_a_second_start_into_a_live_run_dir(tmp_path: Path, monkeypatch) -> None:
     ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
-    fake_yolo = tmp_path / "bin" / "yolo"
+    fake_yolo = tmp_path / "bin" / "yolo.py"
     fake_yolo.parent.mkdir(parents=True)
     fake_yolo.write_text("#!/bin/sh\nexec sleep 120\n")
     fake_yolo.chmod(0o755)

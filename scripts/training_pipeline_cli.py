@@ -932,7 +932,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_training_parser = subparsers.add_parser("start-training")
     start_training_parser.add_argument("--selection", required=True)
     start_training_parser.add_argument("--config", required=True)
-    start_training_parser.add_argument("--yolo-executable", help="Override the yolo executable (defaults to .venv/bin/yolo)")
+    start_training_parser.add_argument("--yolo-executable", help="Override the yolo executable (defaults to yolo in the active Python environment)")
     start_training_parser.set_defaults(handler=command_start_training)
 
     status_parser = subparsers.add_parser("training-status")

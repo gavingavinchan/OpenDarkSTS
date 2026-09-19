@@ -1402,6 +1402,7 @@ time.sleep(120)
 
 
 def write_fake_yolo(path: Path, body: str) -> Path:
+    path = path.with_suffix(".py")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(FAKE_YOLO_TEMPLATE.format(body=body))
     path.chmod(0o755)

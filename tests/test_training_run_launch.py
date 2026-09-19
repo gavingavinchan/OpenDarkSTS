@@ -40,8 +40,8 @@ def build_ready_run(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def fake_yolo(path: Path, body: str) -> Path:
-    path.write_text("#!/bin/sh\n" + body + "\n")
-    path.chmod(0o755)
+    path = path.with_suffix(".py")
+    path.write_text("import sys, time\n" + body + "\n")
     return path
 
 
@@ -57,7 +57,7 @@ def wait_until_dead(training_lib, pid: int, timeout: float = 15.0) -> None:
 def test_start_training_run_refuses_when_a_process_is_still_alive(tmp_path: Path) -> None:
     training_lib = load_training_lib()
     selection_path, config_path, run_dir = build_ready_run(tmp_path)
-    sleeper = fake_yolo(tmp_path / "fake_yolo_sleep", "exec sleep 60")
+    sleeper = fake_yolo(tmp_path / "fake_yolo_sleep", "time.sleep(60)")
 
     first = training_lib.start_training_run(selection_path, config_path, yolo_executable=sleeper)
     try:
@@ -76,7 +76,7 @@ def test_start_training_run_refuses_when_a_process_is_still_alive(tmp_path: Path
 def test_start_training_run_allows_relaunch_after_the_previous_process_exits(tmp_path: Path) -> None:
     training_lib = load_training_lib()
     selection_path, config_path, run_dir = build_ready_run(tmp_path)
-    quick = fake_yolo(tmp_path / "fake_yolo_quick", "exit 1")
+    quick = fake_yolo(tmp_path / "fake_yolo_quick", "sys.exit(1)")
 
     first = training_lib.start_training_run(selection_path, config_path, yolo_executable=quick)
     wait_until_dead(training_lib, first["pid"])
@@ -101,7 +101,7 @@ def test_failed_relaunch_is_not_reported_completed_from_the_previous_launch(tmp_
     (run_dir / "weights").mkdir(parents=True, exist_ok=True)
     (run_dir / "weights" / "best.pt").write_bytes(b"old-best")
 
-    failing = fake_yolo(tmp_path / "fake_yolo_fail", "exit 1")
+    failing = fake_yolo(tmp_path / "fake_yolo_fail", "sys.exit(1)")
     launch = training_lib.start_training_run(selection_path, config_path, yolo_executable=failing)
     wait_until_dead(training_lib, launch["pid"])
 
@@ -125,7 +125,7 @@ def test_cli_start_training_exits_3_when_the_run_is_already_active(tmp_path: Pat
     cli = importlib.import_module("scripts.training_pipeline_cli")
     training_lib = load_training_lib()
     selection_path, config_path, run_dir = build_ready_run(tmp_path)
-    sleeper = fake_yolo(tmp_path / "fake_yolo_sleep", "exec sleep 60")
+    sleeper = fake_yolo(tmp_path / "fake_yolo_sleep", "time.sleep(60)")
     first = training_lib.start_training_run(selection_path, config_path, yolo_executable=sleeper)
     try:
         code = cli.main([
