@@ -11,13 +11,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock
+from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock, sha256
 from .jobs import now
 
 
 def run_directory(value):
     path = contained(value, WORKSPACE_DIR)
-    if not (path / "run.json").is_file() or not (path / "dark_sts.json").is_file():
+    if not contained(path / "run.json", path).is_file() or not contained(path / "dark_sts.json", path).is_file():
         raise ValueError("Select a completed detection output directory")
     return path
 
@@ -36,7 +36,8 @@ def list_runs():
 
 def read_results(directory):
     root = run_directory(directory)
-    decisions = json.loads((root / "decisions.json").read_text()) if (root / "decisions.json").is_file() else {}
+    decision_path = contained(root / "decisions.json", root)
+    decisions = json.loads(decision_path.read_text()) if decision_path.is_file() else {}
     return [{**row, "human_review": decisions.get(row["detection_id"])} for row in json.loads((root / "dark_sts.json").read_text())]
 
 
@@ -74,6 +75,9 @@ def crop_detection(directory, detection_id, *, annotate=False):
     record = json.loads((run_directory(directory) / "run.json").read_text())
     if str(source) not in record["inputs"]:
         raise ValueError("Image is not an input of this run")
+    expected_hash = record.get("input_sha256", {}).get(str(source))
+    if expected_hash and sha256(source) != expected_hash:
+        raise ValueError("Source image changed since detection; run it again before reviewing")
     with Image.open(source) as image:
         width, height = image.size
         cx, cy, w, h = [float(row[k]) for k in ["cx_px", "cy_px", "w_px", "h_px"]]
@@ -84,9 +88,10 @@ def crop_detection(directory, detection_id, *, annotate=False):
         right, bottom = min(width, math.ceil(cx+w/2)), min(height, math.ceil(cy+h/2))
         if right <= left or bottom <= top:
             raise ValueError("Detection is outside the image")
-        crop = image.convert("RGB").crop((left, top, right, bottom))
+        display_box = (max(0,left-24), max(0,top-24), min(width,right+24), min(height,bottom+24)) if annotate else (left,top,right,bottom)
+        crop = image.convert("RGB").crop(display_box)
     if annotate:
-        ImageDraw.Draw(crop).rectangle((0, 0, crop.width-1, crop.height-1), outline="#eab849", width=2)
+        ImageDraw.Draw(crop).rectangle((left-display_box[0],top-display_box[1],right-display_box[0],bottom-display_box[1]), outline="#eab849", width=1)
     return crop, row, (left, top, right, bottom)
 
 
@@ -129,19 +134,25 @@ def send_to_improve(directory, detection_id):
         result = training.import_training_data([source], manifest_path=manifest_path,
                     cache_dir=WORKSPACE_DIR / "cache" / "imported_images", reviews_dir=reviews_dir,
                     reviewer=decision["reviewer"], album_name="Reviewed detection candidates", auto_detect=False)
-        if not result["imported"]:
+        imported = result["imported"] + [item for item in result["skipped"] if item.get("status") == "already_imported"]
+        if not imported:
             raise ValueError("Could not import reviewed crop: " + str(result.get("failed")))
-        key = result["imported"][0]["image_key"]
+        key = imported[0]["image_key"]
         manifest = training.load_import_manifest(manifest_path)
         entry = manifest["images"][key]
-        # Use parent bounds for grouping, including crops crossing one-degree cell boundaries.
-        parent_bounds = load_bbox_for_image(row["image_path"])
-        entry.setdefault("render", {}).setdefault("metadata", {})["bounds"] = list(parent_bounds)
-        entry["date"] = row["date"]
-        entry["operational_source"] = {"directory": str(root), "detection_id": detection_id, "image_path": row["image_path"], "crop_pixels": list(bounds_px)}
-        training.write_json(manifest_path, manifest)
         path = review.review_file_path(key, decision["reviewer"], reviews_dir)
         doc = review.load_review_document(path)
+        if doc["review_status"] == "completed":
+            labels = {d.get("review_label") for d in doc["detections"] if d.get("reviewed")}
+            if labels != {decision["training_label"]}:
+                raise ValueError("This crop already has a different completed label in Improve; reconcile it there")
+        # A duplicate crop keeps its original provenance and split group.
+        if not entry.get("operational_source"):
+            parent_bounds = load_bbox_for_image(row["image_path"])
+            entry.setdefault("render", {}).setdefault("metadata", {})["bounds"] = list(parent_bounds)
+            entry["date"] = row["date"]
+            entry["operational_source"] = {"directory": str(root), "detection_id": detection_id, "image_path": row["image_path"], "crop_pixels": list(bounds_px)}
+            training.write_json(manifest_path, manifest)
         if doc["review_status"] != "completed":
             label = decision["training_label"]
             class_id = 0 if label == "ship_non_sts" else 1

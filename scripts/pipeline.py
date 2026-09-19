@@ -207,7 +207,8 @@ def run_pipeline(
     record = {"run_id": run_id, "started_at": datetime.now(timezone.utc).isoformat(),
               "weight": str(weight_path), "weight_sha256": sha256(weight_path), "confidence": conf,
               "ais_radius_m": radius_m, "ais_source": str(ais_dir), "date": date,
-              "inputs": [str(path) for path in image_paths], "bbox_override": str(bbox_json) if bbox_json else None,
+              "inputs": [str(path) for path in image_paths],
+              "input_sha256": {str(path): sha256(path) for path in image_paths}, "bbox_override": str(bbox_json) if bbox_json else None,
               "matching_policy": "same UTC day, radius only", "status": "running"}
     atomic_json(record_path, record)
     try:

@@ -16,9 +16,9 @@ from PIL import Image
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 try:
-    from .workspace import WORKSPACE_DIR
+    from .workspace import WORKSPACE_DIR, contained, atomic_json
 except ImportError:
-    from workspace import WORKSPACE_DIR
+    from workspace import WORKSPACE_DIR, contained, atomic_json
 DEFAULT_SOURCE_DIR = WORKSPACE_DIR / "inputs" / "imagery"
 DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache" / "sentinel_tiles"
 DEFAULT_REVIEWS_DIR = WORKSPACE_DIR / "reviews"
@@ -173,9 +173,8 @@ def load_json(path: str | Path, default: Any | None = None) -> Any:
 
 
 def write_json(path: str | Path, payload: Any) -> None:
-    target = repo_resolve(path)
-    ensure_parent(target)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True, default=json_default) + "\n")
+    target = contained(repo_resolve(path), WORKSPACE_DIR)
+    atomic_json(target, json.loads(json.dumps(payload, default=json_default)))
 
 
 def parse_tile_name(tile_path: str | Path) -> TileInfo:
@@ -442,7 +441,10 @@ def ensure_cache_for_image_key(image_key: str, manifest_path: str | Path = DEFAU
 
 
 def review_file_path(image_key: str, reviewer: str, reviews_dir: str | Path = DEFAULT_REVIEWS_DIR) -> Path:
-    return repo_resolve(Path(reviews_dir) / reviewer / f"{image_key}.json")
+    for value in [str(image_key), str(reviewer)]:
+        if not value or value in {".", ".."} or any(c in value for c in "/\\:"):
+            raise ValueError("Review identifiers must be single path segments")
+    return contained(repo_resolve(Path(reviews_dir) / reviewer / f"{image_key}.json"), WORKSPACE_DIR)
 
 
 def detection_source_models(merged_detection: dict[str, Any]) -> list[str]:
@@ -520,6 +522,7 @@ def load_review_document(review_path: str | Path) -> dict[str, Any]:
 
 
 def save_review_document(review: dict[str, Any], review_path: str | Path) -> None:
+    review_path = contained(repo_resolve(review_path), WORKSPACE_DIR)
     review["updated_at"] = utcnow_iso()
     payload = {key: value for key, value in review.items() if not str(key).startswith("_")}
     write_json(review_path, payload)

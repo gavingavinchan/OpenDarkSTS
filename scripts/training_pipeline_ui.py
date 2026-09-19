@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import io
+import ipaddress
 import re
 import shutil
 import secrets
@@ -114,13 +115,9 @@ def parse_multipart_files(body: bytes, content_type: str) -> list[tuple[str, byt
 
 
 def safe_relative_path(raw: str) -> Path:
-    cleaned = raw.replace("\\", "/").lstrip("/")
-    parts: list[str] = []
-    for segment in cleaned.split("/"):
-        if not segment or segment in {".", ".."}:
-            continue
-        parts.append(segment)
-    if not parts:
+    cleaned = raw.replace("\\", "/")
+    parts = cleaned.split("/")
+    if not parts or any(not p or p in {".", ".."} or ":" in p or "\x00" in p for p in parts):
         raise ValueError(f"refusing unsafe upload path: {raw!r}")
     return Path(*parts)
 
@@ -280,15 +277,20 @@ def start_import_job(
     append_to_album_id: str | None = None,
 ) -> str:
     job_id = new_job_id()
-    staging_dir = IMPORT_STAGING_ROOT / job_id
+    staging_dir = jobs.contained(IMPORT_STAGING_ROOT / job_id)
     staging_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
     for raw_name, blob in uploads:
+        relative = safe_relative_path(raw_name)
+        if relative.suffix.lower() not in pipeline.SUPPORTED_IMPORT_SUFFIXES:
+            raise ValueError("Upload must be a supported image")
+        from PIL import Image
         try:
-            relative = safe_relative_path(raw_name)
-        except ValueError:
-            continue
-        target = staging_dir / relative
+            with Image.open(io.BytesIO(blob)) as image:
+                image.verify()
+        except Exception as exc:
+            raise ValueError(f"Invalid image upload: {relative.name}") from exc
+        target = jobs.contained(staging_dir / relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(blob)
         saved += 1
@@ -602,6 +604,47 @@ def render_evaluation_html() -> str:
 
 
 class TrainingPipelineHandler(BaseHTTPRequestHandler):
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        host = self.headers.get("Host", "")
+        try:
+            address = urlparse("http://" + host)
+            local_host = address.hostname in {"localhost", "127.0.0.1", "::1"}
+            port = address.port or 80
+            valid = local_host and port == self.server.server_port and not address.username and not address.password
+        except ValueError:
+            valid = False
+        if not valid or not ipaddress.ip_address(self.client_address[0]).is_loopback:
+            self._respond_json({"error": "Only the local server address is allowed"}, status=403)
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin != "http://" + host:
+            self._respond_json({"error": "Cross-origin requests are not allowed"}, status=403)
+            return False
+        if self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            upload = self.path.startswith("/api/import/upload")
+            maximum = 256 * 1024 * 1024 if upload else 1024 * 1024
+            if length < 0 or length > maximum or self.headers.get("Transfer-Encoding"):
+                self._respond_json({"error": "Invalid or excessive request size"}, status=413)
+                return False
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip()
+            expected = "multipart/form-data" if upload else "application/json"
+            if length and content_type != expected:
+                self._respond_json({"error": f"Expected {expected}"}, status=415)
+                return False
+        return True
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        super().end_headers()
+
     def _results_request(self, path, parsed, *, post=False):
         if path != "/results" and not path.startswith("/api/results"):
             return False
@@ -661,7 +704,9 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if not path.startswith("/api/operations/"):
             return False
         try:
-            if path == "/api/operations/dashboard":
+            if path == "/api/operations/health":
+                self._respond_json({"instance": os.environ.get("OPENDARKSTS_SERVER_INSTANCE"), "workspace": str(WORKSPACE_DIR)})
+            elif path == "/api/operations/dashboard":
                 self._respond_json(operations.dashboard())
             elif path == "/api/operations/project":
                 self._respond_json(operations.project())
@@ -938,7 +983,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 append_to_album_id=append_to_album_id,
             )
         except Exception as exc:
-            self._respond_json({"error": f"could not stage upload: {exc}"}, status=500)
+            self._respond_json({"error": f"could not stage upload: {exc}"}, status=400)
             return
         self._respond_json({"job_id": job_id, "queued_files": len(files)}, status=202)
 
@@ -956,7 +1001,13 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
-        return json.loads(raw.decode("utf-8")) if raw else {}
+        payload = json.loads(raw.decode("utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(ValueError("Non-finite JSON number"))) if raw else {}
+        if not isinstance(payload, dict):
+            raise ValueError("Request JSON must be an object")
+        for key in ["selection_path", "config_path", "output_dir", "dataset_dir"]:
+            if payload.get(key):
+                jobs.contained(pipeline.repo_resolve(payload[key]))
+        return payload
 
     def _handle_prune_preview(self) -> None:
         try:
@@ -1356,7 +1407,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             self._respond_json({"error": str(exc)}, status=500)
             return
         # The GUI polls /api/training/runs/<group>/<name>/status, so echo the run ref back.
-        run_dir_parts = str(result["run_dir"]).rstrip("/").split("/")
+        run_dir_parts = Path(result["run_dir"]).parts
         result["run_group"] = run_dir_parts[-2] if len(run_dir_parts) >= 2 else ""
         result["run_name"] = run_dir_parts[-1] if run_dir_parts else ""
         self._log_training_action("start_training", {"run_dir": result["run_dir"], "pid": result["pid"]})
@@ -1470,11 +1521,11 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def _handle_read_evaluation_report(self, parsed) -> None:
         run_group = (query_text(parsed, "run_group") or "").strip()
-        if not run_group or "/" in run_group:
+        if not run_group or any(c in run_group for c in "/\\:") or run_group in {".", ".."}:
             self._respond_json({"error": "run_group is required"}, status=400)
             return
         reports_dir = pipeline.repo_resolve(WORKSPACE_DIR / "reports")
-        markdown_path = reports_dir / f"{run_group}_evaluation.md"
+        markdown_path = jobs.contained(reports_dir / f"{run_group}_evaluation.md")
         json_path = reports_dir / f"{run_group}_evaluation.json"
         if not markdown_path.is_file():
             self._respond_json({"run_group": run_group, "exists": False, "markdown": None}, status=200)
@@ -1683,14 +1734,14 @@ def main() -> None:
 
     global REVIEWS_DIR, CROP_ROOT, PADDING_PX, INCLUDE_INCOMPLETE, GENERATE_CROPS, MANUAL_REVIEW_URL
     global IMPORT_MANIFEST_PATH, IMPORT_CACHE_DIR, IMPORT_REVIEWER
-    REVIEWS_DIR = Path(args.reviews_dir)
-    CROP_ROOT = Path(args.crop_root)
+    REVIEWS_DIR = jobs.contained(args.reviews_dir)
+    CROP_ROOT = jobs.contained(args.crop_root)
     PADDING_PX = args.padding_px
     INCLUDE_INCOMPLETE = args.include_incomplete
     GENERATE_CROPS = not args.no_generate_crops
     MANUAL_REVIEW_URL = args.manual_review_url
-    IMPORT_MANIFEST_PATH = Path(args.import_manifest)
-    IMPORT_CACHE_DIR = Path(args.import_cache_dir)
+    IMPORT_MANIFEST_PATH = jobs.contained(args.import_manifest)
+    IMPORT_CACHE_DIR = jobs.contained(args.import_cache_dir)
     IMPORT_REVIEWER = args.reviewer
     IMPORT_STAGING_ROOT.mkdir(parents=True, exist_ok=True)
     review_ui.MANIFEST_PATH = IMPORT_MANIFEST_PATH

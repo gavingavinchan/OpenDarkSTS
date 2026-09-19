@@ -74,3 +74,36 @@ def test_project_cli_updates_same_record(isolated):
     assert completed.returncode == 0
     assert json.loads(completed.stdout)["result"]["radius"] == 1500
     assert json.loads((isolated / "detection_project.json").read_text())["radius"] == 1500
+
+
+def test_failed_launch_does_not_leave_a_queued_job(isolated, monkeypatch):
+    def fail(*a, **kw):
+        raise OSError('launch failed')
+    monkeypatch.setattr(jobs.subprocess, 'Popen', fail)
+    with pytest.raises(OSError, match='launch failed'):
+        jobs.submit_job('ais', {'start':'2020-01-24'})
+    record = jobs.list_jobs()[0]
+    assert record['status'] == 'failed'
+
+
+def test_detection_output_refuses_to_overwrite_reviewed_run(isolated):
+    root = isolated/'output'
+    root.mkdir()
+    (root/'run.json').write_text('{"status":"completed"}')
+    with pytest.raises(ValueError, match='must be empty'):
+        jobs.execute_job('run', {'images':['does-not-matter.tiff'], 'output_dir':str(root)})
+    assert (root/'run.json').read_text() == '{"status":"completed"}'
+
+
+def test_gui_download_areas_have_distinct_selected_folders(isolated, monkeypatch):
+    submitted = []
+    def submit(kind, options):
+        submitted.append(options)
+        return {'job_id':'fixture'}
+    monkeypatch.setattr(jobs, 'submit_job', submit)
+    operations.submit_project_job('imagery')
+    first = operations.project()['images']
+    operations.save_project({'bbox':[-95,28,-94.9,28.1]})
+    operations.submit_project_job('imagery')
+    assert operations.project()['images'] != first
+    assert submitted[-1]['output_dir'] == operations.project()['images']

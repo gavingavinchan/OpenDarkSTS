@@ -35,6 +35,8 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
     result = results[0]
     names = getattr(result, "names", {}) or {}
     ships_ids = require_ships_class(names)
+    if isinstance(names, (list, tuple)):
+        names = dict(enumerate(names))
     image_id = hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:20]
 
     detections: list[dict[str, Any]] = []

@@ -3,3 +3,7 @@
 .operations-page .primary{background:#155b46;border-color:#155b46}.ops-card .grid2{grid-template-columns:repeat(2,minmax(0,1fr))}
 
 .detect-steps{display:flex;gap:24px;margin:0 0 24px;font-size:13px}.operations-page[data-page="home"] .detect-steps,.operations-page[data-page="jobs"] .detect-steps{display:none}
+
+.results-page .ops-main{display:block}.results-page h1{font:48px/1.1 Georgia,serif;letter-spacing:-1.5px}.results-page .ops-main>p{max-width:75ch;line-height:1.6}.results-page .ops-split{margin-top:24px}.results-page #exports a{color:#155b46}.results-page #candidateName{overflow-wrap:anywhere}
+
+@media(max-width:480px){.app-navigation{flex-wrap:wrap;gap:12px 20px}.app-navigation .app-brand{flex-basis:100%}.detect-steps{gap:16px}.ops-card{padding:18px}}

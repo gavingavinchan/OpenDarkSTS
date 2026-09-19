@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import tempfile
@@ -65,7 +66,7 @@ def set_current_model(weight: str | Path, **metadata: Any) -> dict[str, Any]:
 
 @contextmanager
 def exclusive_lock(path: str | Path, *, blocking=False):
-    target = Path(path)
+    target = contained(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a+b") as handle:
         if os.name == "nt":
@@ -74,7 +75,12 @@ def exclusive_lock(path: str | Path, *, blocking=False):
                 handle.write(b"0")
                 handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise BlockingIOError("Workspace lock is held by another process") from exc
+                raise
         else:
             import fcntl
             fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))

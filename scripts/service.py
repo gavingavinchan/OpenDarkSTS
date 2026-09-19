@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import secrets
 from urllib.request import urlopen
 
 from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock
@@ -22,18 +23,20 @@ def serve(port=8766):
             record = json.loads(record_path.read_text())
             if process_is_alive(record.get("pid"), record.get("start_ticks")):
                 return {**record, "already_running": True}
-        log_path = root / "server.log"
+        log_path = contained(root / "server.log", root)
+        token = secrets.token_hex(16)
+        env = {**os.environ, "OPENDARKSTS_SERVER_INSTANCE": token}
         with log_path.open("a", encoding="utf-8") as output:
             child = subprocess.Popen([sys.executable, "-m", "scripts.training_pipeline_ui", "--port", str(port)],
-                         stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, **detached_options())
+                         stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, env=env, **detached_options())
         record = {"pid": child.pid, "start_ticks": read_process_start_ticks(child.pid),
                   "url": f"http://127.0.0.1:{port}", "log": str(log_path), "workspace": str(WORKSPACE_DIR)}
         for _ in range(50):
             if child.poll() is not None:
                 raise RuntimeError(f"Server could not start. Check {log_path}")
             try:
-                with urlopen(record["url"] + "/api/operations/project", timeout=.2) as response:
-                    if response.status == 200:
+                with urlopen(record["url"] + "/api/operations/health", timeout=.2) as response:
+                    if response.status == 200 and json.loads(response.read())["instance"] == token:
                         # Give an occupied port time to fail in the newly launched child.
                         time.sleep(.1)
                         if child.poll() is None:

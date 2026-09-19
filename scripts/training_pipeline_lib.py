@@ -24,11 +24,11 @@ from PIL import Image
 
 try:
     from . import visual_review_lib as review_lib
-    from .workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock
+    from .workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock, contained
     from . import process_support
 except ImportError:
     import visual_review_lib as review_lib
-    from workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock
+    from workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock, contained
     import process_support
 
 try:
@@ -163,7 +163,7 @@ def load_json_or_dict(value: str | Path | dict[str, Any]) -> dict[str, Any]:
 
 
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
-    target = repo_resolve(path)
+    target = contained(repo_resolve(path), WORKSPACE_DIR)
     target.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     temp = None
@@ -250,6 +250,7 @@ def new_import_job_id(import_jobs_dir: str | Path) -> str:
 
 
 def load_album_record(albums_dir: str | Path, album_id: str) -> dict[str, Any]:
+    validate_run_segment(album_id, "album_id")
     target = repo_resolve(Path(albums_dir) / f"{album_id}.json")
     if not target.is_file():
         raise ValueError(f"Album id not found: {album_id}")
@@ -1542,7 +1543,7 @@ def remove_images(
     manifest = load_import_manifest(manifest_file)
     images = manifest.get("images") or {}
     cache_root = repo_resolve(manifest.get("cache_dir") or DEFAULT_IMPORT_CACHE_DIR)
-    allowed_delete_roots = [WORKSPACE_DIR, repo_resolve(reviews_dir), cache_root]
+    allowed_delete_roots = [WORKSPACE_DIR]
     removed_keys = {item["image_key"] for item in preview["removable"]}
     removed: list[dict[str, Any]] = []
     deleted_files: list[str] = []
@@ -1653,7 +1654,9 @@ def import_training_data(
     if not sources:
         raise ValueError("At least one --source is required")
     manifest_file = repo_resolve(manifest_path)
-    cache_root = repo_resolve(cache_dir)
+    cache_root = contained(repo_resolve(cache_dir), WORKSPACE_DIR)
+    contained(repo_resolve(manifest_path), WORKSPACE_DIR)
+    contained(repo_resolve(reviews_dir), WORKSPACE_DIR)
     album_root = repo_resolve(albums_dir or default_albums_dir_for_manifest(manifest_file))
     job_root = repo_resolve(import_jobs_dir or default_import_jobs_dir_for_manifest(manifest_file))
     resolved_source_kind = source_kind or infer_import_source_kind(sources)
@@ -2750,6 +2753,7 @@ write_yolo_label_file = review_lib.write_yolo_label_file
 
 
 def write_data_yaml(dataset_dir: Path) -> None:
+    contained(dataset_dir / "data.yaml", WORKSPACE_DIR)
     review_lib.write_data_yaml(dataset_dir, split_layout=True)
 
 
@@ -2790,7 +2794,7 @@ def reset_dataset_split_dirs(dataset_dir: Path) -> None:
     """
     for kind in ("images", "labels"):
         for split in SPLITS:
-            target = dataset_dir / kind / split
+            target = contained(dataset_dir / kind / split, WORKSPACE_DIR)
             if target.is_dir():
                 shutil.rmtree(target)
     ensure_dataset_dirs(dataset_dir)
@@ -2816,9 +2820,10 @@ def export_review_item(
         raise ValueError(f"Invalid split for image_key={item.get('image_key')}: {split}")
 
     image_filename = str(review.get("image_filename") or f"{review['image_key']}.png")
+    validate_run_segment(image_filename, "image_filename")
     image_stem = Path(image_filename).stem
-    image_target = dataset_dir / "images" / split / image_filename
-    label_target = dataset_dir / "labels" / split / f"{image_stem}.txt"
+    image_target = contained(dataset_dir / "images" / split / image_filename, WORKSPACE_DIR)
+    label_target = contained(dataset_dir / "labels" / split / f"{image_stem}.txt", WORKSPACE_DIR)
     copy_review_image(review, image_target)
     write_yolo_label_file(label_target, detections)
     return [image_target, label_target]
@@ -2846,7 +2851,9 @@ def export_dataset_selection(
     if not output_dir:
         raise ValueError("Dataset selection manifest is missing export.output_dir")
 
-    dataset_dir = repo_resolve(output_dir)
+    dataset_dir = contained(repo_resolve(output_dir), WORKSPACE_DIR)
+    if dataset_dir == WORKSPACE_DIR:
+        raise ValueError("Dataset export requires its own subdirectory")
     include_incomplete = bool(selection.get("export", {}).get("include_incomplete_reviews", False))
     reset_dataset_split_dirs(dataset_dir)
 
@@ -3004,7 +3011,7 @@ def write_evaluation_report(
     generated_at: str | None = None,
 ) -> dict[str, Path]:
     validate_run_segment(str(run_group), "run_group")
-    output_dir = repo_resolve(reports_dir)
+    output_dir = contained(repo_resolve(reports_dir), WORKSPACE_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -3019,7 +3026,7 @@ def write_evaluation_report(
         },
     }
     json_path = output_dir / f"{run_group}_evaluation.json"
-    markdown_path = output_dir / f"{run_group}_evaluation.md"
+    markdown_path = contained(output_dir / f"{run_group}_evaluation.md", WORKSPACE_DIR)
     write_json(json_path, report)
     markdown_path.write_text(evaluation_markdown(report))
     return {"json_path": json_path, "markdown_path": markdown_path}
@@ -3561,7 +3568,7 @@ def _start_training_run(
         log_handle.flush()
         process = subprocess.Popen(
             argv,
-            cwd=str(ROOT_DIR),
+            cwd=str(WORKSPACE_DIR),
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
@@ -3583,7 +3590,7 @@ def _start_training_run(
         "reason": None,
         "command_line": list(command_line),
         "argv": list(argv),
-        "cwd": str(ROOT_DIR),
+        "cwd": str(WORKSPACE_DIR),
         "log_path": repo_relative(log_path),
         "run_dir": repo_relative(run_dir),
         "training_config_path": repo_relative(config_file),
@@ -4023,7 +4030,7 @@ def build_run_group_evaluation_report(
     *,
     run_group: str,
     runs_dir: str | Path = DEFAULT_RUNS_DIR,
-    reports_dir: str | Path = WORKSPACE_DIR / "reports",
+    reports_dir: str | Path | None = None,
     baseline: dict[str, Any] | None = None,
     promoted_run_name: str | None = None,
     promotion_reason: str | None = None,
@@ -4037,7 +4044,7 @@ def build_run_group_evaluation_report(
     paths = write_evaluation_report(
         run_group=run_group,
         runs=runs,
-        reports_dir=reports_dir,
+        reports_dir=reports_dir or WORKSPACE_DIR / "reports",
         baseline=baseline,
         promoted_run_name=promoted_run_name,
         promotion_reason=promotion_reason or auto_reason,
@@ -4091,7 +4098,7 @@ def run_test_split(
         log_handle.flush()
         completed = subprocess.run(
             argv,
-            cwd=str(ROOT_DIR),
+            cwd=str(WORKSPACE_DIR),
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
@@ -4132,7 +4139,7 @@ def promote_weight(
     if not source.is_file():
         raise ValueError(f"Run weights not found: {repo_relative(source)}")
 
-    destination = repo_resolve(model_weights_dir) / clean_target
+    destination = contained(repo_resolve(model_weights_dir) / clean_target, WORKSPACE_DIR)
     if not recreation_doc_updated:
         raise ValueError(
             "Refusing to promote: pass recreation_doc_updated after documenting the weight in docs/yolo_weight_recreation.md"

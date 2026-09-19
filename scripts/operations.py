@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .workspace import WORKSPACE_DIR, atomic_json, current_model
-from .acquisition import validate_bbox, date_range
+from .acquisition import validate_bbox, date_range, cache_key
 from . import jobs
 
 PROJECT_PATH = WORKSPACE_DIR / "detection_project.json"
@@ -89,14 +89,14 @@ def submit_project_job(kind):
     elif kind in {"ais", "imagery"}:
         options = {"start": settings["start"], "end": settings["end"]}
         if kind == "imagery":
-            options.update(bbox=settings["bbox"], max_cloud=settings["max_cloud"], output_dir=str(WORKSPACE_DIR / "inputs" / "imagery"))
+            options.update(bbox=settings["bbox"], max_cloud=settings["max_cloud"], output_dir=str(WORKSPACE_DIR / "inputs" / "imagery" / cache_key(settings["bbox"])))
         else:
             options["output_dir"] = str(WORKSPACE_DIR / "inputs" / "ais")
     else:
         raise ValueError("Unknown job type")
     job = jobs.submit_job(kind, options)
     if kind == "imagery":
-        save_project({"images": str(WORKSPACE_DIR / "inputs" / "imagery")})
+        save_project({"images": options["output_dir"]})
     elif kind == "ais":
         save_project({"ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full")})
     return job

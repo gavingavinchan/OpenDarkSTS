@@ -75,3 +75,36 @@ def test_results_http_switch_and_review(run, monkeypatch):
         status, decision = post_json_capture(server.base_url+'/api/results/review', {'directory':str(run), 'detection_id':'one', 'verdict':'real_sts'})
         assert status == 200
         assert decision['training_label'] == 'ships_sts'
+
+
+def test_review_refuses_changed_source_image(run):
+    from scripts.workspace import sha256
+    record = json.loads((run/'run.json').read_text())
+    source = record['inputs'][0]
+    record['input_sha256'] = {source:sha256(source)}
+    (run/'run.json').write_text(json.dumps(record))
+    Image.new('RGB',(100,100),'red').save(source)
+    with pytest.raises(ValueError, match='changed since detection'):
+        results.crop_detection(run, 'one')
+
+
+def test_same_crop_from_another_run_reuses_review_and_rejects_conflicting_label(run):
+    import shutil
+    results.review_detection(run, 'one', 'real_sts')
+    first = results.send_to_improve(run, 'one')
+    second = run.with_name('second')
+    second.mkdir()
+    for name in ['run.json','dark_sts.json']:
+        shutil.copyfile(run/name, second/name)
+    results.review_detection(second, 'one', 'real_sts')
+    assert results.send_to_improve(second, 'one')['image_key'] == first['image_key']
+    third = run.with_name('third')
+    third.mkdir()
+    for name in ['run.json','dark_sts.json']:
+        shutil.copyfile(run/name, third/name)
+    results.review_detection(third, 'one', 'not_sts', training_label='neither')
+    with pytest.raises(ValueError, match='different completed label'):
+        results.send_to_improve(third, 'one')
+    doc = json.loads(open(first['review_path']).read())
+    assert doc['detections'][0]['review_label'] == 'ships_sts'
+    assert doc['operational_source']['directory'] == str(run)

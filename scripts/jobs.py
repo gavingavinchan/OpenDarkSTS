@@ -48,15 +48,20 @@ def validate_options(kind, options):
 
 def _read_job(job_id, *, reconcile=True):
     directory = job_dir(job_id)
-    record = json.loads((directory / "job.json").read_text())
-    launch = directory / "launch.json"
+    record = json.loads(contained(directory / "job.json", directory).read_text())
+    launch = contained(directory / "launch.json", directory)
     if launch.is_file():
         record.update(json.loads(launch.read_text()))
     if reconcile and record["status"] not in TERMINAL and record.get("pid"):
         if not process_is_alive(record["pid"], record.get("start_ticks")):
             record.update(status="failed", error="Job process exited without a completion record", ended_at=now())
             atomic_json(directory / "job.json", record)
-    log = directory / "job.log"
+    if reconcile and record["status"] == "queued" and not record.get("pid"):
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(record["created_at"])).total_seconds()
+        if age > 30:
+            record.update(status="failed", error="Submission interrupted before worker launch", ended_at=now())
+            atomic_json(directory / "job.json", record)
+    log = contained(directory / "job.log", directory)
     if log.is_file():
         with log.open("rb") as handle:
             handle.seek(max(0, log.stat().st_size - 24000))
@@ -115,10 +120,15 @@ def submit_job(kind, options):
             directory.mkdir()
             record = {"job_id": job_id, "kind": kind, "options": options, "status": "queued", "created_at": now()}
             atomic_json(directory / "job.json", record)
-            with (directory / "job.log").open("w", encoding="utf-8") as output:
-                kwargs = process_support.detached_options()
-                process = subprocess.Popen([sys.executable, "-m", "scripts.jobs", job_id], stdin=subprocess.DEVNULL,
-                                           stdout=output, stderr=subprocess.STDOUT, **kwargs)
+            try:
+                with (directory / "job.log").open("w", encoding="utf-8") as output:
+                    kwargs = process_support.detached_options()
+                    process = subprocess.Popen([sys.executable, "-m", "scripts.jobs", job_id], stdin=subprocess.DEVNULL,
+                                               stdout=output, stderr=subprocess.STDOUT, **kwargs)
+            except OSError as exc:
+                record.update(status="failed", ended_at=now(), error=f"Could not launch job: {exc}")
+                write_job(job_id, record)
+                raise
             record.update(pid=process.pid, start_ticks=read_process_start_ticks(process.pid))
             atomic_json(directory / "launch.json", {"pid": record["pid"], "start_ticks": record["start_ticks"]})
             # The worker waits for launch.json, so submission cannot overwrite its result.
@@ -132,6 +142,13 @@ def execute_job(kind, options, log=print):
     if kind in {"ais", "imagery"}:
         return getattr(acquisition, "acquire_" + kind)(**options, log=log)
     output = contained(options.get("output_dir") or WORKSPACE_DIR / "reports" / "operational" / uuid.uuid4().hex)
+    with exclusive_lock(output / ".run.lock"):
+        if any(path.name != ".run.lock" for path in output.iterdir()):
+            raise ValueError("Detection output directory must be empty; choose a new directory")
+        return _execute_pipeline(options, output, log)
+
+
+def _execute_pipeline(options, output, log):
     results = pipeline.run_pipeline(options["images"], weights=options.get("weights"),
                 ais_dir=options.get("ais_dir") or WORKSPACE_DIR / "inputs" / "ais" / "full", date=options.get("date"),
                 conf=float(options.get("conf", .25)), radius_m=float(options.get("radius", 1000)),
