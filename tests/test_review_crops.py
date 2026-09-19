@@ -139,8 +139,9 @@ def test_generate_review_crop_preserves_neither_metadata_without_yolo_class(tmp_
     assert sidecar["review"]["class_name"] is None
 
 
-def test_build_review_bbox_overview_collects_reviewed_crops_source_agnostic(tmp_path: Path) -> None:
+def test_build_review_bbox_overview_collects_reviewed_crops_source_agnostic(tmp_path: Path, monkeypatch) -> None:
     review_lib = load_review_lib()
+    monkeypatch.setattr(review_lib, 'WORKSPACE_DIR', tmp_path)
     reviews_dir = tmp_path / "reviews"
     cache_dir = tmp_path / "cache"
     crop_root = tmp_path / "cache" / "review_crops"
@@ -165,6 +166,14 @@ def test_build_review_bbox_overview_collects_reviewed_crops_source_agnostic(tmp_
     assert manual_tile["source_type"] == "manual"
     assert manual_tile["class_name"] == "ship"
     assert Path(manual_tile["crop_path"]).is_file()
+    from urllib.request import urlopen
+    from scripts.training_pipeline_ui import TrainingPipelineHandler
+    from test_training_pipeline_ui import UiServer
+    with UiServer(TrainingPipelineHandler) as server:
+        for tile in overview['tiles']:
+            with urlopen(server.base_url + tile['crop_url']) as response:
+                assert response.headers['Content-Type'] == 'image/png'
+                assert response.read() == Path(tile['crop_path']).read_bytes()
 
 
 def test_build_review_bbox_overview_flags_completed_duplicate_conflicts(tmp_path: Path) -> None:

@@ -1146,7 +1146,7 @@ def review_overview_tile(
         "review_status": review.get("review_status"),
         "review_file": str(review_path),
         "crop_path": str(crop_path) if crop_path.exists() else None,
-        "crop_url": "/cache/" + repo_relative(crop_path) if crop_path.exists() else None,
+        "crop_url": cache_url_for(crop_path) if crop_path.exists() else None,
         "review_label": review_label,
         "class_id": class_id,
         "class_name": overview_class_name(review_label),
