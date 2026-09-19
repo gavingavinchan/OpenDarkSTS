@@ -716,3 +716,15 @@ If exact recreation is impossible, state the reason explicitly. Acceptable gaps 
 asset. The asset is not published yet. Local review workspaces use byte-identical
 copies of the existing promoted weight and the same documentation. Initialization
 does not reset an already promoted current model. No weight file is added to git.
+
+## Isolated GUI acceptance weights (18 September 2026)
+
+The test run `workspace/reports/gui_acceptance/20260918_independent/workspace/runs/gui_acceptance/cpu_smoke_fixed/`
+keeps `weights/best.pt` and `weights/last.pt`. Its adjacent
+[`weight_recreation.md`](../workspace/reports/gui_acceptance/20260918_independent/workspace/runs/gui_acceptance/cpu_smoke_fixed/weight_recreation.md)
+records source images, acceptance labels, starting checkpoint, exact command,
+environment, parameters, hashes and reproducibility limitations. The GUI promotion
+target is `gui_acceptance_cpu_smoke_2026-09-18_best.pt` within that isolated
+workspace's `model_weights/`. This is a one-epoch CPU workflow test with reused
+images and model-assisted labels; it provides no independent performance estimate.
+It is not a replacement release model. No weight file is added to git.
