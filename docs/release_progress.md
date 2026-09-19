@@ -1,8 +1,8 @@
 # Release implementation progress
 
-The plan of record remains `docs/release_plan.md`. Work proceeds on `release`; review
-is deferred until implementation is ready. Nothing is pushed or published from this
-session. The experimental Results page remains hidden pending review.
+The plan of record remains `docs/release_plan.md`. The `release` branch is ready
+for coauthor review through a draft pull request into `main`. Public release
+remains deferred. The experimental Results page remains hidden pending review.
 
 - Phase 0: local hardening complete; 250 tests passed, 2 skipped. Remote branch
   retirement remains pending.
@@ -42,6 +42,12 @@ session. The experimental Results page remains hidden pending review.
   repeated review transfer and mobile layout checks, with no JavaScript errors.
   Local implementation is ready for review; publishing and external validations
   remain pending. See `release_review.md` for the concrete review packet.
+
+Independent GUI acceptance subsequently exercised detection, import/review, dataset
+export, real CPU training, cancellation, evaluation and promotion. Six defects were
+fixed and retested. Latest local validation: 310 passed, 3 skipped with the requested
+interpreter; 313 passed in the model-enabled environment. The portable coverage
+summary is in `gui_acceptance_report.md`.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.

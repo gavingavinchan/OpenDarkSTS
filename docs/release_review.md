@@ -1,8 +1,9 @@
 # Release review packet
 
 Local implementation follows `release_plan.md` through Phase 7 preparation.
-The working branch is `release`. No remote branch, pull request, tag or release
-has been changed. The experimental Results interface remains hidden.
+The working branch is `release`, prepared for coauthor review through a draft
+pull request into `main`. Public release and tagging remain deferred. The
+experimental Results interface remains hidden.
 
 ## Prepared for review
 
@@ -63,7 +64,8 @@ not constitute an independent scientific evaluation.
 The acceptance work identified and corrected failed-download input selection,
 relative checkpoint resolution, original-filename search, mixed evaluation/import
 job cleanup, custom-workspace crop URLs, and narrow-screen layouts. Regression tests cover the behavioral
-fixes. The detailed feature checklist, limitations and browser evidence are in
+fixes. The portable [GUI acceptance summary](gui_acceptance_report.md) records
+the feature coverage and remaining gaps. Detailed local browser evidence is in
 `council/notes/gui-acceptance-report.md` and
 `workspace/reports/gui_acceptance/20260918_independent/`. Updated wheel and source
 archives are under `workspace/reports/gui_acceptance/dist/`; the earlier installed
