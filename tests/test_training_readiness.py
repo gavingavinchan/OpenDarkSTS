@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from _helpers import detection, load_training_lib, write_review, write_selection, write_training_config
 
 
@@ -22,7 +24,7 @@ def test_training_readiness_reports_missing_export_and_config_fields(tmp_path: P
 
     assert result["ready"] is False
     missing = missing_text(result)
-    assert "exported dataset" in missing
+    assert "Dataset has not been exported yet" in missing
     assert "data.yaml" in missing
     assert "images/train" in missing
     assert "images/val" in missing
@@ -55,7 +57,53 @@ def test_training_readiness_passes_for_exported_dataset_and_valid_config(tmp_pat
 
     assert result["ready"] is True
     assert result["missing"] == []
-    assert result["warnings"] == ["test split has no images; final test metrics will be unavailable"]
+    assert result["warnings"] == [
+        "Class names may be singular/plural duplicates: 'ship' and 'ships'; allowed as intentional project classes",
+        "test split has no images; final test metrics will be unavailable",
+    ]
+
+
+@pytest.mark.parametrize("names", [
+    "  0: ships\n  1: ships_extra\n",
+    "  0: ship\n  1: ship\n",
+    "  0: ships\n  1: ship\n",
+    "  # 0: ship\n  # 1: ships\n",
+])
+def test_readiness_blocks_mismatched_class_mapping(tmp_path: Path, names) -> None:
+    training_lib = load_training_lib()
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    (dataset / "data.yaml").write_text("names:\n" + names)
+    selection = write_selection(tmp_path / "selection.json", reviews_dir=tmp_path / "reviews", output_dir=dataset, items=[])
+    result = training_lib.check_training_readiness(selection, {})
+    assert result["ready"] is False
+    assert "data.yaml must define class 0: ship and class 1: ships" in result["missing"]
+    assert any("class names do not match" in warning for warning in result["warnings"])
+
+
+def test_readiness_distinguishes_missing_export_from_broken_export(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    dataset = tmp_path / "dataset"
+    selection = write_selection(tmp_path / "selection.json", reviews_dir=tmp_path / "reviews", output_dir=dataset, items=[])
+    assert "Dataset has not been exported yet" in training_lib.check_training_readiness(selection, {})["missing"]
+    dataset.mkdir()
+    assert "Exported dataset is missing dataset_manifest.json" in training_lib.check_training_readiness(selection, {})["missing"]
+    training_lib.write_json(selection, {"export": {}})
+    assert "Dataset output dir is not configured" in training_lib.check_training_readiness(selection, {})["missing"]
+
+
+def test_class_warnings_include_identical_and_singular_plural_names() -> None:
+    training_lib = load_training_lib()
+    assert training_lib.likely_duplicate_class_name_warnings(["Boat", " boats "])
+    assert training_lib.likely_duplicate_class_name_warnings(["ship", "ship"])
+    assert training_lib.likely_duplicate_class_name_warnings(["tanker", "cargo"]) == []
+
+
+def test_class_mapping_accepts_quoted_export_names_and_ignores_other_keys(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    data_yaml = tmp_path / "data.yaml"
+    data_yaml.write_text("names:\n  0: 'ship' # single\n  1: \"ships\"\nother:\n  0: ignored\n")
+    assert training_lib.yaml_defines_required_classes(data_yaml) is True
 
 
 def test_training_readiness_blocks_existing_run_without_overwrite(tmp_path: Path) -> None:

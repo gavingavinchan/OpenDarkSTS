@@ -833,6 +833,9 @@ def test_cli_export_dataset_writes_yolo_layout_and_returns_paths_json(tmp_path: 
     assert_envelope(envelope, command="export-dataset", ok=True)
     assert envelope["result"]["dataset_dir"] == str(output_dir)
     assert envelope["result"]["dataset_manifest"] == str(output_dir / "dataset_manifest.json")
+    warning = "Class names may be singular/plural duplicates: 'ship' and 'ships'; allowed as intentional project classes"
+    assert warning in envelope["warnings"]
+    assert warning in json.loads((output_dir / "dataset_manifest.json").read_text())["warnings"]
     assert (output_dir / "images" / "train" / "img_train.png").is_file()
     assert (output_dir / "labels" / "train" / "img_train.txt").is_file()
 

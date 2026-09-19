@@ -10,6 +10,7 @@ import platform
 import random
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -2435,11 +2436,48 @@ def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTI
     return selections
 
 
+def data_yaml_classes(data_yaml: Path) -> dict[int, str]:
+    """Read the names block mapping produced by the dataset exporter."""
+    if not data_yaml.is_file():
+        return {}
+    classes: dict[int, str] = {}
+    in_names = False
+    for line in data_yaml.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            in_names = line.split("#", 1)[0].strip() == "names:"
+            continue
+        if not in_names:
+            continue
+        key, separator, value = line.strip().partition(":")
+        if not separator or not key.isdigit() or int(key) in classes:
+            return {}
+        try:
+            tokens = shlex.split(value, comments=True)
+        except ValueError:
+            return {}
+        if len(tokens) != 1:
+            return {}
+        classes[int(key)] = tokens[0]
+    return classes
+
+
 def yaml_defines_required_classes(data_yaml: Path) -> bool:
-    if not data_yaml.exists():
-        return False
-    content = data_yaml.read_text()
-    return "0: ship" in content and "1: ships" in content
+    return data_yaml_classes(data_yaml) == CLASS_ID_TO_NAME
+
+
+def likely_duplicate_class_name_warnings(class_names: list[str]) -> list[str]:
+    warnings: list[str] = []
+    normalized = [name.strip().lower() for name in class_names if name.strip()]
+    for index, left in enumerate(normalized):
+        for right in normalized[index + 1:]:
+            if left == right or left.rstrip("s") == right.rstrip("s"):
+                warning = f"Class names may be singular/plural duplicates: {left!r} and {right!r}"
+                if {left, right} == {"ship", "ships"}:
+                    warning += "; allowed as intentional project classes"
+                warnings.append(warning)
+    return list(dict.fromkeys(warnings))
 
 
 def resolve_training_run_dir(run_dir: str | Path) -> Path:
@@ -2510,12 +2548,20 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
     missing: list[str] = []
     warnings: list[str] = []
 
-    if dataset_dir is None or not (dataset_dir / "dataset_manifest.json").is_file():
-        missing.append("Selected dataset has not been exported dataset to YOLO format")
+    if dataset_dir is None:
+        missing.append("Dataset output dir is not configured")
+    elif not dataset_dir.exists():
+        missing.append("Dataset has not been exported yet")
+    elif not (dataset_dir / "dataset_manifest.json").is_file():
+        missing.append("Exported dataset is missing dataset_manifest.json")
     if dataset_dir is None or not (dataset_dir / "data.yaml").is_file():
         missing.append("Exported dataset is missing data.yaml")
     elif not yaml_defines_required_classes(dataset_dir / "data.yaml"):
         missing.append("data.yaml must define class 0: ship and class 1: ships")
+        warnings.append("data.yaml class names do not match the project classes (0: ship, 1: ships)")
+    if dataset_dir is not None:
+        classes = data_yaml_classes(dataset_dir / "data.yaml")
+        warnings.extend(likely_duplicate_class_name_warnings(list(classes.values())))
 
     for split in ("train", "val"):
         if dataset_dir is None or not (dataset_dir / "images" / split).is_dir():
@@ -2836,6 +2882,7 @@ def export_dataset_selection(
 
     write_data_yaml(dataset_dir)
     exported_files.append(record_exported_file(dataset_dir, dataset_dir / "data.yaml"))
+    warnings.extend(likely_duplicate_class_name_warnings(list(CLASS_ID_TO_NAME.values())))
 
     manifest = {
         "schema_version": SCHEMA_VERSION,

@@ -256,13 +256,18 @@ Checks whether an exported dataset and training config are sufficient for YOLO t
 Checks include:
 
 - dataset export exists and contains `dataset_manifest.json`
-- `data.yaml` exists and defines `0: ship` and `1: ships`
+- `data.yaml` exists and its exported `names` block defines exactly `0: ship` and `1: ships`
 - `train` and `val` image/label folders exist and contain images
 - the export is current: `dataset_manifest.json` records the sha256 of the selection
   manifest it was built from, and readiness fails when the selection has changed since
   (re-export in step 4)
 - required training config fields are present
 - target run directory will not overwrite an existing run unless `overwrite` is enabled
+
+Readiness distinguishes a dataset that has not been exported from an existing export
+directory missing its manifest. Class-name mismatches block training. Duplicate or
+singular/plural names produce warnings; the intentional `ship` / `ships` pair is allowed
+and its warning is also recorded in exported dataset manifests.
 
 Required training config fields:
 
