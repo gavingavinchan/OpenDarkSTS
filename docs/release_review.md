@@ -36,8 +36,8 @@ an agreed project licence. Data terms and unresolved rights are in `licensing.md
 
 ## Final local validation
 
-- Requested `/home/gavin/anaconda3/bin/python3 -m pytest -q`: **297 passed, 3 skipped**.
-- Full `.venv/bin/python -m pytest -q`: **300 passed**, including actual YOLO inference
+- Requested `/home/gavin/anaconda3/bin/python3 -m pytest -q`: **310 passed, 3 skipped**.
+- Full `.venv/bin/python -m pytest -q`: **313 passed**, including actual YOLO inference
   over the bundled satellite image and region-complete AIS sample.
 - Wheel and source distribution built successfully. A wheel installation under an
   isolated directory initialized its workspace, launched a background inference job
@@ -51,6 +51,23 @@ The isolated review server is available at `http://127.0.0.1:8773`; `/results` i
 available there through the experimental switch. It uses sample data and test
 verdicts. Its PID and log path are in the isolated workspace's
 `reports/server/service.json`.
+
+## Independent GUI acceptance
+
+A separate agent with fresh context exercised the current source through a real
+Chromium browser in an isolated workspace, including genuine detection, image
+upload and review, dataset export, one-epoch CPU training, evaluation, promotion
+and training cancellation. Test images and model-assisted acceptance labels do
+not constitute an independent scientific evaluation.
+
+The acceptance work identified and corrected failed-download input selection,
+relative checkpoint resolution, original-filename search, mixed evaluation/import
+job cleanup, custom-workspace crop URLs, and narrow-screen layouts. Regression tests cover the behavioral
+fixes. The detailed feature checklist, limitations and browser evidence are in
+`council/notes/gui-acceptance-report.md` and
+`workspace/reports/gui_acceptance/20260918_independent/`. Updated wheel and source
+archives are under `workspace/reports/gui_acceptance/dist/`; the earlier installed
+review server on port 8773 predates these fixes.
 
 ## Remaining external checks
 
