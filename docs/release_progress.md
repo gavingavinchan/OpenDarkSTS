@@ -11,7 +11,11 @@ session. The experimental Results page remains hidden pending review.
   current-model record, and run provenance implemented. The class count remains a
   same-day radius comparison, not a statement about either visible hull's identity.
   Validation: 260 passed, 2 skipped.
-- Phases 2–7: in progress.
+- Phase 2: streaming acquisition helpers and CLI implemented; cache identities include
+  bounds and source checksums, and imagery retains acquisition metadata. Current NOAA
+  endpoint/schema migration is documented in `docs/acquisition.md`. Validation: 266
+  passed, 2 skipped; current NOAA endpoint and header checked without downloading a day.
+- Phases 3–7: in progress.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.
