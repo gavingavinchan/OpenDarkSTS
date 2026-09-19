@@ -1,0 +1,77 @@
+import json
+from urllib.error import HTTPError
+from urllib.request import urlopen
+
+import pytest
+from PIL import Image
+
+from scripts import results, training_pipeline_lib as training
+from test_training_pipeline_ui import UiServer, get_json, post_json_capture
+
+
+@pytest.fixture
+def run(tmp_path, monkeypatch):
+    monkeypatch.setattr(results, 'WORKSPACE_DIR', tmp_path)
+    image = tmp_path / '2020-01-04_tile_0_0.png'
+    Image.new('RGB', (100, 100), '#30485f').save(image)
+    image.with_suffix('.json').write_text(json.dumps({'bbox': [-94.7, 29.1, -94.6, 29.2]}))
+    root = tmp_path / 'reports' / 'operational' / 'example'
+    root.mkdir(parents=True)
+    (root / 'run.json').write_text(json.dumps({'inputs': [str(image)], 'status': 'completed'}))
+    row = {'detection_id': 'one', 'date': '2020-01-04', 'image_path': str(image), 'cx_px': 50, 'cy_px': 50,
+           'w_px': 20, 'h_px': 10, 'confidence': .8, 'center_lat': 29.15, 'center_lon': -94.65,
+           'dark_status': 'FULLY_DARK', 'ais_status_text': 'no AIS vessels within 1000 metres that day', 'ais_vessels': [], 'ais_count': 0}
+    (root / 'dark_sts.json').write_text(json.dumps([row]))
+    return root
+
+
+def test_no_ais_outcome_automatically_enters_training(run):
+    with pytest.raises(ValueError, match='human training label'):
+        results.send_to_improve(run, 'one')
+    results.review_detection(run, 'one', 'unclear')
+    with pytest.raises(ValueError, match='human training label'):
+        results.send_to_improve(run, 'one')
+    results.review_detection(run, 'one', 'not_sts')
+    with pytest.raises(ValueError, match='human training label'):
+        results.send_to_improve(run, 'one')
+
+
+@pytest.mark.parametrize('verdict,label', [('real_sts', None), ('not_sts', 'ship_non_sts'), ('not_sts', 'neither')])
+def test_transfer_retains_human_review_and_scene_group(run, verdict, label):
+    results.review_detection(run, 'one', verdict, training_label=label)
+    transfer = results.send_to_improve(run, 'one')
+    doc = json.loads(open(transfer['review_path']).read())
+    assert doc['review_status'] == 'completed'
+    assert doc['detections'][0]['review_label'] == (label or 'ships_sts')
+    assert results.send_to_improve(run, 'one') == transfer
+    with pytest.raises(ValueError, match='Already sent'):
+        results.review_detection(run, 'one', 'unclear')
+    key = transfer['image_key']
+    groups = training.resolve_selection_group_keys([key], manifest_path=results.WORKSPACE_DIR/'manifests'/'training_import_manifest.json', reviews_dir=results.WORKSPACE_DIR/'reviews')
+    assert groups[key] == 'texas_gulf|2020-01-04'
+
+
+def test_exports_include_human_decision_and_coordinates(run):
+    results.review_detection(run, 'one', 'real_sts')
+    geo = json.loads(results.export_results(run, 'geojson'))
+    assert geo['features'][0]['geometry']['coordinates'] == [-94.65, 29.15]
+    assert geo['features'][0]['properties']['human_review']['verdict'] == 'real_sts'
+    assert b'real_sts' in results.export_results(run, 'csv')
+    assert results.crop_detection(run, 'one')[0].size == (20,10)
+    with pytest.raises(ValueError):
+        results.run_directory(results.WORKSPACE_DIR.parent)
+
+
+def test_results_http_switch_and_review(run, monkeypatch):
+    from scripts import training_pipeline_ui as ui
+    monkeypatch.setattr(ui, 'TRAINING_UI_INTERACTION_LOG_PATH', results.WORKSPACE_DIR/'interactions.jsonl')
+    monkeypatch.delenv('OPENDARKSTS_EXPERIMENTAL_RESULTS', raising=False)
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        with pytest.raises(HTTPError) as exc:
+            urlopen(server.base_url+'/results')
+        assert exc.value.code == 404
+        monkeypatch.setenv('OPENDARKSTS_EXPERIMENTAL_RESULTS', '1')
+        assert urlopen(server.base_url+'/results').status == 200
+        status, decision = post_json_capture(server.base_url+'/api/results/review', {'directory':str(run), 'detection_id':'one', 'verdict':'real_sts'})
+        assert status == 200
+        assert decision['training_label'] == 'ships_sts'

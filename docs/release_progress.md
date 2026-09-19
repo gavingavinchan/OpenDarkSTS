@@ -19,7 +19,11 @@ session. The experimental Results page remains hidden pending review.
   existing server. Acquisition/detection jobs persist status and logs; training jobs
   are included. CLI uses the same project and job helpers. Validation: 271 passed,
   2 skipped; six pages checked in Chromium with no JavaScript errors.
-- Phases 4–7: in progress.
+- Phase 4: experimental table/map/crop review, explicit human verdicts, reviewed
+  CSV/JSON/GeoJSON exports, and idempotent transfer to Improve implemented. Parent
+  observation groups are preserved. HTTP remains hidden behind the feature switch.
+  Validation: 277 passed, 2 skipped. Review checklist: `experimental_results_review.md`.
+- Phases 5–7: in progress.
 
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.

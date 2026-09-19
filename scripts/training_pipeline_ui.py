@@ -5,6 +5,8 @@ import argparse
 import sys
 import json
 import mimetypes
+import os
+import io
 import re
 import shutil
 import secrets
@@ -29,7 +31,7 @@ try:
     )
     from . import training_pipeline_lib as pipeline
     from . import review_visual_detections_ui as review_ui
-    from . import operations, jobs
+    from . import operations, jobs, results
 except ImportError:
     from visual_review_lib import (
         DEFAULT_REVIEWER,
@@ -40,7 +42,7 @@ except ImportError:
     )
     import training_pipeline_lib as pipeline
     import review_visual_detections_ui as review_ui
-    from scripts import operations, jobs
+    from scripts import operations, jobs, results
 
 
 REVIEWS_DIR = DEFAULT_REVIEWS_DIR
@@ -609,6 +611,55 @@ def render_evaluation_html() -> str:
 
 
 class TrainingPipelineHandler(BaseHTTPRequestHandler):
+    def _results_request(self, path, parsed, *, post=False):
+        if path != "/results" and not path.startswith("/api/results"):
+            return False
+        if os.environ.get("OPENDARKSTS_EXPERIMENTAL_RESULTS") != "1":
+            self._respond_json({"error": "not found"}, status=404)
+            return True
+        try:
+            if path == "/results" and not post:
+                self._respond_html(render_template("results"))
+                return True
+            if post:
+                payload = self._json_body()
+                if path == "/api/results/review":
+                    result = results.review_detection(payload["directory"], payload["detection_id"], payload["verdict"],
+                                 reviewer=payload.get("reviewer") or IMPORT_REVIEWER, training_label=payload.get("training_label"))
+                elif path == "/api/results/improve":
+                    result = results.send_to_improve(payload["directory"], payload["detection_id"])
+                else:
+                    raise ValueError("Unknown results action")
+                self._log_training_action(path.rsplit("/", 1)[-1], {"detection_id": payload.get("detection_id"), "verdict": payload.get("verdict")})
+                self._respond_json(result)
+            elif path == "/api/results":
+                directory = query_text(parsed, "directory")
+                self._respond_json({"detections": results.read_results(directory)} if directory else {"runs": results.list_runs()})
+            elif path in {"/api/results/crop", "/api/results/export"}:
+                directory = query_text(parsed, "directory")
+                if path.endswith("crop"):
+                    crop, _, _ = results.crop_detection(directory, query_text(parsed, "detection_id"), annotate=True)
+                    stream = io.BytesIO()
+                    crop.save(stream, format="PNG")
+                    data, mime, filename = stream.getvalue(), "image/png", None
+                else:
+                    format = query_text(parsed, "format")
+                    data = results.export_results(directory, format)
+                    mime = "text/csv" if format == "csv" else "application/json"
+                    filename = "reviewed_candidates." + format
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(data)))
+                if filename:
+                    self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self._respond_json({"error": "not found"}, status=404)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            self._respond_json({"error": str(exc)}, status=400)
+        return True
+
     def _operations_get(self, path, parsed):
         pages = {"/": ("home", "Your field workspace"), "/detect": ("area", "Area & dates"),
                  "/data": ("data", "Bring in the data"), "/run": ("run", "Run detection"), "/jobs": ("jobs", "Jobs")}
@@ -669,6 +720,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if self._results_request(path, parsed):
+            return
         if self._operations_get(path, parsed):
             return
         if path == "/bbox-overview":
@@ -782,6 +835,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if self._results_request(parsed.path, parsed, post=True):
+            return
         if parsed.path.startswith("/api/operations/"):
             self._operations_post(parsed.path)
             return
