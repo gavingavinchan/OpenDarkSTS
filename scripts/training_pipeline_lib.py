@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,16 @@ def load_json_or_dict(value: str | Path | dict[str, Any]) -> dict[str, Any]:
 def write_json(path: str | Path, payload: dict[str, Any]) -> None:
     target = repo_resolve(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False) as handle:
+            temp = Path(handle.name)
+            handle.write(content)
+        temp.replace(target)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def load_import_manifest(manifest_path: str | Path = DEFAULT_IMPORT_MANIFEST_PATH) -> dict[str, Any]:
