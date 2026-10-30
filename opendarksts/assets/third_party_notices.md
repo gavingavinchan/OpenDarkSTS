@@ -20,14 +20,14 @@ Office for Coastal Management AIS records. Its README and provenance JSON identi
 the transforms, source hashes, dates and terms. No satellite product identifier
 or exact acquisition time was recovered from the historical source tile.
 
-Ultralytics 8.4.23 is an external dependency under AGPL-3.0; the proposed project
-licence requires contributor agreement before publication. Python dependencies
+Ultralytics 8.4.23 is an external dependency under AGPL-3.0; OpenDarkSTS is
+licensed under AGPL-3.0-only (see `LICENSE`). Python dependencies
 remain governed by their respective licences. See repository `docs/licensing.md`.
 
 The default `opendarksts_yolo11s_v4_best.pt` checkpoint is fine-tuned from
 Ultralytics' COCO-pretrained YOLO11s on the balanced v4 dataset, derived from the
 Madhulika/Roboflow version-7 source set and manually reviewed Sentinel-2 imagery.
-Source metadata declares Public Domain; upstream image and annotation rights still
-require contributor review. The model card and weight recreation document record
-provenance, test-split limitations and the pending release asset. The later
+Source metadata declares Public Domain, and the source-set author has agreed to
+publication. The model card and weight recreation document record
+provenance, test-split limitations and the release asset. The later
 clean-split YOLO26n checkpoint is an optional alternative, not the package default.

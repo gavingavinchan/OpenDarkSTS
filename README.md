@@ -204,8 +204,9 @@ tracked in [docs/windows_validation.md](docs/windows_validation.md).
 
 ## Licence and attribution
 
-Licence: _to be confirmed by the contributors before publication._ OpenDarkSTS
-uses [Ultralytics YOLO](https://github.com/ultralytics/ultralytics) (AGPL-3.0).
+OpenDarkSTS, including the default model checkpoint, is licensed under
+[AGPL-3.0-only](LICENSE). It uses [Ultralytics YOLO](https://github.com/ultralytics/ultralytics),
+which is also AGPL-3.0. The annotated datasets are licensed under CC BY 4.0.
 Third-party notices are in [docs/licensing.md](docs/licensing.md).
 
 Contains modified Copernicus Sentinel data 2020–2025. AIS data: NOAA Office for

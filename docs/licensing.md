@@ -1,11 +1,11 @@
-# Licence and data rights review
+# Licence and data rights
 
-The release plan proposes **AGPL-3.0-only** for the program. This proposal is not yet
-an agreed project licence: contributor consent must be recorded before publication.
+OpenDarkSTS is licensed under **AGPL-3.0-only** (see [`LICENSE`](../LICENSE)), as
+agreed by the contributors for the v0.1 release.
 Ultralytics is distributed under AGPL-3.0 or a separate commercial agreement; its
 [licensing page](https://www.ultralytics.com/license) and the
 [AGPL text](https://www.gnu.org/licenses/agpl-3.0.html) are the primary references.
-The package deliberately omits a licence declaration until agreement is recorded.
+The default model checkpoint is distributed under the same licence.
 
 The small example includes modified Copernicus Sentinel data 2020 and NOAA AIS.
 The [example provenance](../opendarksts/example/README.md) records the sources,
@@ -29,14 +29,12 @@ maintained at https://github.com/IBM/plex. Interface fonts are served locally.
 
 Training inputs include Roboflow project `fleetdatascience/data-science-dark-fleet`,
 version 7, whose local metadata declares Public Domain, plus manually reviewed
-satellite images. A declaration in an export does not establish the provenance of
-every upstream image or annotation. The full annotation/split release requires a
-source-rights review before it is published. The model card records this gap.
+satellite images. The source-set author has agreed to publication. The annotated
+image datasets are published separately on Hugging Face under CC BY 4.0.
 
-The complete proposed licence text is preserved at
-[`AGPL-3.0.proposed.txt`](AGPL-3.0.proposed.txt), downloaded from the GNU project's
-licence text. Moving it to `LICENSE` and declaring `AGPL-3.0-only` in package metadata
-are deferred until agreement is recorded. Third-party notices are also shipped
+The complete licence text, downloaded from the GNU project, is in
+[`LICENSE`](../LICENSE), and the package metadata declares `AGPL-3.0-only`.
+Third-party notices are also shipped
 inside the package in `opendarksts/assets/third_party_notices.md`.
 
 The prepared local annotation review bundle is described in `release_review.md`.

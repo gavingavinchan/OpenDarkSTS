@@ -3,10 +3,10 @@
 File: `opendarksts_yolo11s_v4_best.pt`.
 SHA-256: `cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea`.
 
-Acquire after publication with `opendarksts init`. The pinned release asset is
+Acquire with `opendarksts init`. The pinned release asset is
 https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/opendarksts_yolo11s_v4_best.pt
-and its identity is recorded in `assets/default_model.json`. Publication is pending.
-Before publication, use `opendarksts init --weights PATH_TO_THIS_CHECKPOINT`.
+and its identity is recorded in `assets/default_model.json`.
+A local copy can be installed with `opendarksts init --weights PATH_TO_THIS_CHECKPOINT`.
 Weights are excluded from git.
 
 The release file is a byte-identical copy of:

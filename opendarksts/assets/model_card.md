@@ -3,12 +3,12 @@
 This detector identifies candidate pairs of ships in approximately 10 m/pixel,
 true-colour satellite imagery for human review. Classes: `0: ship`, `1: ships`.
 A visible pair does not establish a transfer, vessel identity, cargo, transponder
-state, or legality. Initialize with `opendarksts init` after asset publication,
-or `opendarksts init --weights PATH_TO_THIS_CHECKPOINT` before publication.
+state, or legality. `opendarksts init` downloads it; `opendarksts init --weights
+PATH_TO_THIS_CHECKPOINT` installs a local copy.
 
 Checkpoint: `opendarksts_yolo11s_v4_best.pt`
 SHA-256: `cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea`
-Release asset (publication pending):
+Release asset:
 https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/opendarksts_yolo11s_v4_best.pt
 
 The checkpoint is the YOLO11s headline detector presented in the SNAME 2026 paper,
@@ -16,8 +16,8 @@ trained on `madhulika_rectbbox_plus_manual_sts_balanced_v4`. This balanced datas
 contains 1,991 instances of each class, combining the pre-augmented Madhulika
 rectbbox source set with manually reviewed Sentinel-2 images and train-only
 manual STS-crop augmentation. Source metadata identifies Roboflow project
-`fleetdatascience/data-science-dark-fleet`, version 7, as Public Domain; source
-and annotation redistribution rights still require contributor review.
+`fleetdatascience/data-science-dark-fleet`, version 7, as Public Domain; the
+source-set author has agreed to its publication.
 
 Held-out test results at image size 960, reproduced exactly from the paper's
 "Headline detector --- YOLO11s per-class results" section and cross-architecture
@@ -49,4 +49,4 @@ seed 42, patience 60, Ultralytics 8.4.23. See `weight_recreation.md` for the com
 source checkpoint and reproducibility gaps. The clean-split YOLO26n checkpoint
 remains an alternative documented in `docs/yolo_weight_recreation.md`; its scores
 use a different dataset and must not be substituted for the paper's YOLO11s results.
-The release asset and proposed project licence remain pending publication review.
+Licence: AGPL-3.0-only, as for the project and its Ultralytics dependency.

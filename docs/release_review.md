@@ -32,8 +32,8 @@ The adjacent JSON records its hash. Recreate with
 `python -m scripts.prepare_annotation_release --dataset workspace/datasets/derived/sts_clean_v1 --output workspace/reports/release_candidate/NEW_NAME.zip`.
 
 The model card and recreation instructions are packaged in `opendarksts/assets/`.
-The proposed licence text is `docs/AGPL-3.0.proposed.txt`; it has not been applied as
-an agreed project licence. Data terms and unresolved rights are in `licensing.md`.
+The contributors agreed to AGPL-3.0-only; the text is in `LICENSE`. Data terms are in
+`licensing.md`.
 
 ## Final local validation
 

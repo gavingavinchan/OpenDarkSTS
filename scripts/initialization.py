@@ -30,7 +30,7 @@ def initialize(*, weights=None, no_model=False, example=True):
                         try:
                             download(manifest["url"], candidate)
                         except RuntimeError as exc:
-                            raise RuntimeError(f"Default model download failed. {manifest['release_status']} Supply --weights with the documented checkpoint for local testing.") from exc
+                            raise RuntimeError(f"Default model download failed from {manifest['url']}. Check the network connection, or supply --weights with the documented checkpoint.") from exc
                     if sha256(candidate) != manifest["sha256"]:
                         raise ValueError("Default model checksum mismatch; existing model was not replaced")
                     candidate.replace(target)
