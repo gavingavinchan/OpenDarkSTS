@@ -94,3 +94,60 @@ def test_imagery_tiles_obey_pixel_limit():
     tiles = list(acquire.imagery_tiles([-95, 28, -94, 29]))
     assert len(tiles) > 1
     assert all(1 <= n <= 2500 for _, size in tiles for n in size)
+
+
+def test_download_reports_real_bytes_and_unknown_totals(tmp_path):
+    for total in [True, False]:
+        response = Response(b'abcdefgh')
+        response.headers = {'Content-Length': '8'} if total else {}
+        logs = []
+        acquire.download('https://example.test', tmp_path / 'part', opener=lambda *a, **kw: response, log=logs.append)
+        if total:
+            assert any('8 / 8 bytes (100.0%)' in line for line in logs)
+        else:
+            assert any('8 bytes (total unknown)' in line for line in logs)
+
+
+def test_ais_cancel_removes_only_partial_files(tmp_path):
+    saved = tmp_path / 'full' / 'previous.csv'
+    saved.parent.mkdir()
+    saved.write_text('retained')
+    calls = 0
+    def check():
+        nonlocal calls
+        calls += 1
+        if calls >= 5:
+            raise acquire.Cancelled('cancelled')
+    with pytest.raises(acquire.Cancelled), acquire.cancellation(check):
+        acquire.acquire_ais('2024-01-01', output_dir=tmp_path, opener=lambda *a, **kw: Response(b'x' * 1000000))
+    assert saved.read_text() == 'retained'
+    assert list(tmp_path.rglob('*.csv')) == [saved]
+    assert not list(tmp_path.glob('.download-*'))
+
+
+def test_imagery_cancel_cleans_temporary_response(tmp_path):
+    requested = False
+    class Client:
+        def scenes(self, *args):
+            return [{'id': 'one', 'properties': {'datetime': '2024-01-01T10:00:00Z'}}]
+        def image(self, payload, destination, log):
+            nonlocal requested
+            destination.write_bytes(b'partial')
+            requested = True
+            acquire.check_cancelled()
+    def check():
+        if requested:
+            raise acquire.Cancelled('cancelled')
+    with pytest.raises(acquire.Cancelled), acquire.cancellation(check):
+        acquire.acquire_imagery('2024-01-01', bbox=[1, 1, 1.01, 1.01], output_dir=tmp_path, client=Client())
+    assert not list(tmp_path.iterdir())
+
+
+def test_cancel_during_catalogue_timeout_is_reported_as_cancelled():
+    requested = False
+    def check():
+        if requested:
+            raise acquire.Cancelled('cancelled')
+    with pytest.raises(acquire.Cancelled), acquire.cancellation(check):
+        requested = True
+        raise TimeoutError('catalogue request timed out')

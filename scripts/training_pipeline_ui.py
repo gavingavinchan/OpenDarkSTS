@@ -717,13 +717,13 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                     extension = query_text(parsed, "format")
                     if extension not in {"csv", "json"} or job.get("status") != "completed" or job.get("kind") != "run":
                         raise ValueError("Output is not available")
-                    output = jobs.contained(Path(job["result"]["output_dir"]) / f"dark_sts.{extension}")
+                    data = results.export_results(job["result"]["output_dir"], extension)
                     self.send_response(200)
                     self.send_header("Content-Type", "text/csv" if extension == "csv" else "application/json")
-                    self.send_header("Content-Disposition", f'attachment; filename="dark_sts.{extension}"')
+                    self.send_header("Content-Disposition", f'attachment; filename="reviewed_candidates.{extension}"')
+                    self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    with output.open("rb") as handle:
-                        shutil.copyfileobj(handle, self.wfile)
+                    self.wfile.write(data)
                 elif len(suffix) == 1:
                     self._respond_json(job)
                 else:
@@ -745,6 +745,11 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 kind = payload.get("kind")
                 result = jobs.submit_job(kind, payload["options"]) if "options" in payload else operations.submit_project_job(kind)
                 self._log_training_action("start_operation", {"job_id": result["job_id"], "kind": kind})
+                self._respond_json(result, status=202)
+            elif path.startswith("/api/operations/jobs/") and path.endswith("/cancel"):
+                job_id = unquote(path[len("/api/operations/jobs/"):-len("/cancel")])
+                result = jobs.cancel_job(job_id)
+                self._log_training_action("cancel_operation", {"job_id": job_id, "kind": result["kind"]})
                 self._respond_json(result, status=202)
             else:
                 self._respond_json({"error": "not found"}, status=404)

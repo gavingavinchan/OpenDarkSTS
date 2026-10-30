@@ -89,16 +89,30 @@
   async function refreshJobs() {
     const data = await request('/api/operations/jobs');
     if (!selectedJob && data.jobs.length) selectedJob = data.jobs[0].job_id;
-    $('jobRows').innerHTML = data.jobs.map(job => '<tr><td><button class="job-select" data-id="'+P.esc(job.job_id)+'"'+(job.job_id === selectedJob ? ' aria-current="true"' : '')+'>'+P.esc(jobNames[job.kind] || job.kind)+'</button></td><td>'+P.esc(P.shortTime(job.created_at))+'</td><td><span class="job-state job-state-'+P.esc(job.status)+'">'+P.esc(job.status)+'</span></td></tr>').join('') || '<tr><td colspan="3">No jobs yet. Start with an area and some dates.</td></tr>';
+    $('jobRows').innerHTML = data.jobs.map(job => '<tr><td><button class="job-select" data-id="'+P.esc(job.job_id)+'"'+(job.job_id === selectedJob ? ' aria-current="true"' : '')+'>'+P.esc(job.description || jobNames[job.kind] || job.kind)+'</button></td><td>'+P.esc(job.created_at.replace('T', ' ').slice(0,19))+'</td><td><span class="job-state job-state-'+P.esc(job.status)+'">'+P.esc(job.status)+'</span></td></tr>').join('') || '<tr><td colspan="3">No jobs yet. Start with an area and some dates.</td></tr>';
     $('jobRows').querySelectorAll('button').forEach(button => button.onclick = () => { selectedJob = button.dataset.id; P.logInteraction('select_job', {job_id: selectedJob}); refreshJobs().catch(error); });
     if (!selectedJob) return;
     const job = await request('/api/operations/jobs/' + encodeURIComponent(selectedJob));
-    $('jobTitle').textContent = (jobNames[job.kind] || job.kind) + ' · ' + job.status;
+    $('jobTitle').textContent = (job.description || jobNames[job.kind] || job.kind) + ' · ' + job.status;
     if ($('jobDescription')) $('jobDescription').textContent = job.status === 'completed' ? 'This job completed successfully.' : job.status === 'failed' ? 'This job stopped with an error. Check the details below.' : job.status === 'cancelled' ? 'This job was cancelled.' : 'This job continues in the background. Progress updates automatically.';
     if ($('jobDetails') && displayedJob !== selectedJob) $('jobDetails').open = !['completed', 'failed', 'cancelled'].includes(job.status);
     displayedJob = selectedJob;
     $('jobLog').textContent = (job.log_tail || []).join('\n') || job.error || 'Waiting for output…';
     $('jobOutput').replaceChildren();
+    if (['ais', 'imagery'].includes(job.kind) && !['completed', 'failed', 'cancelled'].includes(job.status)) {
+      const cancel = document.createElement('button'); cancel.type = 'button';
+      cancel.textContent = job.cancel_requested ? 'Cancelling…' : 'Cancel download'; cancel.disabled = job.cancel_requested;
+      cancel.onclick = async () => { try {
+        cancel.disabled = true;
+        await request('/api/operations/jobs/' + job.job_id + '/cancel', {});
+        P.logInteraction('cancel_download', {job_id: job.job_id});
+        await refreshJobs();
+      } catch (err) { cancel.disabled = false; error(err); } };
+      $('jobOutput').append(cancel);
+      const progress = document.createElement('p');
+      progress.textContent = (job.log_tail || []).filter(line => line.startsWith('Download progress:')).pop() || 'Connecting to the data provider…';
+      $('jobOutput').append(progress);
+    }
     if (job.error) { const text = document.createElement('p'); text.textContent = job.error; $('jobOutput').append(text); }
     if (job.kind === 'run' && job.status === 'completed') {
       for (const extension of ['csv', 'json']) {
@@ -164,7 +178,12 @@
       $('imageCount').textContent = countLabel(dashboard.inventory.images, 'image file'); $('imagePath').textContent = settings.images;
       $('aisCount').textContent = countLabel(dashboard.inventory.ais_dir, 'AIS file'); $('aisPath').value = settings.ais_dir; $('maxCloud').value = settings.max_cloud;
       $('dateSummary').textContent = settings.start + ' → ' + settings.end;
-      $('saveAis').onclick = () => save({ais_dir: $('aisPath').value}).then(() => notify('AIS source saved.')).catch(error);
+      $('saveAis').onclick = async () => { try {
+        await save({ais_dir: $('aisPath').value});
+        dashboard = await request('/api/operations/dashboard');
+        $('aisCount').textContent = countLabel(dashboard.inventory.ais_dir, 'AIS file');
+        notify('AIS source saved.');
+      } catch (err) { error(err); } };
       $('getAis').onclick = () => launch('ais').catch(error);
       $('getImagery').onclick = () => save({max_cloud: Number($('maxCloud').value)}).then(() => launch('imagery')).catch(error);
     }
@@ -180,7 +199,11 @@
       syncSensitivity();
       $('confidence').addEventListener('input', syncSensitivity);
       $('sensitivity').onchange = () => { if ($('sensitivity').value) $('confidence').value = $('sensitivity').value; P.logInteraction('choose_sensitivity', {confidence: Number($('confidence').value)}); };
-      $('runInputs').textContent = countLabel(dashboard.readiness.image_count, 'image file') + (dashboard.readiness.image_count === 1 ? ' matches ' : ' match ') + settings.start + ' to ' + settings.end + '. Same-day AIS records will be checked within ' + P.fmt(settings.radius, 0) + ' metres.';
+      function syncRunInputs() {
+        $('runInputs').textContent = countLabel(dashboard.readiness.image_count, 'image file') + (dashboard.readiness.image_count === 1 ? ' matches ' : ' match ') + settings.start + ' to ' + settings.end + '. Same-day AIS records will be checked within ' + P.fmt(Number($('radius').value), 0) + ' metres.';
+      }
+      syncRunInputs();
+      $('radius').addEventListener('input', syncRunInputs);
       const readinessBox = $('runReadiness').closest('.run-readiness-box');
       if (readinessBox) readinessBox.dataset.ready = String(dashboard.readiness.ready);
       for (const message of [...dashboard.readiness.blockers, ...dashboard.readiness.warnings]) { const item = document.createElement('p'); item.textContent = message; $('runReadiness').append(item); }

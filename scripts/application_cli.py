@@ -40,6 +40,7 @@ def build_parser():
     run.add_argument("--background", action="store_true")
     jobs = commands.add_parser("jobs")
     jobs.add_argument("job_id", nargs="?")
+    jobs.add_argument("--cancel", action="store_true", help="Cancel a download and remove its partial files")
     project = commands.add_parser("project")
     project.add_argument("--set", dest="settings", help="JSON object of project settings")
     project.add_argument("--start-job", choices=["ais", "imagery", "run"])
@@ -90,11 +91,15 @@ def execute(args):
         return operations.submit_project_job(args.start_job) if args.start_job else operations.project()
     log = lambda message: print(message, file=sys.stderr, flush=True)
     if args.command == "jobs":
+        if args.cancel:
+            if not args.job_id:
+                raise ValueError("Select a job id to cancel")
+            return jobs.cancel_job(args.job_id)
         return jobs.read_job(args.job_id) if args.job_id else {"jobs": jobs.list_jobs(include_training=True)}
     kind = args.kind if args.command == "acquire" else args.command
     options = {key: value for key, value in vars(args).items()
                if key not in {"command", "kind", "workspace", "background"} and value is not None}
-    return jobs.submit_job(kind, options) if args.background else jobs.execute_job(kind, options, log=log)
+    return jobs.submit_job(kind, options) if args.background else jobs.run_foreground(kind, options, log=log)
 
 
 

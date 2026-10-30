@@ -7,7 +7,6 @@ import io
 import json
 import math
 import os
-import shutil
 import tarfile
 import tempfile
 import time
@@ -17,6 +16,8 @@ import urllib.request
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 try:
     from .workspace import WORKSPACE_DIR, atomic_json, contained, sha256
@@ -30,6 +31,46 @@ except ImportError:
 NOAA_BASE = "https://noaaocm.blob.core.windows.net/ais/csv2"
 CDSE_BASE = "https://sh.dataspace.copernicus.eu"
 TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+_cancel_check = ContextVar("acquisition_cancel_check", default=lambda: None)
+
+
+class Cancelled(Exception):
+    """A cooperative request; temporary-file contexts still perform cleanup."""
+
+
+@contextmanager
+def cancellation(check):
+    token = _cancel_check.set(check)
+    try:
+        check_cancelled()
+        yield
+    except Exception:
+        # A network timeout can be the first opportunity to observe a request
+        # made while authentication or catalogue lookup was waiting for I/O.
+        check_cancelled()
+        raise
+    finally:
+        _cancel_check.reset(token)
+
+
+def check_cancelled():
+    _cancel_check.get()()
+
+
+def copy_stream(source, output):
+    while True:
+        check_cancelled()
+        chunk = source.read(256 * 1024)
+        if not chunk:
+            break
+        output.write(chunk)
+
+
+def checked_rows(reader):
+    for index, row in enumerate(reader):
+        if index % 4096 == 0:
+            check_cancelled()
+        yield row
 
 
 def date_range(start: str, end: str | None = None) -> list[str]:
@@ -58,19 +99,41 @@ def download(url: str, destination: Path, *, headers=None, data=None, opener=Non
     opener = opener or urllib.request.urlopen
     for attempt in range(3):
         try:
+            check_cancelled()
             request = urllib.request.Request(url, data=data, headers=headers or {})
-            with opener(request, timeout=120) as response, destination.open("wb") as output:
-                shutil.copyfileobj(response, output, length=1024 * 1024)
+            with opener(request, timeout=15) as response, destination.open("wb") as output:
                 expected = response.headers.get("Content-Length")
+                started = last = time.monotonic()
+                received = 0
+                log(f"Download progress: 0 / {expected} bytes" if expected else "Download progress: 0 bytes (total unknown)")
+                while True:
+                    check_cancelled()
+                    chunk = response.read(256 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    received += len(chunk)
+                    elapsed = time.monotonic() - started
+                    if time.monotonic() - last >= 1 or received == int(expected or -1):
+                        total = f" / {expected} bytes ({100 * received / int(expected):.1f}%)" if expected and int(expected) > 0 else " bytes (total unknown)"
+                        log(f"Download progress: {received}{total}; {received / max(elapsed, .001) / 1e6:.2f} MB/s; {elapsed:.0f}s elapsed")
+                        last = time.monotonic()
+                check_cancelled()
+                if not expected:
+                    log(f"Download progress: {received} bytes (total unknown); transfer complete")
                 if expected is not None and output.tell() != int(expected):
                     raise OSError("Incomplete download")
             return
         except (OSError, urllib.error.URLError) as exc:
             destination.unlink(missing_ok=True)
+            check_cancelled()
             if attempt == 2 or isinstance(exc, urllib.error.HTTPError) and exc.code not in {429, 500, 502, 503, 504}:
                 raise RuntimeError(f"Download failed ({getattr(exc, 'code', type(exc).__name__)}); retry the job") from None
             log(f"Download interrupted; retry {attempt + 1}/2")
             time.sleep(attempt + 1)
+        except BaseException:
+            destination.unlink(missing_ok=True)
+            raise
 
 
 def verified_cache(path: Path, identity: dict) -> dict | None:
@@ -88,7 +151,7 @@ def validate_ais_csv(path: Path, day: str) -> int:
     with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle, strict=True)
         validate_ais_header(reader.fieldnames)
-        for row in reader:
+        for row in checked_rows(reader):
             try:
                 lat, lon = float(row["LAT"]), float(row["LON"])
                 if row["MMSI"] and (row["BaseDateTime"] or "").startswith(day + "T") and -90 <= lat <= 90 and -180 <= lon <= 180:
@@ -111,7 +174,7 @@ def normalize_ais_csv(source: Path, destination: Path) -> None:
         validate_ais_header(names)
         writer = csv.DictWriter(output, fieldnames=names)
         writer.writeheader()
-        for row in reader:
+        for row in checked_rows(reader):
             normalized = {aliases.get(key, key): value for key, value in row.items() if key is not None}
             normalized["BaseDateTime"] = (normalized.get("BaseDateTime") or "").replace(" ", "T", 1)
             writer.writerow(normalized)
@@ -123,6 +186,7 @@ def acquire_ais(start: str, end: str | None = None, *, output_dir=None, bbox=Non
     root.mkdir(parents=True, exist_ok=True)
     records = []
     for day in date_range(start, end):
+        check_cancelled()
         year = int(day[:4])
         if year < 2015:
             raise ValueError("Daily NOAA AIS downloads are supported from 2015 onward")
@@ -141,19 +205,21 @@ def acquire_ais(start: str, end: str | None = None, *, output_dir=None, bbox=Non
                 if not zipfile.is_zipfile(archive):
                     import zstandard
                     with archive.open("rb") as source, extracted.open("wb") as output:
-                        zstandard.ZstdDecompressor().copy_stream(source, output)
+                        with zstandard.ZstdDecompressor().stream_reader(source) as decompressed:
+                            copy_stream(decompressed, output)
                 else:
                     with zipfile.ZipFile(archive) as bundle:
                         members = [entry for entry in bundle.infolist() if not entry.is_dir() and Path(entry.filename).name == name]
                         if len(members) != 1:
                             raise InvalidAIS("Archive must contain exactly one matching AIS day CSV")
                         with bundle.open(members[0]) as source, extracted.open("wb") as output:
-                            shutil.copyfileobj(source, output, length=1024 * 1024)
+                            copy_stream(source, output)
                 normalized = Path(temporary) / "normalized.csv"
                 normalize_ais_csv(extracted, normalized)
                 normalized.replace(extracted)
                 count = validate_ais_csv(extracted, day)
                 record = {"identity": identity, "complete": True, "valid_rows": count, "sha256": sha256(extracted), "path": str(full)}
+                check_cancelled()
                 extracted.replace(full)
                 atomic_json(full.with_suffix(".csv.json"), record)
         if bounds is not None:
@@ -169,7 +235,7 @@ def acquire_ais(start: str, end: str | None = None, *, output_dir=None, bbox=Non
                         reader = csv.DictReader(source)
                         writer = csv.DictWriter(output, fieldnames=reader.fieldnames)
                         writer.writeheader()
-                        for row in reader:
+                        for row in checked_rows(reader):
                             try:
                                 lat, lon = float(row["LAT"]), float(row["LON"])
                             except (ValueError, TypeError):
@@ -178,6 +244,7 @@ def acquire_ais(start: str, end: str | None = None, *, output_dir=None, bbox=Non
                                 writer.writerow(row)
                                 count += 1
                     filtered = {"identity": region_identity, "complete": True, "row_count": count, "sha256": sha256(part), "path": str(target)}
+                    check_cancelled()
                     part.replace(target)
                     atomic_json(target.with_suffix(".csv.json"), filtered)
             record = filtered
@@ -208,6 +275,7 @@ class CDSEClient:
         self.expires = 0
 
     def headers(self):
+        check_cancelled()
         if time.monotonic() >= self.expires:
             client_id, secret = os.environ.get("CDSE_CLIENT_ID"), os.environ.get("CDSE_CLIENT_SECRET")
             if not client_id or not secret:
@@ -219,7 +287,10 @@ class CDSEClient:
                     token = json.load(response)
                 self.token = token["access_token"]
                 self.expires = time.monotonic() + max(1, int(token.get("expires_in", 300)) - 30)
+            except Cancelled:
+                raise
             except Exception:
+                check_cancelled()
                 raise RuntimeError("CDSE authentication failed; check environment credentials") from None
         return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
 
@@ -229,9 +300,11 @@ class CDSEClient:
                    "filter": f"eo:cloud_cover <= {max_cloud}", "filter-lang": "cql2-text"}
         scenes = []
         while True:
+            check_cancelled()
             request = urllib.request.Request(f"{CDSE_BASE}/catalog/v1/search", data=json.dumps(payload).encode(), headers=self.headers())
-            with self.opener(request, timeout=120) as response:
+            with self.opener(request, timeout=15) as response:
                 page = json.load(response)
+            check_cancelled()
             scenes.extend(page.get("features", []))
             next_token = page.get("context", {}).get("next")
             if next_token is None:
@@ -270,6 +343,7 @@ def acquire_imagery(start: str, end: str | None = None, *, bbox, output_dir=None
         instant = datetime.fromisoformat(acquired_at.replace("Z", "+00:00")).astimezone(timezone.utc)
         interval = {"from": (instant - timedelta(seconds=1)).isoformat(), "to": (instant + timedelta(seconds=1)).isoformat()}
         for tile_bbox, size in imagery_tiles(bounds):
+            check_cancelled()
             identity = {"catalog_scene_ids": sorted(set(scene_ids)), "acquired_at": acquired_at, "bbox": tile_bbox,
                         "size": size, "resolution_m": 10, "max_cloud": max_cloud, "renderer": "rgb-reflectance-3.5-v1"}
             target = contained(root / f"{instant.date()}_acq_{cache_key(identity)}.tiff")
@@ -291,13 +365,14 @@ def acquire_imagery(start: str, end: str | None = None, *, bbox, output_dir=None
                             raise ValueError("CDSE response is missing imagery or acquisition metadata")
                         part = Path(temporary) / "image.tiff"
                         with bundle.extractfile(image_member) as source, part.open("wb") as output:
-                            shutil.copyfileobj(source, output, length=1024 * 1024)
+                            copy_stream(source, output)
                         metadata = json.load(bundle.extractfile(metadata_member))
                     if not metadata.get("tiles"):
                         raise ValueError("CDSE returned no contributing scenes")
                     load_bbox_for_image(part)
                     record = {"identity": identity, "complete": True, "sha256": sha256(part), "path": str(target),
                               "acquisition": metadata, "composition": "first valid pixel across tiles at the requested acquisition time"}
+                    check_cancelled()
                     part.replace(target)
                     atomic_json(target.with_suffix(".tiff.json"), record)
             records.append(record)

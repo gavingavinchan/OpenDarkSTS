@@ -97,6 +97,11 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
         except FileNotFoundError as exc:
             correlated.extend(unavailable_results(date_detections, "AIS_MISSING", str(exc)))
             continue
+        except (ValueError, OSError, UnicodeError, csv.Error) as exc:
+            if not Path(ais_dir).is_file():
+                raise
+            correlated.extend(unavailable_results(date_detections, "AIS_INVALID", str(exc)))
+            continue
         prepared, global_window = _prepare_detection_windows(date_detections, radius_m=radius_m)
         global_lat_min, global_lat_max, global_lon_min, global_lon_max = global_window
 

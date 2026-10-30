@@ -29,6 +29,7 @@ try:
         parse_image_date,
         load_bbox_for_image,
         resolve_image_inputs,
+        resolve_ais_file,
         write_csv_rows,
         write_json,
     )
@@ -44,6 +45,7 @@ except ImportError:
         parse_image_date,
         load_bbox_for_image,
         resolve_image_inputs,
+        resolve_ais_file,
         write_csv_rows,
         write_json,
     )
@@ -197,6 +199,9 @@ def run_pipeline(
         raise ValueError("A bbox override can only be used with one image")
     for image_path in image_paths:
         load_bbox_for_image(image_path, bbox_json)
+    if ais_dir and Path(ais_dir).expanduser().is_file():
+        for day in {parse_image_date(path) for path in image_paths}:
+            resolve_ais_file(Path(ais_dir).expanduser(), day)
     if not math.isfinite(conf) or not 0 <= conf <= 1:
         raise ValueError("Confidence must be between zero and one")
     if not math.isfinite(radius_m) or radius_m <= 0:

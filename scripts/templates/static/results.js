@@ -63,13 +63,23 @@
   const row=rows.find(r=>r.detection_id===selected);
   if(row.human_review.verdict==='not_sts')await api('/api/results/review',{directory,detection_id:selected,verdict:'not_sts',training_label:$('negativeLabel').value||null});
   await api('/api/results/improve',{directory,detection_id:selected});await refresh();
+  P.setStatus($('notice'),'Reviewed crop sent to Improve.','success');
  }catch(e){error(e);}};
- $('runs').onchange=()=>{selected=null;P.logInteraction('select_result_run',{directory:$('runs').value});refresh().catch(error);};
+ function rememberRun(replace=false){
+  const url=new URL(location.href);url.searchParams.set('directory',$('runs').value);
+  history[replace?'replaceState':'pushState'](null,'',url);
+ }
+ $('runs').onchange=()=>{selected=null;rememberRun();P.logInteraction('select_result_run',{directory:$('runs').value});refresh().catch(error);};
+ window.addEventListener('popstate',()=>{
+  const requested=new URLSearchParams(location.search).get('directory');
+  if(runs.some(r=>r.directory===requested)){$('runs').value=requested;selected=null;refresh().catch(error);}
+ });
  try{
   runs=(await api('/api/results')).runs;
-  runs.forEach(r=>$('runs').add(new Option((r.started_at||r.run_id)+' / '+r.directory.split(/[\\/]/).pop(),r.directory)));
+  runs.forEach(r=>$('runs').add(new Option(r.description||r.started_at||r.run_id,r.directory)));
   const requested=new URLSearchParams(location.search).get('directory');
   if(runs.some(r=>r.directory===requested))$('runs').value=requested;
+  if(runs.length)rememberRun(true);
   await refresh();if(!runs.length)P.setStatus($('notice'),'No completed detection runs in this workspace. Start with Scan Images.');
  }catch(e){error(e);}
 })();
