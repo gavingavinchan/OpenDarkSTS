@@ -123,7 +123,7 @@
       $('detectionTotals').textContent = totals.runs + ' completed scans / ' + totals.detections + ' candidate detections. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
       if ($('modelSummary')) $('modelSummary').textContent = dashboard.model ? 'STS detector selected' : 'No model selected';
       $('modelName').textContent = dashboard.model ? dashboard.model.filename : 'No model selected';
-      $('modelInfo').textContent = dashboard.model_error || (dashboard.model && dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Clean test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
+      $('modelInfo').textContent = dashboard.model_error || (dashboard.model && dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Held-out test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
       $('inventorySummary').textContent = countLabel(dashboard.inventory.images, 'image') + ' / ' + countLabel(dashboard.inventory.ais_dir, 'AIS file');
       const training = dashboard.training_inventory;
       $('trainingInventory').textContent = countLabel(training.images, 'training image') + ' in ' + countLabel(training.albums, 'album') + '; ' + training.completed + ' reviewed.';
