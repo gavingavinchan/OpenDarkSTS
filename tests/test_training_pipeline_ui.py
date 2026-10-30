@@ -462,13 +462,14 @@ def test_step6_api_refuses_a_second_start_into_a_live_run_dir(tmp_path: Path, mo
             {
                 "dataset_name": "API Training Fixture", "dataset_version": "v1", "model": "yolov8n.pt",
                 "run_group": "api_dup_group", "run_name": "api_dup_run", "image_size": 320,
-                "epochs": 1, "batch": 2, "device": "cpu", "overwrite": True,
+                "epochs": 1, "batch": 2, "device": "cpu", "overwrite": False,
                 "selection_path": saved_selection["selection_path"],
             },
         )
         body = {"selection_path": saved_selection["selection_path"], "config_path": saved_config["config_path"]}
         first_status, first = post_json_capture(server.base_url + "/api/training/runs/start", body)
         second_status, second = post_json_capture(server.base_url + "/api/training/runs/start", body)
+        readiness_status, readiness = post_json_capture(server.base_url + "/api/training/readiness", body)
         record = json.loads((tmp_path / "runs" / "api_dup_group" / "api_dup_run" / "process.json").read_text())
         post_json_capture(server.base_url + "/api/training/runs/api_dup_group/api_dup_run/stop", {})
 
@@ -476,11 +477,15 @@ def test_step6_api_refuses_a_second_start_into_a_live_run_dir(tmp_path: Path, mo
     assert second_status == 409
     assert second["already_running"] is True
     assert second["pid"] == first["pid"]
+    assert readiness_status == 200
+    assert readiness["ready"] is False
+    assert readiness["already_running"] is True
+    assert "already running" in "; ".join(readiness["missing"])
     # The refused launch must not have replaced the live process record.
     assert record["pid"] == first["pid"]
 
 
-def test_step7_api_writes_evaluation_report_and_refuses_undocumented_promotion(tmp_path: Path, monkeypatch) -> None:
+def test_step7_api_recommends_without_promotion_and_refuses_missing_provenance(tmp_path: Path, monkeypatch) -> None:
     ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
     run_dir = tmp_path / "runs" / "api_eval_group" / "api_eval_run"
     (run_dir / "weights").mkdir(parents=True)
@@ -629,3 +634,17 @@ def test_unknown_job_id_returns_404(tmp_path: Path) -> None:
             raise AssertionError("expected 404")
         except urllib.error.HTTPError as exc:
             assert exc.code == 404
+
+
+def test_results_transfer_invalidates_warm_annotation_queue(tmp_path: Path, monkeypatch) -> None:
+    from scripts import results
+
+    ui, _ = prepare_training_workspace(tmp_path, monkeypatch)
+    from scripts import review_visual_detections_ui as review_ui
+    review_ui.QUEUE_CACHE = [{"image_key": "old_image"}]
+    monkeypatch.setattr(results, 'send_to_improve', lambda directory, detection_id: {"image_key": "new_crop"})
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        status, transfer = post_json_capture(server.base_url + '/api/results/improve', {'directory': 'fixture', 'detection_id': 'one'})
+    assert status == 200
+    assert transfer['image_key'] == 'new_crop'
+    assert review_ui.QUEUE_CACHE is None

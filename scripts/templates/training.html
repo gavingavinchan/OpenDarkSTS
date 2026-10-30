@@ -48,7 +48,7 @@
         </section>
 
         <div style="display:grid; gap:18px;">
-          <section class="card">
+          <section class="card" id="selectedRunProgress">
             <h2>Selected Run</h2>
             <p class="hint" id="detailTitle">Pick a run card to see its live detail.</p>
             <div class="bar"><i id="epochBar" style="width:0%"></i></div>
@@ -165,8 +165,22 @@
         await loadRuns();
         await refreshDetail();
       } catch (error) {
-        button.disabled = false;
-        P.setStatus('startStatus', 'Start failed: ' + error.message, 'err');
+        await checkReadiness();
+        await loadRuns();
+        const conflict = error.payload || {};
+        if (conflict.already_running && conflict.run_dir) {
+          const parts = conflict.run_dir.split(/[\\/]/);
+          state.selectedRun = { run_group: parts[parts.length - 2], run_name: parts[parts.length - 1] };
+          await refreshDetail();
+          button.disabled = true;
+          document.getElementById('startReadiness').innerHTML = '<li>This setup is already running.</li>';
+          P.setStatus('startStatus', 'This training setup is already running. ', 'err');
+          const link = document.createElement('a');
+          link.href = '#selectedRunProgress'; link.textContent = 'View its progress';
+          document.getElementById('startStatus').append(link);
+        } else {
+          P.setStatus('startStatus', 'Start failed: ' + error.message + (conflict.missing ? ': ' + conflict.missing.join('; ') : ''), 'err');
+        }
       }
     }
 

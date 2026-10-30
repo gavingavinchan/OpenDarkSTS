@@ -29,6 +29,10 @@
   $('negativeField').hidden=review.verdict!=='not_sts'; $('negativeLabel').value=review.training_label||'';
   $('improve').disabled=!!review.transfer||!['real_sts','not_sts'].includes(review.verdict);
   $('improve').textContent=review.transfer?'Sent to Improve':'Send reviewed crop to Improve';
+  let improveLink=$('openInImprove');
+  if(!improveLink){improveLink=document.createElement('a');improveLink.id='openInImprove';improveLink.textContent='Open in Improve';improveLink.style.marginLeft='12px';$('improve').after(improveLink);}
+  improveLink.hidden=!review.transfer;
+  if(review.transfer)improveLink.href='/manual-review?image_id='+encodeURIComponent(review.transfer.image_key);
   document.querySelectorAll('[data-verdict]').forEach(b=>b.disabled=!!review.transfer);
   if(!map)return;
   evidence.clearLayers();

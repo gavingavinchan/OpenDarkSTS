@@ -617,8 +617,8 @@ def command_list_starting_weights(args: argparse.Namespace) -> tuple[int, dict[s
 def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     readiness = pipeline.check_training_readiness(args.selection, args.config)
     if not readiness["ready"]:
-        result = {"ready": False, "missing": list(readiness["missing"])}
-        return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["Training is not ready"])
+        result = dict(readiness)
+        return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["This training setup is already running" if readiness.get("already_running") else "Training is not ready"])
     try:
         result = pipeline.start_training_run(
             args.selection,

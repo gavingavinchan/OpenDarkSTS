@@ -2593,6 +2593,11 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
     output_root = config.get("output_dir") or WORKSPACE_DIR / "runs"
     if run_name:
         run_dir = resolve_training_run_ref(output_root, str(run_group), str(run_name))
+        live = active_run_process(run_dir)
+        if live:
+            missing.append("This training setup is already running")
+            return {"ready": False, "missing": missing, "warnings": warnings,
+                    "already_running": True, "run_dir": repo_relative(run_dir), "pid": live.get("pid")}
         if run_dir.exists() and not bool(config.get("overwrite")):
             missing.append("output run name would overwrite an existing run; enable overwrite to proceed")
 
