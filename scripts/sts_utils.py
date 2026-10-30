@@ -6,6 +6,8 @@ import importlib
 import json
 import math
 import re
+from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -282,13 +284,42 @@ def build_vessel_key(row: dict[str, str]) -> str:
     return f"FALLBACK:{vessel_name}|{imo}|{call_sign}"
 
 
+@lru_cache(maxsize=32)
+def _ais_content_dates(path: str, size: int, modified: int, changed: int) -> frozenset[str]:
+    """Cache daily-file inspection until its contents may have changed."""
+    dates = set()
+    with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle, strict=True)
+        missing = {"MMSI", "BaseDateTime", "LAT", "LON"} - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError("AIS missing required columns: " + ", ".join(sorted(missing)))
+        for row in reader:
+            try:
+                timestamp = datetime.fromisoformat((row.get("BaseDateTime") or "").replace("Z", "+00:00"))
+                dates.add(timestamp.date().isoformat())
+            except ValueError:
+                continue
+    if not dates:
+        raise ValueError("Cannot establish the AIS CSV date: no valid BaseDateTime timestamps. Select a dated daily CSV before scanning.")
+    return frozenset(dates)
+
+
+def ais_content_dates(path: str | Path) -> frozenset[str]:
+    target = Path(path).expanduser().resolve()
+    stat = target.stat()
+    # Small operator-selected files can be rewritten within one filesystem clock
+    # tick; inspecting them directly is inexpensive and avoids stale preflight.
+    inspect = _ais_content_dates.__wrapped__ if stat.st_size < 1024 * 1024 else _ais_content_dates
+    return inspect(str(target), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
 def resolve_ais_file(ais_dir: str | Path, date_str: str) -> Path:
     ais_path = Path(ais_dir)
     expected_name = f"AIS_{date_str.replace('-', '_')}.csv"
 
     if ais_path.is_file():
-        if ais_path.name != expected_name:
-            raise FileNotFoundError(f"AIS file {ais_path} does not match expected date file {expected_name}")
+        if date_str not in ais_content_dates(ais_path):
+            raise FileNotFoundError(f"Selected AIS CSV has no records dated {date_str}: {ais_path}")
         return ais_path
 
     matches = sorted(ais_path.rglob(expected_name))

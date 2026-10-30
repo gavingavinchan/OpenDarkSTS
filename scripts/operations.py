@@ -88,6 +88,15 @@ def detection_readiness(settings=None):
         path.is_file() and path.suffix.lower() == ".csv" for path in ais.rglob("*"))))
     if not has_ais:
         warnings.append("No AIS CSV files are available at the selected source. Detection can run, but vessel presence will be unknown. Select AIS on Data.")
+    elif ais.is_file():
+        from .sts_utils import ais_content_dates, parse_image_date
+        try:
+            dates = ais_content_dates(ais)
+            missing = {parse_image_date(path) for path in images} - dates
+            if missing:
+                blockers.append("Selected AIS CSV has no records for image date(s): " + ", ".join(sorted(missing)) + ". Select a matching daily CSV before scanning.")
+        except (ValueError, OSError) as exc:
+            blockers.append(str(exc))
     return {"ready": not blockers, "image_count": len(images), "blockers": blockers, "warnings": warnings}
 
 
