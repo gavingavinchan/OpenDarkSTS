@@ -143,7 +143,7 @@
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
       const totals = dashboard.detection_summary;
-      $('detectionTotals').textContent = countLabel(totals.runs, 'completed scan') + ' / ' + countLabel(totals.detections, 'candidate detection') + '. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
+      $('detectionTotals').textContent = countLabel(totals.runs, 'completed scan') + ' / ' + countLabel(totals.detections, 'candidate detection') + '. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; DETECTED_ONLY (stored as AIS_MISSING): ' + totals.AIS_MISSING + '; AIS_ERROR (stored as AIS_INVALID): ' + totals.AIS_INVALID + '. Counts describe the selected workspace history.';
       P.renderModel($('modelDetails'), dashboard.model, dashboard.model_error);
       $('inventorySummary').textContent = countLabel(dashboard.inventory.images, 'image') + ' / ' + countLabel(dashboard.inventory.ais_dir, 'AIS file');
       const training = dashboard.training_inventory;
@@ -159,7 +159,12 @@
       const currentPreset = Object.entries(dashboard.presets).find(([, bbox]) => bbox.every((value, i) => Math.abs(value - settings.bbox[i]) < .00001));
       if (currentPreset) $('preset').value = currentPreset[0];
       $('preset').onchange = () => { if (dashboard.presets[$('preset').value]) drawBounds(dashboard.presets[$('preset').value], true); P.logInteraction('choose_area_preset', {preset: $('preset').value}); };
-      ['west','south','east','north'].forEach(id => $(id).onchange = () => { $('preset').value = ''; drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false); });
+      ['west','south','east','north'].forEach(id => $(id).onchange = () => {
+        $('preset').value = '';
+        const values = ['west','south','east','north'].map(key => $(key).value.trim());
+        if (values.some(value => value === '')) return;
+        drawBounds(values.map(Number), false);
+      });
       ['start','end','images'].forEach(key => $(key).value = settings[key]);
       $('datePeriod').value = settings.date_period || (settings.start === settings.end ? 'date' : 'range');
       function applyDatePeriod() {
@@ -186,7 +191,12 @@
         e.preventDefault(); P.setStatus($('areaError'), '');
         try {
           applyDatePeriod();
-          await save({bbox: ['west','south','east','north'].map(k => Number($(k).value)), start: $('start').value, end: $('end').value, date_period: $('datePeriod').value, images: $('images').value});
+          const bbox = ['west','south','east','north'].map(k => {
+            const value = $(k).value.trim();
+            if (!value) throw new Error('Enter a coordinate for ' + k + '.');
+            return Number(value);
+          });
+          await save({bbox, start: $('start').value, end: $('end').value, date_period: $('datePeriod').value, images: $('images').value});
           P.logInteraction('save_area', dashboard.project); location.href = '/data';
         } catch (err) {
           P.setStatus($('areaError'), err.message, 'err');
@@ -238,6 +248,9 @@
     document.querySelectorAll('input').forEach(input => {
       input.addEventListener('change', () => P.logInteraction('change_setting', {field: input.id, value: input.value}));
       input.addEventListener('invalid', () => {
+        if (['west','south','east','north'].includes(input.id) && !input.value.trim()) {
+          P.setStatus($('areaError'), 'Enter a coordinate for ' + input.id + '.', 'err');
+        }
         const detail = input.closest('.ops-details');
         if (detail) detail.open = true;
         P.logInteraction('invalid_operation_setting', {field: input.id});

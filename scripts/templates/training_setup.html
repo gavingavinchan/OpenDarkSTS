@@ -61,7 +61,7 @@
           <label class="field"><span>Training dataset</span><select id="datasetSelect" aria-describedby="datasetHint"></select></label>
           <p class="hint" id="datasetHint">Loading exported datasets…</p>
           <div class="model-recommendation"><span class="setup-eyebrow">Starting model</span><strong id="startingModelSummary">Loading recommended model…</strong></div>
-          <label class="field"><span>Run name <small>Optional</small></span><input id="runName" placeholder="A name will be created for you"></label>
+          <label class="field"><span>Run name <small>Optional</small></span><input id="runName" aria-describedby="runNameHint" placeholder="A name will be created for you"></label><p class="hint" id="runNameHint">Use a name without spaces; underscores and hyphens are allowed.</p>
           <div class="setup-actions"><button id="saveConfig" class="primary" type="button" disabled>Save &amp; continue</button><button id="goTrain" type="button" disabled hidden>Continue to training</button></div>
           <p class="hint">Saving prepares the run. Training starts on the next page.</p>
           <div class="status" id="setupStatus" role="status" aria-live="polite"></div>
@@ -100,7 +100,7 @@
             </div><p class="hint">Auto chooses an available GPU, then CPU. The saved setup records the actual device so it can be reproduced.</p>
           </section>
           <section class="advanced-section"><h3>Image variations (augmentation)</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><label class="field"><span>Augmentation preset</span><select id="augPreset" disabled><option value="">Custom / library defaults</option><option value="none">None</option><option value="light">Light</option><option value="default">Default</option><option value="heavy">Heavy</option></select></label><p class="hint">Presets fill explicit values below. Adjust them before saving. Augmentation affects training images only.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button" disabled>Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
-          <section class="advanced-section"><h3>Save and inspect</h3><div class="row"><button id="saveOnly" type="button">Save without continuing</button><button id="previewCommand" type="button" disabled>Preview command</button></div><pre class="code" id="commandPreview">Save a setup to preview the exact training command.</pre><dl class="kv" id="commandMeta"></dl></section>
+          <section class="advanced-section"><h3>Save and inspect</h3><div class="row"><button id="saveOnly" type="button">Save without continuing</button><button id="previewCommand" type="button" disabled>Preview command</button></div><div class="status" id="advancedStatus" role="status" aria-live="polite"></div><pre class="code" id="commandPreview">Save a setup to preview the exact training command.</pre><dl class="kv" id="commandMeta"></dl></section>
           <section class="advanced-section"><h3>Saved training setups</h3><div class="scroll"><table><thead><tr><th>Config</th><th>Training batch</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead><tbody id="configBody"></tbody></table></div></section>
         </div>
       </details>
@@ -209,7 +209,8 @@
       const hint = document.getElementById('datasetHint');
       if (!dataset) { hint.textContent = 'No exported dataset available.'; return; }
       const counts = dataset.split_counts || {};
-      hint.textContent = (counts.train || 0) + ' training images · ' + (counts.val || 0) + ' validation images · ' + (counts.test || 0) + ' test images' +
+      const imageCount = (count, label) => count + ' ' + label + ' image' + (count === 1 ? '' : 's');
+      hint.textContent = imageCount(counts.train || 0, 'training') + ' · ' + imageCount(counts.val || 0, 'validation') + ' · ' + imageCount(counts.test || 0, 'test') +
         (dataset.selection_path ? '' : '. This source dataset has no reviewed export. Choose a reviewed dataset or export one in Dataset Builder.');
       const nameField = document.getElementById('runGroup');
       if (!nameField.value || nameField.value === state.autoGroup) {
@@ -240,7 +241,7 @@
       const hint = document.getElementById('weightHint');
       if (!weight) { hint.textContent = 'No starting weights found.'; return; }
       if (weight.documented) {
-        hint.textContent = 'Provenance documented in ' + weight.recreation_document + ' (' + weight.source + ').';
+        hint.innerHTML = 'Provenance documented in <a href="/training-recipe?weight=' + encodeURIComponent(weight.path) + '" target="_blank" rel="noopener">' + P.esc(weight.recreation_document) + '</a> (' + P.esc(weight.source) + ').';
         hint.style.color = '';
       } else {
         hint.textContent = 'WARNING: ' + weight.provenance_warning;
@@ -256,12 +257,19 @@
     }
 
     async function saveConfig(continueAfter) {
+      const statusId = continueAfter ? 'setupStatus' : 'advancedStatus';
       const dataset = currentDataset();
       const weight = currentWeight();
-      if (!dataset || !weight) { P.setStatus('setupStatus', 'Pick an exported dataset and a starting weight first.', 'err'); return; }
-      if (!dataset.selection_path) { P.setStatus('setupStatus', 'Choose a reviewed dataset, or export the reviewed images in Dataset Builder first.', 'err'); return; }
+      if (!dataset || !weight) { P.setStatus(statusId, 'Pick an exported dataset and a starting weight first.', 'err'); return; }
+      if (!dataset.selection_path) { P.setStatus(statusId, 'Choose a reviewed dataset, or export the reviewed images in Dataset Builder first.', 'err'); return; }
       const runGroup = document.getElementById('runGroup').value.trim();
       const runName = document.getElementById('runName').value.trim() || 'training_' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0,14);
+      const runField = document.getElementById('runName');
+      runField.ariaInvalid = String(/\s/.test(runName));
+      if (/\s/.test(runName)) {
+        P.setStatus(statusId, 'Run name must not contain spaces. Use underscores or hyphens instead.', 'err');
+        return;
+      }
       const explicitName = document.getElementById('configName').value.trim();
       const payload = {
         dataset_name: dataset.dataset_name,
@@ -281,13 +289,13 @@
         selection_path: dataset.selection_path,
         config_name: explicitName || (runGroup + '_' + runName),
       };
-      P.setStatus('setupStatus', 'Saving training config…');
+      P.setStatus(statusId, 'Saving training config…');
       document.getElementById('saveConfig').disabled = true;
       try {
         const data = await P.api('/api/training/configs', { method: 'POST', body: payload });
         state.configPath = data.config_path;
         setFieldValue('runName', data.config.run_name);
-        P.setStatus('setupStatus', 'Setup saved. ' + (data.readiness.ready ? 'Ready to continue.' : 'Resolve the items shown before training.'), data.readiness.ready ? 'ok' : 'err');
+        P.setStatus(statusId, 'Setup saved. ' + (data.readiness.ready ? 'Ready to continue.' : 'Resolve the items shown before training.'), data.readiness.ready ? 'ok' : 'err');
         document.getElementById('checkReadiness').disabled = false;
         document.getElementById('checkReadiness').hidden = false;
         document.getElementById('previewCommand').disabled = false;
@@ -295,7 +303,7 @@
         await loadConfigs();
         if (continueAfter && state.ready) goToTraining();
       } catch (error) {
-        P.setStatus('setupStatus', 'Save failed: ' + error.message, 'err');
+        P.setStatus(statusId, 'Save failed: ' + error.message, 'err');
       } finally {
         document.getElementById('saveConfig').disabled = false;
       }

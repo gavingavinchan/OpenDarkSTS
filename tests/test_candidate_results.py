@@ -41,7 +41,9 @@ def test_transfer_retains_human_review_and_scene_group(run, verdict, label):
     results.review_detection(run, 'one', verdict, training_label=label)
     transfer = results.send_to_improve(run, 'one')
     doc = json.loads(open(transfer['review_path']).read())
-    assert doc['review_status'] == 'completed'
+    assert doc['review_status'] == 'overview_1'
+    assert doc['context_review_required'] is True
+    assert doc['detections'][0]['reviewed'] is True
     assert doc['detections'][0]['review_label'] == (label or 'ships_sts')
     assert results.send_to_improve(run, 'one') == transfer
     with pytest.raises(ValueError, match='Already sent'):
@@ -119,7 +121,7 @@ def test_same_crop_from_another_run_reuses_review_and_rejects_conflicting_label(
     for name in ['run.json','dark_sts.json']:
         shutil.copyfile(run/name, third/name)
     results.review_detection(third, 'one', 'not_sts', training_label='neither')
-    with pytest.raises(ValueError, match='different completed label'):
+    with pytest.raises(ValueError, match='different reviewed label'):
         results.send_to_improve(third, 'one')
     doc = json.loads(open(first['review_path']).read())
     assert doc['detections'][0]['review_label'] == 'ships_sts'
@@ -167,3 +169,23 @@ def test_different_candidates_in_identical_context_keep_distinct_labels(run):
     second = results.send_to_improve(run,'two')
     assert first['image_key'] != second['image_key']
     assert json.loads(open(first['review_path']).read())['detections'][0]['review_label'] == 'ships_sts'
+
+
+def test_transferred_context_requires_explicit_image_completion(run):
+    from scripts import visual_review_lib as review
+    results.review_detection(run, 'one', 'real_sts')
+    transfer = results.send_to_improve(run, 'one')
+    path = transfer['review_path']
+    doc = review.load_review_document(path)
+    # Opening, starting detail, or automatically completing box review cannot
+    # certify that the surrounding image contains no additional vessels.
+    assert review.sync_review_status(doc)[0] != 'completed'
+    assert review.start_detail_mode(doc)[0] != 'completed'
+    assert review.advance_detail_cursor(doc)[0] != 'completed'
+    review.save_review_document(doc, path)
+    assert review.load_review_document(path)['context_review_required']
+    assert doc['detections'][0]['reviewed']
+    review.complete_image_review(doc)
+    assert doc['review_status'] == 'completed'
+    assert not doc.get('context_review_required')
+    assert review.sync_review_status(doc)[0] == 'completed'

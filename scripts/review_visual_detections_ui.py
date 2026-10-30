@@ -92,10 +92,6 @@ QUEUE_WINDOW_RADIUS = 80
 QUEUE_CACHE_LOCK = threading.Lock()
 QUEUE_CACHE: list[dict] | None = None
 
-# DELETE BEFORE SHIP: temporary interaction logger for diagnosing missed UI saves.
-DEBUG_INTERACTION_LOG_PATH = repo_resolve("workspace/reports/visual_review_interactions_DELETE_BEFORE_SHIP.jsonl")
-
-
 def render_bbox_overview_html() -> str:
     try:
         from .training_pipeline_ui import render_app_html
@@ -110,18 +106,6 @@ def json_body(handler: BaseHTTPRequestHandler) -> dict:
         return {}
     raw = handler.rfile.read(content_length)
     return json.loads(raw.decode("utf-8")) if raw else {}
-
-
-def append_debug_interaction_event(payload: dict) -> None:
-    # DELETE BEFORE SHIP: temporary click/key logger. Remove this helper and endpoint before release.
-    DEBUG_INTERACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "server_received_at": utcnow_iso(),
-        "reviewer": REVIEWER,
-        "event": payload,
-    }
-    with DEBUG_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def invalidate_review_queue_cache() -> None:
@@ -323,6 +307,7 @@ def build_state(image_id: str | None, album_id: str | None = None) -> dict:
             "height": int(review["height"]),
             "tile_count": 1,
             "review_status": review["review_status"],
+            "context_review_required": bool(review.get("context_review_required")),
             "detail_cursor": review.get("detail_cursor"),
             "cache_url": cache_url_for(cache_path),
         },
@@ -813,7 +798,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <div class="map-nav-buttons">
             <button onclick="navigateImageButton(-1, event)" data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
             <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
-            <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
+            <button onclick="advanceReview()" data-tooltip="Next detection [Right arrow]">Next</button>
             <button class="tooltip-right" onclick="navigateImageButton(1, event)" data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
           </div>
           <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
@@ -836,7 +821,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
         </div>
         <div>
-          <div class="hotkey-row"><span>Advance review</span><kbd>Space</kbd></div>
+          <div class="hotkey-row"><span>Accept current class (detail review)</span><kbd>Space</kbd></div>
           <div class="hotkey-row"><span>Prev detection</span><kbd>&#9664;</kbd></div>
           <div class="hotkey-row"><span>Next detection</span><kbd>&#9654;</kbd></div>
           <div class="hotkey-row"><span>Previous image</span><kbd>[</kbd></div>
@@ -1104,7 +1089,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
             <button class="warn" onclick="markSelectedNeither()" data-tooltip="Mark as background/false-positive for training [N]">Mark Neither</button>
             <button onclick="deleteSelectedDetection()" style="background:#7f1d1d;color:#fca5a5" data-tooltip="Permanently remove this box [Del]">Delete Box</button>
           </div>
-          <p class="note">Image completion is automatic once every active bbox has been reviewed.</p>
+          <p class="note">${{current.context_review_required ? 'Review the full context image for other vessels and add any missing boxes before completing it.' : 'Image completion is automatic once every active bbox has been reviewed.'}}</p>
+          ${{current.context_review_required ? `<button onclick="completeImage()" ${{counts.pending_active_detections ? 'disabled' : ''}}>Complete context review</button>` : ''}}
           <hr style="border:none;border-top:1px solid rgba(16,35,48,0.08);margin:4px 0">
           <div class="button-row">
             <button class="accent" onclick="startDetail()" data-tooltip="Enter per-detection review [R]">Start Detail Review</button>
@@ -1119,7 +1105,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           </div>
           <div class="button-row">
             <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Previous detection [Left arrow]">&#9664; Back</button>
-            <button class="secondary" onclick="advanceReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Right arrow / Space]">Accept / Next &#9654;</button>
+            <button class="secondary" onclick="acceptReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Space]">Accept / Next &#9654;</button>
           </div>
           <div class="button-row">
             <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">STS pair</button>
@@ -1360,7 +1346,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     async function acceptCurrentReviewChoice() {{
-      // Space/Right persists a pending Tab choice even for already-reviewed bboxes.
+      // Explicit acceptance persists a pending class choice for the current bbox.
       const target = getCurrentReviewTarget();
       if (!target || target.review_label === 'neither' || !target.is_active) return false;
       if (target.pending_review_label === 'neither') {{
@@ -1376,9 +1362,18 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       return true;
     }}
 
+    async function acceptReview() {{
+      if (!state?.image || state.image.review_status !== 'detail') return;
+      if (await acceptCurrentReviewChoice()) return;
+      await advanceReview();
+    }}
+
     async function advanceReview() {{
       if (!state || !state.image) return;
-      if (await acceptCurrentReviewChoice()) return;
+      if (state.image.review_status === 'detail') {{
+        await navigateDetail('next');
+        return;
+      }}
       const active = getActiveDetections();
       reviewCursorIndex++;
 
@@ -1413,6 +1408,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 
     async function retreatReview() {{
       if (!state || !state.image) return;
+      if (state.image.review_status === 'detail') {{
+        await navigateDetail('prev');
+        return;
+      }}
       const active = getActiveDetections();
 
       if (reviewCursorIndex <= 0) {{
@@ -1754,6 +1753,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 
     async function navigateImageButton(direction, event) {{
       if (event && event.shiftKey) {{
+        const count = state?.counts?.pending_active_detections || 0;
+        if (!confirm(`Accept ${{count}} unreviewed box${{count === 1 ? '' : 'es'}} and mark this image fully reviewed?`)) return;
         const marked = await markCurrentImageReviewed();
         if (!marked) return;
       }}
@@ -1771,71 +1772,6 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.error || 'Request failed');
       return data;
-    }}
-
-    // DELETE BEFORE SHIP: temporary full click/key logger for diagnosing missed review saves.
-    // DELETE BEFORE SHIP: remove logDebugInteraction plus both capture listeners before release.
-    function summarizeTarget(target) {{
-      if (!target) return null;
-      const text = (target.innerText || target.textContent || '').replace(/\\s+/g, ' ').trim();
-      return {{
-        tag: target.tagName || null,
-        id: target.id || null,
-        class_name: typeof target.className === 'string' ? target.className : null,
-        name: target.getAttribute ? target.getAttribute('name') : null,
-        type: target.getAttribute ? target.getAttribute('type') : null,
-        aria_label: target.getAttribute ? target.getAttribute('aria-label') : null,
-        title: target.getAttribute ? target.getAttribute('title') : null,
-        text: text.slice(0, 120),
-      }};
-    }}
-
-    function logDebugInteraction(kind, event) {{
-      // DELETE BEFORE SHIP: this intentionally logs every click and keydown.
-      const payload = {{
-        kind,
-        browser_time: new Date().toISOString(),
-        url: window.location.href,
-        image_id: state?.image?.image_id || null,
-        review_status: state?.image?.review_status || null,
-        selected_detection_id: selectedDetectionId || null,
-        current_detection_id: state?.current_detection_id || null,
-        target: summarizeTarget(event.target),
-        event_phase: event.eventPhase,
-        default_prevented_at_capture: event.defaultPrevented,
-      }};
-      if (kind === 'click') {{
-        payload.button = event.button;
-        payload.buttons = event.buttons;
-        payload.client_x = event.clientX;
-        payload.client_y = event.clientY;
-        payload.ctrl_key = event.ctrlKey;
-        payload.shift_key = event.shiftKey;
-        payload.alt_key = event.altKey;
-        payload.meta_key = event.metaKey;
-      }} else if (kind === 'keydown') {{
-        payload.key = event.key;
-        payload.code = event.code;
-        payload.repeat = event.repeat;
-        payload.ctrl_key = event.ctrlKey;
-        payload.shift_key = event.shiftKey;
-        payload.alt_key = event.altKey;
-        payload.meta_key = event.metaKey;
-        payload.active_tag = document.activeElement ? document.activeElement.tagName : null;
-      }}
-
-      console.debug('[DELETE BEFORE SHIP visual-review-interaction]', payload);
-      const body = JSON.stringify(payload);
-      if (navigator.sendBeacon) {{
-        navigator.sendBeacon('/api/debug-interaction', new Blob([body], {{ type: 'application/json' }}));
-        return;
-      }}
-      fetch('/api/debug-interaction', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body,
-        keepalive: true,
-      }}).catch(() => {{}});
     }}
 
     function onClassSelectChange(selectEl) {{
@@ -1860,10 +1796,6 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       const nextImageId = direction < 0 ? state.queue.prev_image_id : state.queue.next_image_id;
       if (nextImageId) await openImage(nextImageId);
     }}
-
-    // DELETE BEFORE SHIP: temporary capture-phase diagnostics for every click and keydown.
-    document.addEventListener('click', event => logDebugInteraction('click', event), true);
-    document.addEventListener('keydown', event => logDebugInteraction('keydown', event), true);
 
     document.addEventListener('keydown', async event => {{
       if (event.key === 'Escape' && document.getElementById('hotkeyOverlay')?.classList.contains('visible')) {{
@@ -1902,10 +1834,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         return;
       }}
 
-      // Space: advance through review cycle
+      // Space: advance by explicit acceptance in detail review only
       if (key === ' ') {{
         event.preventDefault();
-        await advanceReview();
+        await acceptReview();
         return;
       }}
 
@@ -2033,12 +1965,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         payload = json_body(self)
         album_id = self._query_album_id(parsed)
-
-        if parsed.path == "/api/debug-interaction":
-            # DELETE BEFORE SHIP: temporary diagnostic endpoint for click/key logging.
-            append_debug_interaction_event(payload)
-            self._respond_json({"ok": True})
-            return
 
         try:
             image_id = parse_image_id(payload)

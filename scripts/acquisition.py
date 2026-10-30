@@ -81,6 +81,8 @@ def date_range(start: str, end: str | None = None) -> list[str]:
 
 
 def validate_bbox(bbox) -> list[float]:
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or any(value is None or str(value).strip() == "" for value in bbox):
+        raise ValueError("Enter all four area coordinates: west, south, east, and north.")
     values = list(map(float, bbox))
     if len(values) != 4 or not all(map(math.isfinite, values)):
         raise ValueError("Bounds must contain four finite coordinates")

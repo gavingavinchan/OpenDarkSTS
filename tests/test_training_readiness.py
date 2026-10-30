@@ -58,7 +58,7 @@ def test_training_readiness_passes_for_exported_dataset_and_valid_config(tmp_pat
     assert result["ready"] is True
     assert result["missing"] == []
     assert result["warnings"] == [
-        "Class names may be singular/plural duplicates: 'ship' and 'ships'; allowed as intentional project classes",
+        "Class names 'ship' and 'ships' are similar. Confirm that they describe distinct classes. These names are permitted for this project.",
         "test split has no images; final test metrics will be unavailable",
     ]
 

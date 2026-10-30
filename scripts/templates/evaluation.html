@@ -102,7 +102,7 @@
       state.groups = data.run_groups || [];
       picker.innerHTML = state.groups.map(function (group) {
         return '<option value="' + P.esc(group.run_group) + '">' + P.esc(group.run_group) +
-          ' (' + group.run_count + ' runs, ' + group.test_metrics_count + ' with test metrics)</option>';
+          ' (' + group.run_count + (group.run_count === 1 ? ' run, ' : ' runs, ') + group.test_metrics_count + ' with test metrics)</option>';
       }).join('') || '<option value="">No completed training batches yet</option>';
       if (previous && state.groups.some(function (group) { return group.run_group === previous; })) {
         picker.value = previous;
@@ -128,7 +128,7 @@
           document.getElementById('promotionReason').placeholder = data.suggested_reason || 'why this run wins';
           updatePromoteButton();
         }
-        P.setStatus('groupStatus', group + ': ' + state.runs.length + ' run(s). Suggested: ' +
+        P.setStatus('groupStatus', group + ': ' + state.runs.length + (state.runs.length === 1 ? ' run. Suggested: ' : ' runs. Suggested: ') +
           (data.suggested_run_name || 'none') + '.', 'ok');
       } catch (error) {
         state.runs = [];
@@ -238,7 +238,7 @@
         }
         await loadReport(true);
         P.setStatus('reportStatus', 'Wrote ' + data.report_markdown_path + ' (' + data.run_count +
-          ' runs; recommended ' + (data.selected_run_name || 'none') + ').', 'ok');
+          (data.run_count === 1 ? ' run; recommended ' : ' runs; recommended ') + (data.selected_run_name || 'none') + ').', 'ok');
       } catch (error) {
         P.setStatus('reportStatus', 'Report failed: ' + error.message, 'err');
       }
@@ -294,6 +294,9 @@
         detail.textContent = JSON.stringify(data, null, 2);
         P.setStatus('promoteStatus', 'Promoted to ' + data.promoted_path + '. Recreation record: ' + data.recreation_path, 'ok');
         await loadCurrentModel();
+        await writeReport();
+        document.getElementById('promoteRun').value = runName;
+        updatePromoteButton();
       } catch (error) {
         detail.style.display = 'block';
         detail.textContent = 'Promotion could not complete:\n\n' + error.message;

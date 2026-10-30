@@ -13,9 +13,8 @@
  }else $('resultMapStatus').textContent='Map viewer unavailable. Candidate coordinates and evidence remain available below.';
  const query=()=>new URLSearchParams({directory,detection_id:selected||''});
  function statusText(r){
-  const source=(runs.find(run=>run.directory===directory)||{}).ais_source;
-  const paper=r.dark_status==='AIS_INVALID'?'AIS_ERROR':r.dark_status==='AIS_MISSING'?(source?'AIS_ERROR':'DETECTED_ONLY'):r.dark_status;
-  return paper+(paper!==r.dark_status?' / '+r.dark_status:'')+' — '+r.ais_status_text;
+  const paper=r.dark_status==='AIS_INVALID'?'AIS_ERROR':r.dark_status==='AIS_MISSING'?'DETECTED_ONLY':r.dark_status;
+  return paper+(paper!==r.dark_status?' (stored as '+r.dark_status+')':'')+' — '+r.ais_status_text;
  }
  const verdictLabel = value => ({real_sts:'Real STS',not_sts:'Not STS',unclear:'Unclear'}[value] || 'Unreviewed');
  // USCG AIS Encoding Guide: https://www.navcen.uscg.gov/sites/default/files/pdf/AIS/AISGuide.pdf
