@@ -264,6 +264,30 @@ Third-party notices are in [docs/licensing.md](docs/licensing.md).
 Contains modified Copernicus Sentinel data 2020–2025. AIS data: NOAA Office for
 Coastal Management and US Coast Guard (Marine Cadastre).
 
+## Authors and contributions
+
+OpenDarkSTS was developed at the Department of Ocean Engineering, Texas A&M
+University, by the authors of the SNAME 2026 paper:
+
+- **Pou Hei (Gavin) Chan**: the training tool (Improve), the annotation and review of
+  the annotation dataset, and the unified application, including its detection and
+  AIS-matching pipeline and packaging.
+- **Madhulika Dey**: the operator dashboard on which the Detect section is based
+  (Intelligence HQ, Scan Images, STS Events, Live Map, Export Report, sensitivity
+  presets and dark-status labels), the NOAA AIS Manager, the annotated source image
+  set that forms a large part of the v4 training dataset, and the polygon-to-box
+  conversion and box-preview utilities.
+- **Sohail Ansari**: the Sentinel-2 imagery downloader for the Copernicus Data Space
+  (catalogue search, true-colour rendering and 10 m tiled requests) on which the
+  imagery download in Data & AIS Manager is based.
+- **Paul M. Koola**: co-author of the paper.
+
+The original contributions are preserved in the repository history as pull
+requests [#2](https://github.com/gavingavinchan/OpenDarkSTS/pull/2),
+[#3](https://github.com/gavingavinchan/OpenDarkSTS/pull/3) and
+[#4](https://github.com/gavingavinchan/OpenDarkSTS/pull/4); this release
+reimplements their features within the single application.
+
 ## Citation
 
 If you use OpenDarkSTS, please cite:
