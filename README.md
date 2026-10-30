@@ -20,71 +20,94 @@ published on Hugging Face (see [Datasets](#datasets)).
 
 ## Install and start
 
-Use Python 3.11–3.13 (3.12 recommended). A GPU is optional for detection; the
-PyTorch download can take several minutes.
+Use Python 3.11–3.13 (3.12 recommended) on Linux or Windows. A GPU is optional for
+detection. The PyTorch download can take several minutes; on Windows, pip installs
+the CPU version of PyTorch, so install the CUDA build from [pytorch.org](https://pytorch.org)
+first if you want to use an NVIDIA GPU.
+
+Linux:
 
 ```bash
 git clone https://github.com/gavingavinchan/OpenDarkSTS.git
 cd OpenDarkSTS
-python -m venv .venv
-# Linux
+python3 -m venv .venv
 source .venv/bin/activate
-# Windows PowerShell, instead:
-# .venv\Scripts\Activate.ps1
-python -m pip install -e ".[test]"
+python -m pip install -e .
 ```
 
-From the folder where the workspace should live:
+Windows (PowerShell):
+
+```powershell
+git clone https://github.com/gavingavinchan/OpenDarkSTS.git
+cd OpenDarkSTS
+py -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # allows the activation script in this window only
+.venv\Scripts\Activate.ps1
+python -m pip install -e .
+```
+
+In Command Prompt, activate with `.venv\Scripts\activate.bat` instead. Then, in the
+same terminal and from the folder where your work should be stored:
 
 ```bash
 opendarksts init
 opendarksts serve
 ```
 
-`init` creates the workspace, copies a small example, and downloads the default
-model from the [v0.1 release](https://github.com/gavingavinchan/OpenDarkSTS/releases/tag/v0.1),
-checking its SHA-256. If you already have the checkpoint file, use
+`init` creates a `workspace` folder in the current folder, copies a small example
+into it, and downloads the default model ([Default model](#default-model)), checking
+its SHA-256. If you already have the checkpoint file, use
 `opendarksts init --weights PATH_TO_CHECKPOINT` instead.
 
-Open the URL printed by `serve` (normally http://127.0.0.1:8766). The server runs in
-the background and writes its log to `workspace/reports/server/`; running `serve`
-again returns the existing server. Every command accepts `--workspace PATH` before
-its subcommand, or reads `OPENDARKSTS_WORKSPACE`.
+`serve` starts the application in the background; open the address it prints
+(normally http://127.0.0.1:8766). Running `serve` again returns the running server;
+`opendarksts stop` stops it. Background jobs such as downloads keep running after
+the server stops; `opendarksts jobs` lists them. To keep the workspace elsewhere,
+put `--workspace PATH` before the command (`opendarksts --workspace "D:\sts work" serve`)
+or set `OPENDARKSTS_WORKSPACE`, and use the same choice for `init`, `serve` and `stop`.
 
 ## Try the bundled example
 
-No credentials or downloads are needed after `init`:
+No downloads or credentials are needed after `init`.
+
+In the application: open **Detect**, click **Use the bundled example**, then go
+through **Data & AIS Manager** → **Continue to Scan Images** → **Start detection**.
+When the job finishes, open **STS Events**. The example selects the example image,
+its AIS file, the date 2020-01-24, a matching area in the Gulf of Mexico, confidence
+0.25 and an AIS search radius of 1,000 m.
+
+The result is one candidate near 28.6564 N, 94.3228 W (confidence about 0.73) with
+two AIS vessels within 1,000 m that day, so it is labelled `AIS_PRESENT`. On the
+**Live Map**, the green ring is the satellite candidate and the orange dots are the
+same-day AIS positions. This shows two vessels broadcasting nearby; it does not
+identify either visible hull, nor does it establish that a transfer took place.
+
+From the command line, the same example is:
 
 ```bash
 opendarksts run --images workspace/inputs/example/2020-01-24_example.tiff --ais-dir workspace/inputs/example/AIS_2020_01_24.csv
 ```
 
 The command prints its output folder, which holds `dark_sts.csv`, `dark_sts.json`,
-`run.json` and annotated `previews/`. The example produces one candidate near
-28.6564 N, 94.3228 W with two AIS vessels within 1,000 m that day (`AIS_PRESENT`).
-The example's [provenance and limits](opendarksts/example/README.md) are copied
-into the workspace.
-
-In the web application: on **Detect → Area & dates**, enter the example imagery
-folder `workspace/inputs/example` and the date **2020-01-24**; on **Data / AIS
-Manager**, select the example AIS CSV; then start the scan on **Run / Scan Images**.
-Candidates appear on **Results / STS Events**, with the Live Map and Export Report.
+`run.json` and annotated `previews/`; the run also appears in the application's scan
+history. The example's [provenance and limits](opendarksts/example/README.md) are
+copied into the workspace.
 
 ## Where the paper's features are
 
 | Paper | Application |
 |---|---|
-| Intelligence HQ (cumulative statistics) | **Home** |
-| Scan Images (sensitivity Low 0.10 / Medium 0.25 / High 0.45, AIS search radius) | **Detect → Run / Scan Images**; choose imagery and dates on **Area & dates** |
-| AIS Manager (NOAA Marine Cadastre download, region presets, custom box) | **Detect → Data / AIS Manager**, with dates and region on **Area & dates** |
-| STS Events (annotated image, GPS position, nearby vessels) | **Detect → Results / STS Events** |
-| Live Map | **Results → Live Map** (click a marker for its evidence) |
-| Export Report (CSV / JSON) | **Results → Export Report** (also GeoJSON), or **Jobs** |
-| Scan history | **Jobs**, and the saved-run selector on **Results** |
-| Developer Mode | **Improve**; **Home → Operator reference & Training Tool** explains the link |
-| Training Step 1: Import and album-based provenance | **Improve → 1 Import & albums** |
+| Intelligence HQ (statistics, current model) | **Intelligence HQ** (the start page) |
+| Scan Images (sensitivity Low 0.10 / Medium 0.25 / High 0.45, AIS search radius) | **Detect → Scan Images**; imagery folder, dates and area on **Area & dates** |
+| AIS Manager (NOAA Marine Cadastre download, region presets, custom area) | **Detect → Data & AIS Manager**, with dates and area on **Area & dates** |
+| STS Events (annotated image, GPS position, nearby vessels) | **Detect → STS Events** |
+| Live Map | **STS Events → Live Map** (click a marker for its evidence) |
+| Export Report (CSV / JSON) | **STS Events → Export Report** (also GeoJSON), or **Jobs & scan history** |
+| Scan history | **Jobs & scan history**, and the scan selector on **STS Events** |
+| Developer Mode | **Improve**; **Intelligence HQ → Operator reference & Training Tool** explains the link |
+| Training Step 1: Import and album-based provenance | **Improve → 1 Import imagery & albums** |
 | Step 2: Auto-assisted bounding-box annotation | **Improve → 2 Annotation** |
-| Step 3: Reviewed bounding-box overview | **Improve → 3 Reviewed boxes** |
+| Step 3: Reviewed bounding-box overview | **Improve → 3 Reviewed bounding-box overview** |
 | Step 4: Dataset selection | **Improve → 4 Dataset Selection** |
 | Step 5: Augmentation and training setup | **Improve → 5 Training Setup** (augmentation presets under Advanced) |
 | Step 6: Train detector | **Improve → 6 Train detector** |
@@ -92,17 +115,36 @@ Candidates appear on **Results / STS Events**, with the Live Map and Export Repo
 
 Since the paper, the two tools have been merged into one application that runs on
 Linux and Windows, and the evaluation that the paper reports separately is now a
-seventh step in Improve. A detailed comparison is in
+seventh step in Improve. Some features described in the paper are not yet in this
+release: uploading tiles through the browser (enter a folder instead), a
+clear-history button, and AIS presets outside the US (NOAA data cover US waters
+only). A detailed comparison is in
 [docs/paper_release_alignment.md](docs/paper_release_alignment.md).
 
 ## Use your own area and dates
 
-On **Detect → Area & dates**, choose a US preset, draw a box on the map, or enter
-an existing image folder. **Data / AIS Manager** downloads Sentinel-2 imagery and
-whole NOAA AIS days in the background. Sentinel-2 downloads need a free Copernicus
-Data Space account: set `CDSE_CLIENT_ID` and `CDSE_CLIENT_SECRET` in the server's
-environment before starting it. NOAA downloads need no credentials, but a full AIS
-day is large. See [acquisition](docs/acquisition.md).
+On **Detect → Area & dates**, choose a US preset or draw a box on the map, and enter
+dates as `YYYY-MM-DD`. The area controls what is downloaded; images already in a
+folder are selected by the date in their file names and are not cropped to the area.
+**Data & AIS Manager** downloads Sentinel-2 imagery and whole NOAA AIS days in the
+background, with progress and a Cancel button under **Jobs & scan history**. A full
+AIS day is about 200 MB compressed. See [acquisition](docs/acquisition.md).
+
+NOAA AIS downloads need no account. Sentinel-2 downloads need a free
+[Copernicus Data Space](https://dataspace.copernicus.eu) account and its client
+credentials, set in the terminal before starting the server:
+
+```bash
+# Linux
+export CDSE_CLIENT_ID=...
+export CDSE_CLIENT_SECRET=...
+# Windows PowerShell
+$env:CDSE_CLIENT_ID="..."
+$env:CDSE_CLIENT_SECRET="..."
+```
+
+then run `opendarksts stop` and `opendarksts serve` again from that terminal. Until
+both are set, the imagery download button is disabled and the page explains why.
 
 The same operations are available from the command line:
 
@@ -114,7 +156,8 @@ opendarksts run --images workspace/inputs/imagery --ais-dir workspace/inputs/ais
 ```
 
 `opendarksts project --check-ready` checks the saved Detect settings and reports
-the same image count, blockers and AIS warnings as the Run page.
+the same image count, blockers and AIS warnings as **Scan Images**. In
+`opendarksts run`, `--ais-dir` accepts either an AIS folder or a single daily CSV.
 
 Input images must be north-up EPSG:4326 (WGS84). Plain RGB images need a matching
 `IMAGE.json` containing `{"bbox": [west, south, east, north]}`. File names must
@@ -161,7 +204,10 @@ results (21 images, 92 instances):
 The test split is small, and some test images share source scenes with training
 images. The [model card](opendarksts/assets/model_card.md) gives the SHA-256,
 training settings and limitations. A model trained in **Improve** can be promoted
-on step 7 to replace the default for both Detect and annotation prefill.
+on step 7 to replace the default for both Detect and annotation prefill; the same
+page switches back to the bundled YOLO11s. **Intelligence HQ** and step 7 show the
+current model and its recorded scores. Training Setup starts from 150 epochs with
+patience 30; the paper model used 300 and 60 (see the model card for all settings).
 
 ## Improve the model
 
