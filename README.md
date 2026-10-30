@@ -25,7 +25,9 @@ datasets are published on Hugging Face:
 ## Install and start
 
 Use Python 3.11–3.13 (3.12 recommended) on Linux or Windows. A GPU is optional for
-detection. The PyTorch download can take several minutes; on Windows, pip installs
+detection. The installation downloads PyTorch, which on Linux includes about 2 GB of
+NVIDIA libraries and can take half an hour on a slow connection; if pip stops with a
+network error, run the same command again. On Windows, pip installs
 the CPU version of PyTorch, so install the CUDA build from [pytorch.org](https://pytorch.org)
 first if you want to use an NVIDIA GPU.
 
@@ -77,7 +79,8 @@ No downloads or credentials are needed after `init`.
 
 In the application: open **Detect**, click **Use the bundled example**, then go
 through **Data & AIS Manager** → **Continue to Scan Images** → **Start detection**.
-When the job finishes, open **STS Events**. The example selects the example image,
+The application then shows the job on **Jobs**; when it finishes, click **Open STS
+Events & Live Map** in the job output. The example selects the example image,
 its AIS file, the date 2020-01-24, a matching area in the Gulf of Mexico, confidence
 0.25 and an AIS search radius of 1,000 m.
 
