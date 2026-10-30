@@ -86,7 +86,8 @@ pre.log { max-height: 320px; }
 pre.md { background: #fff; color: var(--ink); border: 1px solid var(--rule); max-height: 520px; font: 13px/1.6 var(--sans); }
 pre.md p, pre.md div { margin: 3px 0; }
 pre.md h2, pre.md h3, pre.md h4 { margin: 12px 0 4px; font-size: 14px; }
-pre.md table { margin: 4px 0 8px; }
+pre.md table { margin: 4px 0 8px; min-width: 620px; word-break: normal; }
+pre.md td { white-space: nowrap; }
 .checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
 .checklist li { display: flex; gap: 9px; align-items: flex-start; }
 .checklist li::before { content: "✓"; color: var(--green); font-weight: 600; }

@@ -187,7 +187,7 @@
     const rows = [['All classes', '', 'instances'], ['Single ship (ship)', 'ship_', 'ship_instances'], ['STS pair (ships)', 'ships_', 'ships_instances']];
     node.innerHTML = '<h3>' + esc(model.name || model.filename) + '</h3><p>' +
       (metrics.split === 'test' ? 'Held-out test results: ' : 'Recorded evaluation results: ') +
-      esc(metrics.images === undefined ? 'image count not recorded' : metrics.images + ' images') +
+      esc(metrics.images === undefined ? 'image count not recorded' : metrics.images + (Number(metrics.images) === 1 ? ' image' : ' images')) +
       '. These scores describe this dataset; performance in other areas can differ.</p>' +
       (Object.keys(metrics).length ? '<div class="scroll"><table aria-label="Model performance"><thead><tr><th>Class</th><th>Objects</th><th>Precision</th><th>Recall</th><th>mAP50</th><th>mAP50–95</th></tr></thead><tbody>' +
       rows.map(([label, prefix, count]) => '<tr><td>' + esc(label) + '</td><td>' + esc(metrics[count] ?? '—') + '</td>' +

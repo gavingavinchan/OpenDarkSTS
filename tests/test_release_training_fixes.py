@@ -138,6 +138,8 @@ const node={};
 window.Pipeline.renderModel(node,{filename:'new.pt',metrics:{split:'test',images:7,'mAP50-95':.12345,mAP50:.2}});
 assert.match(node.innerHTML,/Held-out test results: 7 images/);
 assert.match(node.innerHTML,/<td>0.123<\/td>/);
+window.Pipeline.renderModel(node,{filename:'one.pt',metrics:{split:'test',images:1}});
+assert.match(node.innerHTML,/Held-out test results: 1 image\./);
 ''')
 
 
