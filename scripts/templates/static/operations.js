@@ -248,6 +248,9 @@
     document.querySelectorAll('input').forEach(input => {
       input.addEventListener('change', () => P.logInteraction('change_setting', {field: input.id, value: input.value}));
       input.addEventListener('invalid', () => {
+        if (['west','south','east','north'].includes(input.id) && !input.value.trim()) {
+          P.setStatus($('areaError'), 'Enter a coordinate for ' + input.id + '.', 'err');
+        }
         const detail = input.closest('.ops-details');
         if (detail) detail.open = true;
         P.logInteraction('invalid_operation_setting', {field: input.id});

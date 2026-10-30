@@ -149,3 +149,18 @@ assert.equal(saves,0);
 assert.match(el('areaError').textContent,/Enter a coordinate for east/);
 })().catch(e=>{console.error(e);process.exitCode=1});
 ''')
+
+
+def test_native_coordinate_validation_shows_inline_error():
+    source=(ROOT/'scripts/templates/static/operations.js').read_text()
+    handler=source.split("    document.querySelectorAll('input').forEach(input => {",1)[1].split("    document.querySelectorAll('.ops-details')",1)[0]
+    run_js(r'''
+const assert=require('assert/strict');let invalid;
+const areaError={},detail={open:false};
+const $=id=>areaError;
+const input={id:'east',value:'',closest:()=>detail,addEventListener:(event,fn)=>{if(event==='invalid')invalid=fn}};
+const P={setStatus:(node,message)=>node.textContent=message,logInteraction(){}};
+const document={querySelectorAll:()=>[input]};
+''' + "document.querySelectorAll('input').forEach(input => {" + handler + r'''
+invalid();assert.equal(areaError.textContent,'Enter a coordinate for east.');assert(detail.open);
+''')
