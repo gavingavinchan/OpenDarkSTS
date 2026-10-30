@@ -497,7 +497,7 @@ mAP50-95, which is the fitness Ultralytics uses to decide when to save `best.pt`
 checkpoint offered for promotion, so ranking and display use it; the last row is still
 reported separately as `final_validation_metrics`, and `best_validation_epoch` names the
 epoch. Using the final row instead made a run that peaked early and collapsed look as bad as
-its last epoch and could recommend a worse checkpoint from another run. Test metrics come from `test_metrics.json` in the run directory when `run-test-split` has been used. The promoted run defaults to the highest test mAP50, falling back to validation mAP50; override with `--promote-run-name` and `--promotion-reason`. `--baseline` accepts a JSON file of baseline metrics, and `--include-runs` embeds the full per-run detail in the envelope.
+its last epoch and could recommend a worse checkpoint from another run. Test metrics come from `test_metrics.json` in the run directory when `run-test-split` has been used. The recommended run defaults to the highest test mAP50, falling back to validation mAP50; override with `--promote-run-name` and `--promotion-reason`. `--baseline` accepts a JSON file of baseline metrics, and `--include-runs` embeds the full per-run detail in the envelope.
 
 ### `run-test-split`
 
@@ -512,23 +512,23 @@ The dataset and image size are read from the run's `training_metadata.json` unle
 
 ### `promote-weight`
 
-Copies a run's `best.pt` to `workspace/model_weights/<target-name>.pt`.
+Copies a run's `best.pt` to `workspace/model_weights/<target-name>.pt` and selects it for new Detect scans.
 
 ```bash
 .venv/bin/python scripts/training_pipeline_cli.py --pretty promote-weight \
   --run-group <run_group> --run-name <run_name> \
-  --target-name yolov8n_example_2026-05-20_best.pt \
-  --recreation-doc-updated
+  --target-name improved_best.pt
 ```
 
-The command enforces the repository YOLO weight reproducibility rule and exits `2` without copying anything when either check fails:
+Improve runs automatically preserve `<target-name>.recreation.json` beside the weight before selection changes. This record contains the weight hash, source run, recorded training command and configuration, dataset hashes, source revision, environment, available dataset-manifest and class-definition snapshots, and known reproducibility gaps. No application source edit or acknowledgement is required. Missing or incomplete training provenance prevents automatic promotion. Older/manual runs can still use `--recreation-doc-updated` with an existing recipe naming the exact target in the recreation document; that recipe is copied into the workspace record. `--overwrite` is required to replace an existing weight. The bundled default filename is reserved.
 
-- `--recreation-doc-updated` must be passed, acknowledging that `docs/yolo_weight_recreation.md` is already updated.
-- `--target-name` must already be mentioned in `docs/yolo_weight_recreation.md` as a whole
-  filename token. A substring match is not enough: promoting to `26n.pt` is refused even
-  though the document mentions `yolo26n.pt`, because the promoted destination has no recipe.
+### `restore-default-model`
 
-Document the weight first, then promote. `--overwrite` is required to replace an existing promoted weight.
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty restore-default-model
+```
+
+Selects the installed bundled default YOLO11s after verifying its published checksum. The GUI provides the same action and shows the current model on Evaluation. A missing or changed default requires `opendarksts init` before restoration. Existing improved weights and their recreation records are retained.
 
 ### `image-key`
 
@@ -701,6 +701,8 @@ The full pipeline-managed retraining loop, with no hand-written YOLO shell comma
 | POST | `/api/training/runs/<run_group>/<run_name>/test-split` | `run_test_split` |
 | POST | `/api/training/evaluation-report` | `build_run_group_evaluation_report` |
 | POST | `/api/training/promote-weight` | `promote_weight` |
+| GET | `/api/training/model` | `model_selection_status` |
+| POST | `/api/training/restore-default` | `restore_default_model` |
 | GET | `/api/training/run-groups` | `list_run_groups` |
 | GET | `/api/training/run-groups/<run_group>` | `collect_run_group_summaries` + `best_run_by_metric` |
 | GET | `/api/training/evaluation-report?run_group=<run_group>` | reads `workspace/reports/<run_group>_evaluation.md` |

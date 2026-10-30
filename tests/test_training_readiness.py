@@ -162,7 +162,7 @@ def test_promotion_doc_check_matches_whole_weight_names(tmp_path: Path) -> None:
     try:
         promote("26n.pt")
     except ValueError as exc:
-        assert "not mentioned" in str(exc)
+        assert "metadata is missing" in str(exc)
     else:  # pragma: no cover - the substring match would have let this through
         raise AssertionError("26n.pt must not be accepted just because yolo26n.pt is documented")
     assert not (tmp_path / "model_weights" / "26n.pt").exists()

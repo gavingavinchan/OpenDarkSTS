@@ -819,6 +819,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/training/exported-datasets":
             self._handle_list_exported_datasets()
             return
+        if path == "/api/training/model":
+            try:
+                self._respond_json(pipeline.model_selection_status(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
+            except ValueError as exc:
+                self._respond_json({"error": str(exc)}, status=400)
+            return
         if path == "/api/training/configs":
             self._handle_list_training_configs()
             return
@@ -912,6 +918,14 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/training/evaluation-report":
             self._handle_write_evaluation_report()
+            return
+        if parsed.path == "/api/training/restore-default":
+            try:
+                result = pipeline.restore_default_model(pipeline.DEFAULT_MODEL_WEIGHTS_DIR)
+                self._log_training_action("restore_default_model", result)
+                self._respond_json(result)
+            except ValueError as exc:
+                self._respond_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/training/promote-weight":
             self._handle_promote_weight()

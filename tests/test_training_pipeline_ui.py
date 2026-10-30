@@ -500,7 +500,8 @@ def test_step7_api_writes_evaluation_report_and_refuses_undocumented_promotion(t
 
     assert report_status == 201
     assert report["run_count"] == 1
-    assert report["promoted_run_name"] == "api_eval_run"
+    assert report["selected_run_name"] == "api_eval_run"
+    assert report["promoted_run_name"] is None
     assert Path(report["report_path"]).name == "api_eval_group_evaluation.json"
     assert missing_status == 400
     assert "Run group not found" in missing["error"]
