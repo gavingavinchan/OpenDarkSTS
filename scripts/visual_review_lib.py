@@ -805,15 +805,16 @@ def update_detection_geometry(
     detection["y_center"] = clamp_norm(y_center)
     detection["width"] = clamp_norm(width)
     detection["height"] = clamp_norm(height)
-    if class_id is not None and user_edited:
+    if class_id is not None:
+        class_changed = int(class_id) != int(detection["class_id"])
         detection["class_id"] = int(class_id)
         detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
-        detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(class_id)]
-    elif user_edited and detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
+        if class_changed or detection.get("review_label") not in {*EXPORTABLE_REVIEW_LABELS, "neither"}:
+            detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(class_id)]
+    elif detection.get("review_label") not in {*EXPORTABLE_REVIEW_LABELS, "neither"}:
         detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(detection["class_id"])]
-    if user_edited:
-        detection["reviewed"] = True
-        detection["reviewed_at"] = utcnow_iso()
+    detection["reviewed"] = True
+    detection["reviewed_at"] = utcnow_iso()
 
 
 def label_detection(

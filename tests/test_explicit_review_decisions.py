@@ -96,3 +96,11 @@ const postJson=async (route,payload)=>calls.push({route,payload});
 '''
     result = subprocess.run([node, '-e', '\n'.join(functions)+harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_geometry_edit_keeps_explicit_neither_unless_class_is_changed():
+    doc={'detections':[detection('rejected','neither')]}
+    review.update_detection_geometry(doc,'rejected',.55,.5,.25,.2,class_id=0,user_edited=True)
+    assert doc['detections'][0]['review_label']=='neither'
+    review.update_detection_geometry(doc,'rejected',.55,.5,.25,.2,class_id=1,user_edited=True)
+    assert doc['detections'][0]['review_label']=='ships_sts'
