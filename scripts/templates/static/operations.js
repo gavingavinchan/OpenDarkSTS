@@ -143,7 +143,7 @@
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
       const totals = dashboard.detection_summary;
-      $('detectionTotals').textContent = countLabel(totals.runs, 'completed scan') + ' / ' + countLabel(totals.detections, 'candidate detection') + '. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
+      $('detectionTotals').textContent = countLabel(totals.runs, 'completed scan') + ' / ' + countLabel(totals.detections, 'candidate detection') + '. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; DETECTED_ONLY (stored as AIS_MISSING): ' + totals.AIS_MISSING + '; AIS_ERROR (stored as AIS_INVALID): ' + totals.AIS_INVALID + '. Counts describe the selected workspace history.';
       P.renderModel($('modelDetails'), dashboard.model, dashboard.model_error);
       $('inventorySummary').textContent = countLabel(dashboard.inventory.images, 'image') + ' / ' + countLabel(dashboard.inventory.ais_dir, 'AIS file');
       const training = dashboard.training_inventory;
@@ -186,7 +186,12 @@
         e.preventDefault(); P.setStatus($('areaError'), '');
         try {
           applyDatePeriod();
-          await save({bbox: ['west','south','east','north'].map(k => Number($(k).value)), start: $('start').value, end: $('end').value, date_period: $('datePeriod').value, images: $('images').value});
+          const bbox = ['west','south','east','north'].map(k => {
+            const value = $(k).value.trim();
+            if (!value) throw new Error('Enter a coordinate for ' + k + '.');
+            return Number(value);
+          });
+          await save({bbox, start: $('start').value, end: $('end').value, date_period: $('datePeriod').value, images: $('images').value});
           P.logInteraction('save_area', dashboard.project); location.href = '/data';
         } catch (err) {
           P.setStatus($('areaError'), err.message, 'err');

@@ -705,6 +705,14 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             page, title = pages[path]
             self._respond_html(render_template("operations", page=page, page_title=title))
             return True
+        if path == "/training-recipe":
+            from html import escape
+            try:
+                recipe = pipeline.starting_weight_recipe(query_text(parsed, "weight") or "")
+                self._respond_html('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenDarkSTS / Training recipe</title><link rel="stylesheet" href="/static/pipeline.css"></head><body><main class="shell"><h1>Training recipe</h1><p><a href="/training-setup">Training Setup</a></p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">' + escape(recipe) + '</pre></main></body></html>')
+            except (ValueError, OSError) as exc:
+                self._respond_json({"error": str(exc)}, status=400)
+            return True
         if path == "/model-card":
             from importlib.resources import files
             card = files("opendarksts").joinpath("assets", "model_card.md").read_text(encoding="utf-8")
@@ -1751,7 +1759,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
 
     def _respond_html(self, html: str, status: int = 200) -> None:
         navigation = '<nav class="app-navigation" aria-label="Main"><a class="app-brand" href="/">OpenDarkSTS</a><a href="/">Intelligence HQ</a><a href="/detect">Detect</a><a href="/import">Improve</a><a href="/jobs">Jobs</a></nav>'
-        html = html.replace("</head>", '<link rel="stylesheet" href="/static/operations.css"></head>')
+        if 'href="/static/operations.css"' not in html:
+            html = html.replace("</head>", '<link rel="stylesheet" href="/static/operations.css"></head>')
         html = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + navigation, html, count=1)
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -41,7 +41,7 @@ These are upstream/base weights used as starting points for project training run
 
 Dataset source for both mixed-label and rectbbox runs:
 
-- Original source copied from read-only folder: `/home/gavin/Downloads/AIS data/Madhulika/data science dark fleet.v7i.yolov8 (1).zip`
+- Original source copied from read-only folder: `<READ_ONLY_SOURCE_DIR>/Madhulika/data science dark fleet.v7i.yolov8 (1).zip`
 - Working copy: `workspace/datasets/raw/data_science_dark_fleet_v7i_yolov8.zip`
 - Extracted dataset: `workspace/datasets/extracted/madhulika_yolov8`
 - Roboflow metadata: workspace `fleetdatascience`, project `data-science-dark-fleet`, version `7`, license `Public Domain`, URL `https://app.roboflow.com/fleetdatascience/data-science-dark-fleet/7`
@@ -225,13 +225,13 @@ Recreate with:
 ```bash
 .venv/bin/yolo detect train \
   model=workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt \
-  data=/home/gavin/OpenDarkSTS/workspace/datasets/manual_reviewed_gavin_v1/data.yaml \
+  data=workspace/datasets/manual_reviewed_gavin_v1/data.yaml \
   imgsz=960 \
   epochs=5 \
   batch=4 \
   device=cpu \
   seed=42 \
-  project=/home/gavin/OpenDarkSTS/workspace/runs/manual_reviewed_gavin_v1_smoke \
+  project=workspace/runs/manual_reviewed_gavin_v1_smoke \
   name=yolov8n_rectbbox_e5_cpu2 \
   patience=2 \
   workers=2
@@ -654,12 +654,12 @@ which runs:
 
 ```bash
 .venv/bin/yolo detect train \
-  model=/home/gavin/OpenDarkSTS/yolo26n.pt \
-  data=/home/gavin/OpenDarkSTS/workspace/datasets/derived/sts_clean_v1/data.yaml \
+  model=yolo26n.pt \
+  data=workspace/datasets/derived/sts_clean_v1/data.yaml \
   imgsz=960 batch=8 epochs=300 patience=60 seed=42 device=0 workers=4 \
   degrees=180 fliplr=0.5 flipud=0.5 hsv_h=0.015 hsv_s=0.35 hsv_v=0.25 \
   mixup=0.05 mosaic=1.0 scale=0.4 translate=0.1 copy_paste=0 \
-  project=/home/gavin/OpenDarkSTS/workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960 \
+  project=workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960 \
   name=yolo26n_aug_e300_img960
 ```
 
@@ -697,7 +697,7 @@ Evaluation scripts and logs:
 Known gaps:
 
 - Byte-identical recreation is not guaranteed across Ultralytics, torch, CUDA, driver or GPU changes.
-- The dataset build depends on the read-only source imagery under `/home/gavin/Downloads/AIS data` and on `workspace/reviews/gavin`; adding or completing reviews changes the group set and therefore the split.
+- The dataset build depends on the read-only source imagery under `<READ_ONLY_SOURCE_DIR>` and on `workspace/reviews/gavin`; adding or completing reviews changes the group set and therefore the split.
 - `2` reviewed images carry no georeferenced bounds and are placed by the source-path/album fallbacks rather than by raster bounds.
 - The Madhulika deduplication keeps one representative per scene base name. Where Roboflow produced several genuinely different crops of one scene under the same base name, only the most-labelled crop survives; the discarded crops are of the same scene, so no information about a new observation is lost, but some labelled boxes are.
 

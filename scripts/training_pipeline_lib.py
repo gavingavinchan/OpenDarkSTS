@@ -2401,6 +2401,7 @@ def save_dataset_selection(
         },
     }
     summary = split_summary_for_items(selection["items"])
+    summary["seed"] = int(seed)
     summary["split_mode"] = split_mode
     summary["group_key_rule"] = GROUP_KEY_RULE if split_mode == "group" else None
     selection["split_summary"] = summary
@@ -2479,9 +2480,9 @@ def likely_duplicate_class_name_warnings(class_names: list[str]) -> list[str]:
     for index, left in enumerate(normalized):
         for right in normalized[index + 1:]:
             if left == right or left.rstrip("s") == right.rstrip("s"):
-                warning = f"Class names may be singular/plural duplicates: {left!r} and {right!r}"
+                warning = f"Class names {left!r} and {right!r} are similar. Confirm that they describe distinct classes."
                 if {left, right} == {"ship", "ships"}:
-                    warning += "; allowed as intentional project classes"
+                    warning += " These names are permitted for this project."
                 warnings.append(warning)
     return list(dict.fromkeys(warnings))
 
@@ -3288,6 +3289,20 @@ def list_starting_weights(
             if path_is_relative_to(path, runs_root):
                 add(path, "run_best")
     return entries
+
+
+def starting_weight_recipe(weight: str) -> str:
+    """Read a recipe only for a weight offered by Training Setup."""
+    target = repo_resolve(weight)
+    if not any(repo_resolve(entry["path"]) == target for entry in list_starting_weights()):
+        raise ValueError("Select an available starting weight")
+    sidecar = target.with_suffix(".recreation.json")
+    if sidecar.is_file():
+        return json.dumps(load_json(contained(sidecar, WORKSPACE_DIR)), indent=2)
+    if target.name == default_manifest()["filename"]:
+        from importlib.resources import files
+        return files("opendarksts").joinpath("assets", "weight_recreation.md").read_text(encoding="utf-8")
+    return weight_recreation_doc_text()
 
 
 # Import staging areas under workspace/datasets: never exported YOLO datasets themselves.

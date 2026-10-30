@@ -98,7 +98,7 @@ checkpoint copied by `init --weights`, including the existing adjacent recreatio
 documentation. The model choice, model documentation, README and historical
 dashboard source were not changed. The read-only AIS source directory was not used.
 
-- `/home/gavin/OpenDarkSTS/.venv/bin/python -m pytest -q`: **362 passed**, no skips,
+- `.venv/bin/python -m pytest -q`: **362 passed**, no skips,
   in 33.07 s. The worktree workspace was initialized with the documented existing
   weight; the bundled tile was copied into the legacy integration-test input
   directory so both real-inference tests executed. No new trained weights were made.
@@ -133,7 +133,7 @@ copies are in the main checkout's gitignored workspace.
 
 ## Screenshots
 
-All PNGs are under `/home/gavin/OpenDarkSTS/workspace/release_screens/`:
+All PNGs are under `workspace/release_screens/`:
 
 | Page | Filename |
 |---|---|

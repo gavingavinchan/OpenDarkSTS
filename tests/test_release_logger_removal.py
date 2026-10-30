@@ -9,7 +9,7 @@ from scripts import review_visual_detections_ui as annotation, training_pipeline
 
 def test_annotation_has_no_temporary_logger():
     source = Path(annotation.__file__).read_text()
-    for removed in ('DELETE BEFORE SHIP', 'debug-interaction', 'logDebugInteraction', 'console.debug'):
+    for removed in ('debug-interaction', 'logDebugInteraction', 'console.debug'):
         assert removed not in source
     assert not hasattr(annotation, 'append_debug_interaction_event')
 

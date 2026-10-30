@@ -381,7 +381,7 @@
         return;
       }
       if (!tiles.length) {
-        grid.innerHTML = '<div class="empty">No reviewed bounding boxes match these filters. Complete image reviews in <a href="/manual-review">Manual Review</a>, or change the filters above.</div>';
+        grid.innerHTML = '<div class="empty">No reviewed bounding boxes match these filters. Complete image reviews in <a href="/manual-review">Annotation</a>, or change the filters above.</div>';
         return;
       }
       grid.innerHTML = tiles.map(tile => `
@@ -405,13 +405,13 @@
       const tile = selectedTile();
       const host = document.getElementById('sidebar');
       if (!tile) {
-        host.innerHTML = '<h2>Choose a reviewed box</h2><p class="subtitle">Select an image crop to inspect its label. Double-click it to open the source image in Manual Review.</p>';
+        host.innerHTML = '<h2>Choose a reviewed box</h2><p class="subtitle">Select an image crop to inspect its label. Double-click it to open the source image in Annotation.</p>';
         return;
       }
       host.innerHTML = `
         <h2>${P.esc(imageDisplayName(tile))}</h2>
         <div><span class="badge ${labelClass(tile)}">${labelText(tile)}</span> <span class="tile-context">${P.esc(tile.detection_id)}</span></div>
-        <button class="primary" onclick="openManualReview('${tile.image_key}', '${tile.detection_id}')">Edit In Manual Review</button>
+        <button class="primary" onclick="openManualReview('${tile.image_key}', '${tile.detection_id}')">Edit in Annotation</button>
         <details class="metadata"><summary>Detection details</summary>
         <div class="kv">
           <span>Image</span><span class="mono">${P.esc(imageDisplayName(tile))}</span>

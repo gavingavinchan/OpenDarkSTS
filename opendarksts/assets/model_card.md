@@ -9,7 +9,7 @@ PATH_TO_THIS_CHECKPOINT` installs a local copy.
 Checkpoint: `opendarksts_yolo11s_v4_best.pt`
 SHA-256: `cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea`
 Download (Hugging Face):
-https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s/resolve/main/opendarksts_yolo11s_v4_best.pt
+[Download checkpoint](https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s/resolve/main/opendarksts_yolo11s_v4_best.pt)
 
 The checkpoint is the YOLO11s headline detector presented in the SNAME 2026 paper,
 trained on `madhulika_rectbbox_plus_manual_sts_balanced_v4`. This balanced dataset
@@ -20,7 +20,7 @@ manual STS-crop augmentation. Source metadata identifies Roboflow project
 source-set author has agreed to its publication.
 
 Held-out test results at image size 960, reproduced exactly from the paper's
-"Headline detector --- YOLO11s per-class results" section and cross-architecture
+"Headline detector — YOLO11s per-class results" section and cross-architecture
 table (21 test images):
 
 | Class | Instances | Precision | Recall | mAP50 | mAP50–95 |

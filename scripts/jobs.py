@@ -38,7 +38,8 @@ def scan_description(options, timestamp):
             pass
     period = options.get("date") or (" to ".join([min(dates), max(dates)]) if len(dates) > 1 else next(iter(dates), "no dated imagery found"))
     time = datetime.fromisoformat(timestamp).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if timestamp else "time unknown"
-    return f"{source} / {period} / threshold {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
+    model = str(options.get("weights") or "model not recorded").replace("\\", "/").rsplit("/", 1)[-1]
+    return f"{source} / {period} / model {model} / threshold {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
 
 
 def job_dir(job_id):
@@ -70,6 +71,8 @@ def preflight_options(kind, options):
     if kind == "imagery" and not (os.environ.get("CDSE_CLIENT_ID") and os.environ.get("CDSE_CLIENT_SECRET")):
         raise ValueError("Set CDSE_CLIENT_ID and CDSE_CLIENT_SECRET in the environment before acquiring imagery")
     if kind == "run":
+        if options.get("ais_dir") and not Path(options["ais_dir"]).expanduser().exists():
+            raise ValueError("AIS path does not exist: " + str(options["ais_dir"]))
         from .sts_utils import resolve_image_inputs, parse_image_date
         images = resolve_image_inputs(options["images"])
         if not images:
@@ -131,7 +134,15 @@ def _read_job(job_id, *, reconcile=True):
             harmless = re.compile(r"TIFF_Warning\b.*Unknown field with tag (33550|33922|34735|34736|34737|42112|42113)(?: |\(|$)")
             record["log_tail"] = [line for line in lines if not harmless.search(line)][-100:]
     if record["kind"] == "run":
-        record["description"] = scan_description(record["options"], record.get("started_at") or record["created_at"])
+        scan_options = dict(record["options"])
+        output = (record.get("result") or {}).get("output_dir")
+        if output:
+            try:
+                run_record = json.loads(contained(Path(output) / "run.json").read_text())
+                scan_options["weights"] = run_record.get("weight") or scan_options.get("weights")
+            except (ValueError, OSError):
+                pass
+        record["description"] = scan_description(scan_options, record.get("started_at") or record["created_at"])
     elif record["kind"] in {"ais", "imagery"}:
         options = record["options"]
         start, end = options.get("start", "dates not recorded"), options.get("end")
@@ -266,8 +277,10 @@ def execute_job(kind, options, log=print):
 
 
 def _execute_pipeline(options, output, log):
+    default_ais = WORKSPACE_DIR / "inputs" / "ais" / "full"
+    ais_source = options.get("ais_dir", default_ais if default_ais.exists() else "")
     results = pipeline.run_pipeline(options["images"], weights=options.get("weights"),
-                ais_dir=options.get("ais_dir", WORKSPACE_DIR / "inputs" / "ais" / "full"), date=options.get("date"),
+                ais_dir=ais_source, date=options.get("date"),
                 conf=float(options.get("conf", .25)), radius_m=float(options.get("radius", 1000)),
                 preview_dir=output / "previews", record_path=output / "run.json", warn=log)
     pipeline.write_pipeline_output(output / "dark_sts.json", results)

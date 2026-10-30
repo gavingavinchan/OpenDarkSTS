@@ -191,6 +191,8 @@ def run_pipeline(
     warn: Callable[[str], None] | None = None,
     record_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
+    if ais_dir and not Path(ais_dir).expanduser().exists():
+        raise ValueError(f"AIS path does not exist: {ais_dir}")
     image_paths = select_images(image_inputs, date=date, warn=warn)
     if not image_paths:
         raise FileNotFoundError("No readable input images were found")

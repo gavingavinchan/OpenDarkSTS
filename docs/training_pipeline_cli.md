@@ -642,7 +642,7 @@ Expected bundle responsibilities:
 - Include review JSONs under `workspace/reviews/<reviewer>/` so annotation can continue.
 - Optionally include dataset selections, exported YOLO datasets, training configs, runs, reports, and model weights.
 - Include YOLO weights only when explicitly requested, and only when the required weight recreation documentation is bundled too.
-- Never include files directly from read-only external source folders such as `/home/gavin/Downloads/AIS data`.
+- Never include files directly from read-only external source folders such as `<READ_ONLY_SOURCE_DIR>`.
 
 ### Planned: `import-bundle`
 
@@ -786,7 +786,7 @@ defaults. These presets apply during training and do not create extra image file
 ## Safety Notes
 
 - Run from the repository root so relative workspace paths resolve correctly.
-- Do not write to `/home/gavin/Downloads/AIS data`; it is read-only project input.
+- Do not write to `<READ_ONLY_SOURCE_DIR>`; it is read-only project input.
 - Prefer JSON output for tests, scripts, and agent diagnostics.
 - Use `--dry-run` before exports when checking path overrides or manifest changes.
 - The CLI currently implements backend preparation and diagnostics. It does not yet provide `start-training`, `training-status`, or `stop-training`; those are planned in `docs/training_pipeline_plan.md`.

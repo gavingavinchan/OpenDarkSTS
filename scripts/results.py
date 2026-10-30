@@ -29,7 +29,7 @@ def list_runs():
             directory = run_directory(path.parent)
             record = json.loads(path.read_text())
             description = scan_description({"images": record.get("inputs", []), "date": record.get("date"),
-                                           "conf": record.get("confidence", .25), "radius": record.get("ais_radius_m", 1000)},
+                                           "conf": record.get("confidence", .25), "radius": record.get("ais_radius_m", 1000), "weights": record.get("weight")},
                                           record.get("started_at"))
             records.append({**record, "directory": str(directory), "description": description})
         except (ValueError, OSError):
