@@ -307,6 +307,7 @@ def build_state(image_id: str | None, album_id: str | None = None) -> dict:
             "height": int(review["height"]),
             "tile_count": 1,
             "review_status": review["review_status"],
+            "context_review_required": bool(review.get("context_review_required")),
             "detail_cursor": review.get("detail_cursor"),
             "cache_url": cache_url_for(cache_path),
         },
@@ -1088,7 +1089,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
             <button class="warn" onclick="markSelectedNeither()" data-tooltip="Mark as background/false-positive for training [N]">Mark Neither</button>
             <button onclick="deleteSelectedDetection()" style="background:#7f1d1d;color:#fca5a5" data-tooltip="Permanently remove this box [Del]">Delete Box</button>
           </div>
-          <p class="note">Image completion is automatic once every active bbox has been reviewed.</p>
+          <p class="note">${{current.context_review_required ? 'Review the full context image for other vessels and add any missing boxes before completing it.' : 'Image completion is automatic once every active bbox has been reviewed.'}}</p>
+          ${{current.context_review_required ? `<button onclick="completeImage()" ${{counts.pending_active_detections ? 'disabled' : ''}}>Complete context review</button>` : ''}}
           <hr style="border:none;border-top:1px solid rgba(16,35,48,0.08);margin:4px 0">
           <div class="button-row">
             <button class="accent" onclick="startDetail()" data-tooltip="Enter per-detection review [R]">Start Detail Review</button>

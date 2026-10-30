@@ -166,10 +166,11 @@ def send_to_improve(directory, detection_id):
         entry = manifest["images"][key]
         path = review.review_file_path(key, decision["reviewer"], reviews_dir)
         doc = review.load_review_document(path)
-        if doc["review_status"] == "completed":
+        candidate = next((d for d in doc["detections"] if d.get("detection_id") == "human-0001"), None)
+        if candidate or doc["review_status"] == "completed":
             labels = {d.get("review_label") for d in doc["detections"] if d.get("reviewed")}
             if labels != {decision["training_label"]}:
-                raise ValueError("This crop already has a different completed label in Improve; reconcile it there")
+                raise ValueError("This crop already has a different reviewed label in Improve; reconcile it there")
         # A duplicate crop keeps its original provenance and split group.
         if not entry.get("operational_source"):
             parent_bounds = load_bbox_for_image(row["image_path"])
@@ -187,10 +188,11 @@ def send_to_improve(directory, detection_id):
                 "candidate_pixels": {key: row[key] for key in ("cx_px", "cy_px", "w_px", "h_px")}}
             atomic_json(source.with_suffix(".json"), {"bbox": crop_bounds, "crs": "EPSG:4326", "operational_source": entry["operational_source"]})
             training.write_json(manifest_path, manifest)
-        if doc["review_status"] != "completed":
+        if not candidate and doc["review_status"] != "completed":
             label = decision["training_label"]
             class_id = 0 if label == "ship_non_sts" else 1
-            doc.update(review_status="completed", detail_cursor=None, date=row["date"], operational_source=entry["operational_source"])
+            doc.update(review_status="overview_1", detail_cursor=None, context_review_required=True,
+                       date=row["date"], operational_source=entry["operational_source"])
             doc["detections"] = [{"detection_id": "human-0001", "source_type": "manual", "parent_detection_id": None,
                 "class_id": class_id, "class_name": review.CLASS_ID_TO_NAME[class_id], "confidence": None,
                 "x_center": (row["cx_px"] - bounds_px[0]) / crop.width,

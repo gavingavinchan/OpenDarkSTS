@@ -665,9 +665,8 @@ def sync_review_status(review: dict[str, Any]) -> tuple[str, int | None]:
             review["review_status"] = "overview_1"
             review["detail_cursor"] = None
             return "overview_1", None
-        review["review_status"] = "completed"
-        review["detail_cursor"] = None
-        return "completed", None
+        set_review_status(review, "completed", None)
+        return review["review_status"], None
     if current_status == "detail":
         cursor = review.get("detail_cursor")
         if not isinstance(cursor, int) or cursor < 0 or cursor >= len(review.get("detections", [])):
@@ -688,6 +687,10 @@ def sync_review_status(review: dict[str, Any]) -> tuple[str, int | None]:
 
 
 def set_review_status(review: dict[str, Any], review_status: str, detail_cursor: int | None) -> None:
+    # A transferred candidate labels only one box in a larger context image.
+    # Automatic box completion must not declare every other vessel background.
+    if review_status == "completed" and review.get("context_review_required"):
+        review_status = "overview_2"
     review["review_status"] = review_status
     review["detail_cursor"] = detail_cursor
 
@@ -696,7 +699,7 @@ def start_detail_mode(review: dict[str, Any]) -> tuple[str, int | None]:
     pending_index = first_unreviewed_active_index(review)
     if pending_index is None:
         set_review_status(review, "completed", None)
-        return "completed", None
+        return review["review_status"], None
     set_review_status(review, "detail", pending_index)
     return "detail", pending_index
 
@@ -705,7 +708,7 @@ def advance_detail_cursor(review: dict[str, Any]) -> tuple[str, int | None]:
     pending_index = first_unreviewed_active_index(review)
     if pending_index is None:
         set_review_status(review, "completed", None)
-        return "completed", None
+        return review["review_status"], None
     set_review_status(review, "detail", pending_index)
     return "detail", pending_index
 
@@ -716,14 +719,14 @@ def navigate_detail_cursor(review: dict[str, Any], direction: str) -> tuple[str,
     detections = review.get("detections", [])
     if not detections:
         set_review_status(review, "completed", None)
-        return "completed", None
+        return review["review_status"], None
 
     current = review.get("detail_cursor")
     if not isinstance(current, int):
         current = first_unreviewed_active_index(review)
     if current is None:
         set_review_status(review, "completed", None)
-        return "completed", None
+        return review["review_status"], None
 
     if direction == "prev":
         previous = prev_active_index(review, current)
@@ -902,6 +905,7 @@ def delete_detection(review: dict[str, Any], detection_id: str) -> tuple[str, in
 
 
 def mark_all_active_detections_reviewed(review: dict[str, Any]) -> int:
+    review.pop("context_review_required", None)
     timestamp = utcnow_iso()
     changed = 0
     if not review.get("detections"):
@@ -924,6 +928,7 @@ def complete_image_review(review: dict[str, Any]) -> None:
     pending_count = sum(1 for detection in review.get("detections", []) if active_detection(detection) and not bool(detection.get("reviewed")))
     if pending_count:
         raise ValueError("Cannot complete image while active detections remain unlabeled")
+    review.pop("context_review_required", None)
     set_review_status(review, "completed", None)
 
 
