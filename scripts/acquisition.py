@@ -44,6 +44,11 @@ def cancellation(check):
     try:
         check_cancelled()
         yield
+    except Exception:
+        # A network timeout can be the first opportunity to observe a request
+        # made while authentication or catalogue lookup was waiting for I/O.
+        check_cancelled()
+        raise
     finally:
         _cancel_check.reset(token)
 

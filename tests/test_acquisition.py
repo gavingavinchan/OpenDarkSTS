@@ -141,3 +141,13 @@ def test_imagery_cancel_cleans_temporary_response(tmp_path):
     with pytest.raises(acquire.Cancelled), acquire.cancellation(check):
         acquire.acquire_imagery('2024-01-01', bbox=[1, 1, 1.01, 1.01], output_dir=tmp_path, client=Client())
     assert not list(tmp_path.iterdir())
+
+
+def test_cancel_during_catalogue_timeout_is_reported_as_cancelled():
+    requested = False
+    def check():
+        if requested:
+            raise acquire.Cancelled('cancelled')
+    with pytest.raises(acquire.Cancelled), acquire.cancellation(check):
+        requested = True
+        raise TimeoutError('catalogue request timed out')
