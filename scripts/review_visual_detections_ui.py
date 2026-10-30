@@ -371,7 +371,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Visual Detection Reviewer</title>
+  <title>OpenDarkSTS / Annotation</title>
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/vendor/leaflet-draw/leaflet.draw.css">
   <script src="/static/vendor/leaflet/leaflet.js"></script>
@@ -795,8 +795,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       <div class="titleblock">
         <div class="filenum">02<sup>/07</sup></div>
         <div>
-          <h1>Auto-assisted annotation</h1>
-          <p class="subtitle">Manual Review: correct proposed boxes and draw missed single vessels or STS pairs.</p>
+          <h1>Annotation</h1>
+          <p class="subtitle">Correct proposed boxes and draw missed single vessels or STS pairs.</p>
         </div>
       </div>
       {stage_nav}

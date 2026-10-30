@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenDarkSTS / Evaluate</title>
+  <title>OpenDarkSTS / Evaluate &amp; Promote</title>
   <link rel="stylesheet" href="/static/pipeline.css">
 </head>
 <body data-page="evaluation">
@@ -20,27 +20,28 @@
     </header>
 
     <main>
-      <details class="card"><summary>Reproducibility contract: eight records to preserve</summary><p>Preserve the imagery import record, per-image review records, dataset selection record, exported dataset, training configuration, run-metadata snapshot, evaluation report, and final weight file together. Steps 1–6 produce the dataset and trained detector; this step produces the evaluation report and selects the operational model.</p></details>
+      <section class="card"><h2>Current detection model</h2><div id="modelDetails">Loading current model…</div></section>
+      <details class="card"><summary>Records needed to repeat a training run</summary><p>Preserve the imagery import record, per-image review records, dataset selection record, exported dataset, training configuration, run-metadata snapshot, evaluation report, and final weight file together. Steps 1–6 produce the dataset and trained detector; this step produces the evaluation report and selects the operational model.</p></details>
       <section class="card">
-        <h2>Run Group</h2>
+        <h2>Training batch</h2>
         <div class="row">
-          <label class="field" style="min-width:340px;"><span>Run group</span><select id="groupSelect"></select></label>
+          <label class="field" style="flex:1;"><span>Training batch</span><select id="groupSelect"></select></label>
           <button id="loadGroup" class="primary" type="button">Load Results</button>
-          <button id="refreshGroups" type="button">Refresh Groups</button>
+          <button id="refreshGroups" type="button">Refresh batches</button>
         </div>
         <div class="status" id="groupStatus"></div>
       </section>
 
       <section class="card">
         <h2>Results</h2>
-        <p class="hint">Validation columns describe the <code>best.pt</code> epoch (highest mAP50-95, the Ultralytics fitness for detection), because that is the checkpoint offered for promotion. The final epoch is shown separately as <em>final val mAP50</em>.</p>
+        <p class="hint">Validation scores describe the saved model with the highest average precision across box-overlap thresholds (mAP50–95). This is the model offered for use in Detect. Scores from the final training cycle are shown separately. The file is called <code>best.pt</code>.</p>
         <div class="scroll">
           <table>
             <thead><tr>
               <th>Run</th><th>best epoch</th><th>val mAP50</th><th>val mAP50-95</th><th>val P</th><th>val R</th>
               <th>final val mAP50</th><th>test mAP50</th><th>test mAP50-95</th><th>best.pt</th><th>Test split</th>
             </tr></thead>
-            <tbody id="resultsBody"><tr><td colspan="11" class="empty">Pick a run group and press Load Results.</td></tr></tbody>
+            <tbody id="resultsBody"><tr><td colspan="11" class="empty">Pick a training batch and press Load Results.</td></tr></tbody>
           </table>
         </div>
         <div class="status" id="testStatus"></div>
@@ -62,20 +63,20 @@
         </section>
 
         <section class="card">
-          <h2>Promote Weight</h2>
+          <h2>Select a model for Detect</h2>
           <p class="hint">Promotion saves a recreation record beside the weight in your workspace, using the command, configuration, dataset hashes, source revision, and environment recorded during training.</p>
           <p id="currentModel" class="hint">Loading current model…</p>
           <button id="restoreDefault" type="button">Restore default YOLO11s</button>
           <div class="status" id="modelStatus"></div>
           <div class="grid2">
             <label class="field"><span>Run to promote</span><select id="promoteRun"></select></label>
-            <label class="field"><span>Target weight name</span><input id="targetName" placeholder="yolo26n_myrun_2026-01-01_best.pt"></label>
+            <label class="field"><span>Saved model filename</span><input id="targetName" placeholder="yolo11s_myrun_2026-01-01_best.pt"></label>
           </div>
           <label class="row check" style="font-size:12px;">
             <input id="overwriteWeight" type="checkbox"> Overwrite an existing promoted weight with this name
           </label>
           <div class="row">
-            <button id="promoteWeight" class="danger" type="button" disabled>Promote Best Weight</button>
+            <button id="promoteWeight" class="danger" type="button" disabled>Use trained model in Detect</button>
           </div>
           <div class="status" id="promoteStatus"></div>
           <pre class="code" id="promoteDetail" style="display:none;"></pre>
@@ -92,7 +93,7 @@
 
     async function loadGroups() {
       const picker = document.getElementById('groupSelect');
-      /* Rebuilding the picker must not silently move the user to another run group:
+      /* Rebuilding the picker must not silently move the user to another training batch:
          keep whatever is selected now, then the loaded group, then the URL's group. */
       const previous = picker.value || state.group || params.get('run_group');
       const data = await P.api('/api/training/run-groups');
@@ -100,11 +101,11 @@
       picker.innerHTML = state.groups.map(function (group) {
         return '<option value="' + P.esc(group.run_group) + '">' + P.esc(group.run_group) +
           ' (' + group.run_count + ' runs, ' + group.test_metrics_count + ' with test metrics)</option>';
-      }).join('') || '<option value="">No run groups with results.csv yet</option>';
+      }).join('') || '<option value="">No completed training batches yet</option>';
       if (previous && state.groups.some(function (group) { return group.run_group === previous; })) {
         picker.value = previous;
       }
-      P.setStatus('groupStatus', state.groups.length + ' run group(s) available.', '');
+      P.setStatus('groupStatus', state.groups.length + (state.groups.length === 1 ? ' training batch available.' : ' training batches available.'), '');
     }
 
     function metricCell(metrics, key) {
@@ -113,7 +114,7 @@
 
     async function loadGroupResults() {
       const group = document.getElementById('groupSelect').value;
-      if (!group) { P.setStatus('groupStatus', 'No run group selected.', 'err'); return; }
+      if (!group) { P.setStatus('groupStatus', 'No training batch selected.', 'err'); return; }
       state.group = group;
       P.setStatus('groupStatus', 'Loading ' + group + '\u2026');
       try {
@@ -130,7 +131,7 @@
       } catch (error) {
         state.runs = [];
         renderResults();
-        P.setStatus('groupStatus', 'Could not load run group: ' + error.message, 'err');
+        P.setStatus('groupStatus', 'Could not load training batch: ' + error.message, 'err');
         return;
       }
       document.getElementById('writeReport').disabled = false;
@@ -141,7 +142,7 @@
     function renderResults() {
       const body = document.getElementById('resultsBody');
       if (!state.runs.length) {
-        body.innerHTML = '<tr><td colspan="11" class="empty">This run group has no runs with results.csv.</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" class="empty">This training batch has no runs with results.csv.</td></tr>';
         return;
       }
       body.innerHTML = state.runs.map(function (run) {
@@ -246,7 +247,7 @@
       try {
         const data = await P.api('/api/training/evaluation-report?run_group=' + encodeURIComponent(state.group));
         if (!data.exists) {
-          document.getElementById('reportView').innerHTML = '<span class="empty">No report written for this run group yet.</span>';
+          document.getElementById('reportView').innerHTML = '<span class="empty">No report written for this training batch yet.</span>';
           if (!quiet) { P.setStatus('reportStatus', 'No report on disk yet.', ''); }
           return;
         }
@@ -290,6 +291,8 @@
     }
 
     async function loadCurrentModel() {
+      const info = await P.api('/api/operations/model');
+      P.renderModel(document.getElementById('modelDetails'), info.model, info.model_error);
       const data = await P.api('/api/training/model');
       document.getElementById('currentModel').textContent = 'Current model: ' + data.current_model + (data.is_default ? ' (bundled default YOLO11s)' : '');
       document.getElementById('restoreDefault').disabled = data.is_default;

@@ -47,7 +47,7 @@
       <div class="titleblock">
         <div class="filenum">05<sup>/07</sup></div>
         <div>
-          <h1>Augmentation &amp; training setup</h1>
+          <h1>Training Setup</h1>
           <p class="subtitle">Choose your dataset. We will prepare a training run with recommended settings.</p>
         </div>
       </div>
@@ -85,7 +85,7 @@
         <div class="advanced-body">
           <section class="advanced-section"><h3>Model and run details</h3>
             <label class="field"><span>Starting model</span><select id="weightSelect"></select></label><p class="hint" id="weightHint">—</p>
-            <div class="grid2"><label class="field"><span>Run group</span><input id="runGroup" placeholder="Created from the dataset"></label><label class="field"><span>Config filename</span><input id="configName" placeholder="Created from the run name"></label></div>
+            <div class="grid2"><label class="field"><span>Training batch</span><input id="runGroup" placeholder="Created from the dataset"></label><label class="field"><span>Config filename</span><input id="configName" placeholder="Created from the run name"></label></div>
             <label class="row check"><input id="overwrite" type="checkbox"> Replace results from an existing run with this name</label>
           </section>
           <section class="advanced-section"><h3>Training settings</h3>
@@ -99,9 +99,9 @@
               <label class="field"><span>Data loading workers</span><input id="workers" type="number" value="4"></label>
             </div><p class="hint">Auto chooses an available GPU, then CPU. The saved setup records the actual device so it can be reproduced.</p>
           </section>
-          <section class="advanced-section"><h3>Image augmentation</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><label class="field"><span>Augmentation preset</span><select id="augPreset" disabled><option value="">Custom / library defaults</option><option value="none">None</option><option value="light">Light</option><option value="default">Default</option><option value="heavy">Heavy</option></select></label><p class="hint">Presets fill explicit values below. Adjust them before saving. Augmentation affects training images only.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button" disabled>Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
+          <section class="advanced-section"><h3>Image variations (augmentation)</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><label class="field"><span>Augmentation preset</span><select id="augPreset" disabled><option value="">Custom / library defaults</option><option value="none">None</option><option value="light">Light</option><option value="default">Default</option><option value="heavy">Heavy</option></select></label><p class="hint">Presets fill explicit values below. Adjust them before saving. Augmentation affects training images only.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button" disabled>Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
           <section class="advanced-section"><h3>Save and inspect</h3><div class="row"><button id="saveOnly" type="button">Save without continuing</button><button id="previewCommand" type="button" disabled>Preview command</button></div><pre class="code" id="commandPreview">Save a setup to preview the exact training command.</pre><dl class="kv" id="commandMeta"></dl></section>
-          <section class="advanced-section"><h3>Saved training setups</h3><div class="scroll"><table><thead><tr><th>Config</th><th>Run group</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead><tbody id="configBody"></tbody></table></div></section>
+          <section class="advanced-section"><h3>Saved training setups</h3><div class="scroll"><table><thead><tr><th>Config</th><th>Training batch</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead><tbody id="configBody"></tbody></table></div></section>
         </div>
       </details>
     </main>
@@ -110,6 +110,7 @@
   <script src="/static/pipeline.js"></script>
   <script>
     const P = window.Pipeline;
+    const AUG_LABELS = {hsv_h:'Colour hue variation',hsv_s:'Colour saturation variation',hsv_v:'Brightness variation',degrees:'Rotation in degrees',translate:'Position shifts',scale:'Size variation',shear:'Slant variation',perspective:'Perspective variation',flipud:'Vertical flip probability',fliplr:'Horizontal flip probability',mosaic:'Combine four images',mixup:'Blend training images',copy_paste:'Copy objects between images',erasing:'Hide random image patches',crop_fraction:'Fraction retained when cropping'};
     const AUG_KEYS = ['hsv_h', 'hsv_s', 'hsv_v', 'degrees', 'translate', 'scale', 'shear',
                       'perspective', 'flipud', 'fliplr', 'mosaic', 'mixup', 'copy_paste',
                       'erasing', 'crop_fraction'];
@@ -155,7 +156,7 @@
 
     function renderAugFields() {
       document.getElementById('augFields').innerHTML = AUG_KEYS.map(function (key) {
-        return '<label class="field"><span>' + key + '</span>' +
+        return '<label class="field"><span>' + AUG_LABELS[key] + ' <small>(' + key + ')</small></span>' +
           '<input class="aug" data-key="' + key + '" type="number" step="0.01" placeholder="—"></label>';
       }).join('');
     }

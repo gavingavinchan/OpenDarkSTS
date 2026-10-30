@@ -79,7 +79,7 @@ def test_run_description_includes_input_dates_and_settings(run):
               'started_at': '2026-10-30T12:34:56+00:00'}
     (run / 'run.json').write_text(json.dumps(record))
     description = results.list_runs()[0]['description']
-    assert all(word in description for word in ['2020-01-04_tile.tiff', 'sensitivity 0.45', 'radius 500 m', '12:34:56 UTC'])
+    assert all(word in description for word in ['2020-01-04_tile.tiff', 'threshold 0.45', 'radius 500 m', '12:34:56 UTC'])
 
 
 def test_results_http_available_by_default_and_review(run, monkeypatch):

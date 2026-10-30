@@ -97,7 +97,7 @@
     if ($('jobDescription')) $('jobDescription').textContent = job.status === 'completed' ? 'This job completed successfully.' : job.status === 'failed' ? 'This job stopped with an error. Check the details below.' : job.status === 'cancelled' ? 'This job was cancelled.' : 'This job continues in the background. Progress updates automatically.';
     if ($('jobDetails') && displayedJob !== selectedJob) $('jobDetails').open = !['completed', 'failed', 'cancelled'].includes(job.status);
     displayedJob = selectedJob;
-    $('jobLog').textContent = (job.log_tail || []).join('\n') || job.error || 'Waiting for output…';
+    $('jobLog').textContent = (job.log_tail || []).join('\n') || job.error || (job.status === 'completed' ? 'Completed successfully. No additional log messages.' : 'Waiting for output…');
     $('jobOutput').replaceChildren();
     if (['ais', 'imagery'].includes(job.kind) && !['completed', 'failed', 'cancelled'].includes(job.status)) {
       const cancel = document.createElement('button'); cancel.type = 'button';
@@ -119,7 +119,7 @@
         const link = document.createElement('a'); link.href = '/api/operations/jobs/' + job.job_id + '/output?format=' + extension; link.textContent = 'Download ' + extension.toUpperCase(); $('jobOutput').append(link);
       }
       const summary = job.result.summary;
-      const text = document.createElement('p'); text.textContent = summary.detections ? summary.detections + ' candidate detections' : 'NO_STS — no STS candidates detected.'; $('jobOutput').append(text);
+      const text = document.createElement('p'); text.textContent = summary.detections ? countLabel(summary.detections, 'candidate detection') : 'NO_STS — no STS candidates detected.'; $('jobOutput').append(text);
       const resultsLink = document.createElement('a'); resultsLink.href = '/results?' + new URLSearchParams({directory: job.result.output_dir}); resultsLink.textContent = 'Open STS Events & Live Map'; $('jobOutput').append(resultsLink);
       const presence = document.createElement('p');
       presence.textContent = 'Same-day AIS: FULLY_DARK ' + (summary.FULLY_DARK || 0) + ' (no nearby vessels); PARTIALLY_DARK ' + (summary.PARTIALLY_DARK || 0) + ' (one); AIS_PRESENT ' + (summary.AIS_PRESENT || 0) + ' (two or more).';
@@ -131,13 +131,19 @@
   try {
     dashboard = await request('/api/operations/dashboard');
     const settings = dashboard.project;
+    document.querySelectorAll('.use-example').forEach(button => button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await request('/api/operations/example', {});
+        P.logInteraction('use_bundled_example', {date: '2020-01-24'});
+        location.href = '/data';
+      } catch (err) { button.disabled = false; error(err); }
+    });
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
       const totals = dashboard.detection_summary;
-      $('detectionTotals').textContent = totals.runs + ' completed scans / ' + totals.detections + ' candidate detections. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
-      if ($('modelSummary')) $('modelSummary').textContent = dashboard.model ? 'STS detector selected' : 'No model selected';
-      $('modelName').textContent = dashboard.model ? dashboard.model.filename : 'No model selected';
-      $('modelInfo').textContent = dashboard.model_error || (dashboard.model && dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Held-out test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
+      $('detectionTotals').textContent = countLabel(totals.runs, 'completed scan') + ' / ' + countLabel(totals.detections, 'candidate detection') + '. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
+      P.renderModel($('modelDetails'), dashboard.model, dashboard.model_error);
       $('inventorySummary').textContent = countLabel(dashboard.inventory.images, 'image') + ' / ' + countLabel(dashboard.inventory.ais_dir, 'AIS file');
       const training = dashboard.training_inventory;
       $('trainingInventory').textContent = countLabel(training.images, 'training image') + ' in ' + countLabel(training.albums, 'album') + '; ' + training.completed + ' reviewed.';
@@ -185,10 +191,12 @@
         notify('AIS source saved.');
       } catch (err) { error(err); } };
       $('getAis').onclick = () => launch('ais').catch(error);
+      $('getImagery').disabled = !dashboard.imagery_credentials_ready;
+      $('credentialsStatus').textContent = dashboard.imagery_credentials_ready ? 'Copernicus credentials are available to this server.' : 'Imagery download is unavailable until credentials are set and the server is restarted. Use the bundled example to continue now.';
       $('getImagery').onclick = () => save({max_cloud: Number($('maxCloud').value)}).then(() => launch('imagery')).catch(error);
     }
     if (page === 'run') {
-      $('runModel').textContent = dashboard.model ? 'Current model: ' + dashboard.model.filename : dashboard.model_error;
+      $('runModel').textContent = dashboard.model ? 'Current model: ' + dashboard.model.name + ' (' + dashboard.model.filename + ')' : dashboard.model_error;
       $('runButton').disabled = !dashboard.readiness.ready;
       $('confidence').value = settings.confidence; $('radius').value = settings.radius;
       Object.entries(dashboard.sensitivity_presets).forEach(([name, value]) => $('sensitivity').add(new Option(name + ' / ' + value.toFixed(2), String(value))));

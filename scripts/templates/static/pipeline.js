@@ -148,8 +148,25 @@
     return out.join('\n');
   }
 
+  function renderModel(node, model, error) {
+    if (!model) { node.textContent = error || 'No detection model selected.'; return; }
+    const metrics = model.metrics || {};
+    const rows = [['All classes', '', 'instances'], ['Single ship (ship)', 'ship_', 'ship_instances'], ['STS pair (ships)', 'ships_', 'ships_instances']];
+    node.innerHTML = '<h3>' + esc(model.name || model.filename) + '</h3><p>' +
+      (metrics.split === 'test' ? 'Held-out test results: ' : 'Recorded evaluation results: ') +
+      esc(metrics.images === undefined ? 'image count not recorded' : metrics.images + ' images') +
+      '. These scores describe this dataset; performance in other areas can differ.</p>' +
+      (Object.keys(metrics).length ? '<div class="scroll"><table aria-label="Model performance"><thead><tr><th>Class</th><th>Objects</th><th>Precision</th><th>Recall</th><th>mAP50</th><th>mAP50–95</th></tr></thead><tbody>' +
+      rows.map(([label, prefix, count]) => '<tr><td>' + esc(label) + '</td><td>' + esc(metrics[count] ?? '—') + '</td>' +
+        ['precision', 'recall', 'mAP50', 'mAP50_95'].map(key => '<td>' + fmt(metrics[prefix + key], 3) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>' : '<p>No evaluation scores were recorded for this model.</p>') +
+      '<p class="hint">Precision measures how often predicted objects are correct; recall measures how many labelled objects are found. Average precision (mAP) combines detection and location accuracy: mAP50 uses 50% box overlap; mAP50–95 averages stricter overlap thresholds. Scores range from 0 to 1; higher is better.</p>' +
+      (model.model_card_url ? '<a href="' + esc(model.model_card_url) + '" target="_blank" rel="noopener">Open YOLO11s model card</a>' : '') +
+      '<details><summary>Model file</summary><p class="path">' + esc(model.filename) + '</p></details>';
+  }
+
   global.Pipeline = {
     api: api,
+    renderModel: renderModel,
     esc: esc,
     fmt: fmt,
     logInteraction: logInteraction,

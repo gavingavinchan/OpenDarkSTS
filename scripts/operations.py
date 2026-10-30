@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from .workspace import WORKSPACE_DIR, atomic_json, current_model, exclusive_lock
+from .workspace import WORKSPACE_DIR, atomic_json, current_model, exclusive_lock, default_manifest
 from .acquisition import validate_bbox, date_range, cache_key
 from . import jobs
 
 PROJECT_PATH = WORKSPACE_DIR / "detection_project.json"
 PRESETS = {
     "Gulf of Mexico (US waters)": [-98.0, 24.0, -80.0, 31.0],
+    "Bundled example (Gulf of Mexico)": [-94.36, 28.62, -94.29, 28.69],
     "Galveston offshore": [-94.73, 29.07, -94.57, 29.205],
     "Los Angeles / Long Beach": [-118.4, 33.55, -118.05, 33.8],
     "New York approaches": [-74.15, 40.3, -73.7, 40.6],
@@ -22,7 +24,7 @@ SENSITIVITY_PRESETS = {"Low": .10, "Medium": .25, "High": .45}
 def project():
     if PROJECT_PATH.is_file():
         return json.loads(PROJECT_PATH.read_text())
-    return {"bbox": PRESETS["Galveston offshore"], "start": "2020-01-04", "end": "2020-01-04",
+    return {"bbox": PRESETS["Bundled example (Gulf of Mexico)"], "start": "2020-01-24", "end": "2020-01-24",
             "images": str(WORKSPACE_DIR / "inputs" / "imagery"), "ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full"),
             "confidence": .25, "radius": 1000, "max_cloud": 35}
 
@@ -52,6 +54,11 @@ def _save_project(payload):
         settings[key] = float(settings[key])
         if not lower <= settings[key] <= upper:
             raise ValueError(f"Invalid {key}")
+    for key in ["images", "ais_dir"]:
+        value = str(settings[key]).strip()
+        if value:
+            path = Path(value).expanduser()
+            settings[key] = str((path if path.is_absolute() else WORKSPACE_DIR / path).resolve())
     atomic_json(PROJECT_PATH, settings)
     return settings
 
@@ -114,7 +121,21 @@ def download_overlaps_inputs(job, settings):
     return selected.is_relative_to(output) or output.is_relative_to(selected)
 
 
-def dashboard():
+def imagery_credentials_ready():
+    return bool(os.environ.get("CDSE_CLIENT_ID") and os.environ.get("CDSE_CLIENT_SECRET"))
+
+
+def use_bundled_example():
+    root = (WORKSPACE_DIR / "inputs" / "example").resolve()
+    if not (root / "2020-01-24_example.tiff").is_file() or not (root / "AIS_2020_01_24.csv").is_file():
+        raise ValueError("The bundled example is not installed. Run opendarksts init for this workspace first.")
+    return save_project({"bbox": PRESETS["Bundled example (Gulf of Mexico)"],
+                         "start": "2020-01-24", "end": "2020-01-24",
+                         "images": str(root), "ais_dir": str(root / "AIS_2020_01_24.csv"),
+                         "confidence": .25, "radius": 1000})
+
+
+def model_information():
     model = None
     model_error = None
     try:
@@ -122,10 +143,19 @@ def dashboard():
         if path.is_file():
             record = path.parent / "current.json"
             model = {"filename": path.name, "path": str(path), **(json.loads(record.read_text()) if record.is_file() else {})}
+            manifest = default_manifest()
+            bundled = model.get("sha256") == manifest["sha256"]
+            model["name"] = "YOLO11s" if bundled else model.get("architecture") or path.stem
+            model["model_card_url"] = "/model-card" if bundled else None
         else:
             model_error = "Initialize the workspace or promote a model in Improve."
     except (ValueError, OSError) as exc:
         model_error = str(exc)
+    return {"model": model, "model_error": model_error}
+
+
+def dashboard():
+    model_info = model_information()
     settings = project()
     inventory = {}
     for key in ["images", "ais_dir"]:
@@ -167,7 +197,7 @@ def dashboard():
                 detection_summary[key] += value
     return {"pending_reviews": pending_reviews, "project": settings, "presets": PRESETS,
             "sensitivity_presets": SENSITIVITY_PRESETS, "detection_summary": detection_summary,
-            "model": model, "model_error": model_error,
+            **model_info, "imagery_credentials_ready": imagery_credentials_ready(),
             "training_inventory": {"images": len(training_images), "completed": len(completed_images),
                                    "albums": len(list((WORKSPACE_DIR / "albums").glob("alb_*.json")))},
             "readiness": detection_readiness(settings),
@@ -185,6 +215,8 @@ def submit_project_job(kind):
     elif kind in {"ais", "imagery"}:
         options = {"start": settings["start"], "end": settings["end"]}
         if kind == "imagery":
+            if not imagery_credentials_ready():
+                raise ValueError("Configure Copernicus credentials and restart the server before downloading imagery. See Data / AIS Manager.")
             options.update(bbox=settings["bbox"], max_cloud=settings["max_cloud"], output_dir=str(WORKSPACE_DIR / "inputs" / "imagery" / cache_key(settings["bbox"])))
         else:
             options["output_dir"] = str(WORKSPACE_DIR / "inputs" / "ais")

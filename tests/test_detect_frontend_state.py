@@ -55,11 +55,12 @@ const elements={},listeners={},entries=[];
 const element=id=>elements[id]||=({value:'',textContent:'',hidden:false,
  add(option){if(!this.value)this.value=option.value},querySelectorAll:()=>[]});
 const row={detection_id:'one',date:'2020-01-24',dark_status:'AIS_PRESENT',ais_status_text:'two',
+ confidence:.73,ais_vessels:[{MMSI:1,VesselType:80,Length:null,SOG:0}],
  human_review:{verdict:'not_sts',training_label:null,reviewer:'tester'}};
 const runs=[{directory:'/new',description:'radius 500 m'},{directory:'/old',description:'radius 70 m'}];
 const location={href:'http://localhost/results?directory=%2Fold',search:'?directory=%2Fold'};
 function move(url){location.href=String(url);location.search=new URL(url).search}
-const P={logInteraction(){},esc:String,setStatus:(el,message)=>el.textContent=message,
+const P={logInteraction(){},esc:String,fmt:(value,digits)=>Number(value).toFixed(digits),setStatus:(el,message)=>el.textContent=message,
  api:async(path,options)=>{
   if(path==='/api/results')return {runs};
   if(path.startsWith('/api/results?'))return {detections:[row]};
@@ -76,6 +77,11 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  await vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
  assert.equal(element('runs').value,'/old');
+ assert.match(element('vessels').textContent,/Tanker \(AIS code 80\)/);
+ assert.match(element('vessels').textContent,/Length: Not reported/);
+ assert.match(element('vessels').textContent,/Speed: 0 knots/);
+ assert.match(element('confidenceValue').textContent,/0.73/);
+ assert.match(element('resultReading').textContent,/not classified as dark/);
  element('runs').value='/new';element('runs').onchange();await tick();
  assert.equal(new URL(location.href).searchParams.get('directory'),'/new');
  assert.equal(entries.length,1);

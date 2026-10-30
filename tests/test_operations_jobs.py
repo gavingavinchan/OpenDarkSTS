@@ -15,6 +15,8 @@ def isolated(tmp_path, monkeypatch):
     from scripts import training_pipeline_ui as ui
     monkeypatch.setattr(ui, "TRAINING_UI_INTERACTION_LOG_PATH", tmp_path / "interactions.jsonl")
     monkeypatch.setenv("OPENDARKSTS_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("CDSE_CLIENT_ID", "test-client")
+    monkeypatch.setenv("CDSE_CLIENT_SECRET", "test-secret")
     monkeypatch.setattr(jobs, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(jobs, "WORKSPACE_DIR", tmp_path)
     monkeypatch.setattr(operations, "WORKSPACE_DIR", tmp_path)
@@ -228,7 +230,7 @@ def test_foreground_run_updates_jobs_and_dashboard(isolated, monkeypatch):
     result = jobs.run_foreground('run', {'images': ['2020-01-24_scene.tiff'], 'conf': .1, 'radius': 70})
     record = jobs.list_jobs()[0]
     assert record['status'] == 'completed' and record['result'] == result
-    assert all(word in record['description'] for word in ['2020-01-24_scene.tiff', 'sensitivity 0.1', 'radius 70 m', 'UTC'])
+    assert all(word in record['description'] for word in ['2020-01-24_scene.tiff', 'threshold 0.1', 'radius 70 m', 'UTC'])
     assert operations.dashboard()['detection_summary']['runs'] == 1
     assert operations.dashboard()['detection_summary']['AIS_PRESENT'] == 1
 

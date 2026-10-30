@@ -82,7 +82,7 @@ def main():
             if not args.noaa_only:
                 # F04: the foreground example is visible before any GUI scans exist.
                 goto('/')
-                expect(page.locator('#detectionTotals')).to_contain_text('1 completed scans / 1 candidate detections')
+                expect(page.locator('#detectionTotals')).to_contain_text('1 completed scan / 1 candidate detection')
                 shot('F04-after-cli-home')
                 goto('/jobs')
                 expect(page.locator('#jobRows')).to_contain_text('radius 1000 m')
@@ -96,10 +96,9 @@ def main():
                 checks['F04'] = {'job_id': cli['job_id'], 'candidate': rows[0]}
 
                 goto('/detect')
-                expect(page.locator('#start')).to_have_value('2020-01-04')
+                expect(page.locator('#start')).to_have_value('2020-01-24')
                 page.locator('#start').fill('2020-01-24')
                 page.locator('#end').fill('2020-01-24')
-                page.get_by_text('Use an existing imagery folder', exact=True).click()
                 page.locator('#images').fill(str(example))
                 page.locator('#areaForm button[type=submit]').click()
                 page.wait_for_url('**/data')
@@ -144,7 +143,7 @@ def main():
                 shot('F02-after-forward-500m')
                 checks['F02'] = 'Refresh, back, and forward retain the selected run and matching status.'
                 options = page.locator('#runs option').all_text_contents()
-                assert any('radius 70 m' in text and 'sensitivity 0.25' in text and '2020-01-24' in text for text in options)
+                assert any('radius 70 m' in text and 'threshold 0.25' in text and '2020-01-24' in text for text in options)
                 assert any('radius 500 m' in text and '.tiff' in text and 'UTC' in text for text in options)
                 shot('F06-after-readable-results')
                 goto('/jobs?job=' + older['job_id'])
