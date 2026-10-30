@@ -1,8 +1,8 @@
 {
   "filename": "opendarksts_yolo11s_v4_best.pt",
   "sha256": "cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea",
-  "url": "https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/opendarksts_yolo11s_v4_best.pt",
-  "release_status": "Published as an asset of the OpenDarkSTS v0.1 release.",
+  "url": "https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s/resolve/main/opendarksts_yolo11s_v4_best.pt",
+  "release_status": "Published on Hugging Face as gavingavinchan/OpenDarkSTS-YOLO11s.",
   "metrics": {
     "split": "test",
     "dataset": "madhulika_rectbbox_plus_manual_sts_balanced_v4",
@@ -34,5 +34,6 @@
       "sha256": "080179e28767af1c10f5da297aa667ba2ee1f5846ca76c6765f6f577228433c9",
       "url": "https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
     }
-  ]
+  ],
+  "model_page": "https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s"
 }

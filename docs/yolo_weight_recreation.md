@@ -739,7 +739,7 @@ The published filename is `opendarksts_yolo11s_v4_best.pt`, installed under
 It is a byte-identical copy of
 `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/yolo11s_aug_e300_img960/weights/best.pt`.
 The proposed release asset is
-https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/opendarksts_yolo11s_v4_best.pt;
+https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s/resolve/main/opendarksts_yolo11s_v4_best.pt;
 no asset has been published as part of this change.
 
 The [packaged acquisition and recreation recipe](../opendarksts/assets/weight_recreation.md)

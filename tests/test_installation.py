@@ -16,7 +16,7 @@ def test_model_defaults_match_the_published_manifest(tmp_path, monkeypatch):
     manifest = initialization.default_manifest()
     assert manifest['filename'] == 'opendarksts_yolo11s_v4_best.pt'
     assert manifest['sha256'] == 'cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea'
-    assert manifest['url'] == 'https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/' + manifest['filename']
+    assert manifest['url'] == 'https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s/resolve/main/' + manifest['filename']
     assert workspace.DEFAULT_WEIGHT_NAME == pipeline.DEFAULT_WEIGHTS.name == manifest['filename']
     assert workspace.current_model(tmp_path).name == manifest['filename']
     monkeypatch.setattr(training_pipeline_lib, 'WORKSPACE_DIR', tmp_path)

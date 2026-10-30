@@ -15,8 +15,12 @@ locally on Linux or Windows as one web application with two parts:
   annotate, review, build a dataset, train, and evaluate a new detector.
 
 The default detector is the paper's headline **YOLO11s** model (held-out test
-mAP50 0.895; see [Default model](#default-model)). The annotated image datasets are
-published on Hugging Face (see [Datasets](#datasets)).
+mAP50 0.895; see [Default model](#default-model)). The model and the annotated image
+datasets are published on Hugging Face:
+
+- Model: [gavingavinchan/OpenDarkSTS-YOLO11s](https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s)
+- Annotation dataset: [gavingavinchan/OpenDarkSTS-annotations](https://huggingface.co/datasets/gavingavinchan/OpenDarkSTS-annotations)
+- Training dataset: [gavingavinchan/OpenDarkSTS-v4-balanced](https://huggingface.co/datasets/gavingavinchan/OpenDarkSTS-v4-balanced)
 
 ## Install and start
 
@@ -55,7 +59,8 @@ opendarksts serve
 ```
 
 `init` creates a `workspace` folder in the current folder, copies a small example
-into it, and downloads the default model ([Default model](#default-model)), checking
+into it, and downloads the default model from
+[Hugging Face](https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s), checking
 its SHA-256. If you already have the checkpoint file, use
 `opendarksts init --weights PATH_TO_CHECKPOINT` instead.
 
@@ -202,7 +207,8 @@ results (21 images, 92 instances):
 | all | 0.830 | 0.820 | 0.895 | 0.544 |
 
 The test split is small, and some test images share source scenes with training
-images. The [model card](opendarksts/assets/model_card.md) gives the SHA-256,
+images. The [model card](opendarksts/assets/model_card.md) (also on
+[Hugging Face](https://huggingface.co/gavingavinchan/OpenDarkSTS-YOLO11s)) gives the SHA-256,
 training settings and limitations. A model trained in **Improve** can be promoted
 on step 7 to replace the default for both Detect and annotation prefill; the same
 page switches back to the bundled YOLO11s. **Intelligence HQ** and step 7 show the
@@ -228,14 +234,14 @@ conflicts 3.
 
 ## Datasets
 
-The annotated Sentinel-2 images are published on Hugging Face in YOLO format:
+The annotated Sentinel-2 images are published on Hugging Face in YOLO format,
+under CC BY 4.0:
 
-- **OpenDarkSTS annotation dataset**: the paper's 474 reviewed images with 2,636
-  reviewed boxes, including the rejected regions kept as hard negatives.
-- **OpenDarkSTS v4 balanced dataset**: the training, validation and test data
-  of the default YOLO11s model.
-
-Links: _to be added on publication._
+- [**OpenDarkSTS-annotations**](https://huggingface.co/datasets/gavingavinchan/OpenDarkSTS-annotations):
+  the paper's 474 reviewed images with 2,636 reviewed boxes, including the rejected
+  regions kept as hard negatives.
+- [**OpenDarkSTS-v4-balanced**](https://huggingface.co/datasets/gavingavinchan/OpenDarkSTS-v4-balanced):
+  the training, validation and test data of the default YOLO11s model.
 
 ## Development
 
