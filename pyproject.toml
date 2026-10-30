@@ -28,7 +28,7 @@ include-package-data = false
 packages = ["scripts", "opendarksts"]
 
 [tool.setuptools.package-data]
-scripts = ["templates/*.html", "templates/static/*.css", "templates/static/*.js", "templates/static/vendor/leaflet/*"]
+scripts = ["templates/*.html", "templates/static/*.css", "templates/static/*.js", "templates/static/vendor/leaflet/*", "templates/static/vendor/leaflet/images/*", "templates/static/vendor/leaflet-draw/*", "templates/static/vendor/leaflet-draw/images/*", "templates/static/vendor/ibm-plex/*"]
 opendarksts = ["assets/*.json", "assets/*.md", "example/*"]
 
 [tool.pytest.ini_options]

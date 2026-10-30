@@ -3,7 +3,25 @@
   'use strict';
   const P = window.Pipeline, page = document.body.dataset.page;
   const $ = id => document.getElementById(id);
-  let dashboard, selectedJob = new URLSearchParams(location.search).get('job'), map, rectangle, corners = null;
+  const subtitles = {
+    home: 'One workspace for satellite detections, vessel records, and reviewed training images.',
+    area: 'Select a search area, then choose the dates to investigate.',
+    data: 'Prepare imagery and vessel records for your saved search.',
+    run: 'Confirm your inputs and start the satellite and AIS comparison.',
+    jobs: 'Follow background work and download completed results.'
+  };
+  if ($('pageSubtitle')) $('pageSubtitle').textContent = subtitles[page] || '';
+  if ($('pageContext') && ['home', 'jobs'].includes(page)) $('pageContext').textContent = 'Workspace / ' + (page === 'home' ? 'Overview' : 'Background work');
+  document.querySelectorAll('.detect-steps a').forEach(link => {
+    if (link.dataset.step === page) link.setAttribute('aria-current', 'step');
+  });
+  document.querySelectorAll('.app-navigation a').forEach(link => {
+    const activePath = page === 'home' ? '/' : page === 'jobs' ? '/jobs' : '/detect';
+    if (link.getAttribute('href') === activePath && !link.classList.contains('app-brand')) link.setAttribute('aria-current', 'page');
+  });
+  let dashboard, selectedJob = new URLSearchParams(location.search).get('job'), displayedJob, map, rectangle, corners = null;
+  const jobNames = {run: 'Detection', ais: 'AIS download', imagery: 'Imagery download', training: 'Model training', evaluation: 'Evaluation'};
+  const countLabel = (count, noun) => count + ' ' + noun + (count === 1 ? '' : 's');
   const notify = (message, kind) => P.setStatus($('notice'), message, kind);
   const request = async (path, body) => P.api(path, body === undefined ? {} : {method: 'POST', body});
   function error(err) { notify(err.message, 'error'); P.logInteraction('operation_error', {message: err.message}); }
@@ -14,19 +32,71 @@
     location.href = '/jobs?job=' + encodeURIComponent(job.job_id);
   }
   function drawBounds(bbox, fit) {
+    if (bbox.length !== 4 || !bbox.every(Number.isFinite) || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) return;
     const bounds = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]];
-    if (rectangle) rectangle.setBounds(bounds); else rectangle = L.rectangle(bounds, {color: '#155b46', weight: 2, fillOpacity: .12}).addTo(map);
-    if (fit) map.fitBounds(L.latLngBounds(bounds).pad(.7), {padding: [28,28]});
+    if (map) {
+      if (rectangle) rectangle.setBounds(bounds); else rectangle = L.rectangle(bounds, {color: '#155b46', weight: 2, fillOpacity: .12}).addTo(map);
+      if (fit) map.fitBounds(L.latLngBounds(bounds).pad(.7), {padding: [28,28]});
+    }
     ['west','south','east','north'].forEach((key, i) => $(key).value = Number(bbox[i]).toFixed(5));
+    if ($('areaSummary')) $('areaSummary').textContent = 'Area selected. Use the map or edit coordinates to adjust it.';
+  }
+  function initializeAreaMap() {
+    const status = $('mapStatus'), retry = $('retryMap');
+    function backgroundStatus(message, unavailable) {
+      status.textContent = message;
+      status.classList.toggle('map-warning', unavailable);
+      retry.hidden = !unavailable;
+    }
+    if (!window.L) {
+      backgroundStatus('The map viewer could not load. Choose a US area preset or enter coordinates to continue.', true);
+      retry.textContent = 'Reload map viewer';
+      retry.onclick = () => location.reload();
+      $('drawArea').disabled = $('mapExtent').disabled = true;
+      $('mapHint').textContent = 'Presets and coordinates remain available.';
+      P.logInteraction('area_map_unavailable', {reason: 'viewer_assets'});
+      return;
+    }
+    map = L.map('areaMap', {scrollWheelZoom: false}).setView([29.14,-94.65], 10);
+    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18, referrerPolicy: 'strict-origin-when-cross-origin',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    });
+    let failures = 0, timeout;
+    const unavailable = () => backgroundStatus('Map background unavailable. Check the internet connection, then retry. You can still choose a preset or enter coordinates.', true);
+    tiles.on('loading', () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(unavailable, 10000);
+      if (!failures) backgroundStatus('Loading map background…', false);
+    });
+    tiles.on('tileerror', () => {
+      if (!failures++) P.logInteraction('area_map_tile_error', {provider: 'OpenStreetMap'});
+      unavailable();
+    });
+    tiles.on('load', () => {
+      clearTimeout(timeout);
+      const missing = Array.from($('areaMap').querySelectorAll('.leaflet-tile')).some(tile => !tile.complete || !tile.naturalWidth);
+      if (missing) unavailable();
+      else { failures = 0; backgroundStatus('Map background: OpenStreetMap. Internet connection required.', false); }
+    });
+    retry.onclick = () => {
+      failures = 0;
+      P.logInteraction('retry_area_map', {});
+      tiles.redraw();
+    };
+    tiles.addTo(map);
   }
   async function refreshJobs() {
     const data = await request('/api/operations/jobs');
-    $('jobRows').innerHTML = data.jobs.map(job => '<tr><td><button class="job-select" data-id="'+P.esc(job.job_id)+'">'+P.esc(job.kind)+'</button></td><td>'+P.esc(P.shortTime(job.created_at))+'</td><td>'+P.esc(job.status)+'</td></tr>').join('') || '<tr><td colspan="3">No jobs yet. Start with an area and some dates.</td></tr>';
-    $('jobRows').querySelectorAll('button').forEach(button => button.onclick = () => { selectedJob = button.dataset.id; P.logInteraction('select_job', {job_id: selectedJob}); refreshJobs().catch(error); });
     if (!selectedJob && data.jobs.length) selectedJob = data.jobs[0].job_id;
+    $('jobRows').innerHTML = data.jobs.map(job => '<tr><td><button class="job-select" data-id="'+P.esc(job.job_id)+'"'+(job.job_id === selectedJob ? ' aria-current="true"' : '')+'>'+P.esc(jobNames[job.kind] || job.kind)+'</button></td><td>'+P.esc(P.shortTime(job.created_at))+'</td><td><span class="job-state job-state-'+P.esc(job.status)+'">'+P.esc(job.status)+'</span></td></tr>').join('') || '<tr><td colspan="3">No jobs yet. Start with an area and some dates.</td></tr>';
+    $('jobRows').querySelectorAll('button').forEach(button => button.onclick = () => { selectedJob = button.dataset.id; P.logInteraction('select_job', {job_id: selectedJob}); refreshJobs().catch(error); });
     if (!selectedJob) return;
     const job = await request('/api/operations/jobs/' + encodeURIComponent(selectedJob));
-    $('jobTitle').textContent = job.kind + ' / ' + job.status;
+    $('jobTitle').textContent = (jobNames[job.kind] || job.kind) + ' · ' + job.status;
+    if ($('jobDescription')) $('jobDescription').textContent = job.status === 'completed' ? 'This job completed successfully.' : job.status === 'failed' ? 'This job stopped with an error. Check the details below.' : job.status === 'cancelled' ? 'This job was cancelled.' : 'This job continues in the background. Progress updates automatically.';
+    if ($('jobDetails') && displayedJob !== selectedJob) $('jobDetails').open = !['completed', 'failed', 'cancelled'].includes(job.status);
+    displayedJob = selectedJob;
     $('jobLog').textContent = (job.log_tail || []).join('\n') || job.error || 'Waiting for output…';
     $('jobOutput').replaceChildren();
     if (job.error) { const text = document.createElement('p'); text.textContent = job.error; $('jobOutput').append(text); }
@@ -34,7 +104,13 @@
       for (const extension of ['csv', 'json']) {
         const link = document.createElement('a'); link.href = '/api/operations/jobs/' + job.job_id + '/output?format=' + extension; link.textContent = 'Download ' + extension.toUpperCase(); $('jobOutput').append(link);
       }
-      const text = document.createElement('p'); text.textContent = job.result.summary.detections + ' candidate detections'; $('jobOutput').append(text);
+      const summary = job.result.summary;
+      const text = document.createElement('p'); text.textContent = summary.detections + ' candidate detections'; $('jobOutput').append(text);
+      const presence = document.createElement('p');
+      presence.textContent = 'Same-day AIS: ' + (summary.FULLY_DARK || 0) + ' with no nearby vessels; ' + (summary.PARTIALLY_DARK || 0) + ' with one; ' + (summary.AIS_PRESENT || 0) + ' with two or more.';
+      $('jobOutput').append(presence);
+      const unknown = (summary.AIS_MISSING || 0) + (summary.AIS_INVALID || 0);
+      if (unknown) { const warning = document.createElement('p'); warning.className = 'status error'; warning.textContent = 'AIS presence is unknown for ' + unknown + ' candidates because records are missing or invalid. Check the AIS source on Data.'; $('jobOutput').append(warning); }
     }
   }
   try {
@@ -42,29 +118,33 @@
     const settings = dashboard.project;
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
+      if ($('modelSummary')) $('modelSummary').textContent = dashboard.model ? 'STS detector selected' : 'No model selected';
       $('modelName').textContent = dashboard.model ? dashboard.model.filename : 'No model selected';
-      $('modelInfo').textContent = dashboard.model_error || (dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Clean test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
-      $('inventorySummary').textContent = dashboard.inventory.images + ' images / ' + dashboard.inventory.ais_dir + ' AIS files';
-      $('pendingReviews').textContent = dashboard.pending_reviews + ' images waiting for review in Improve.';
-      $('recentRuns').innerHTML = dashboard.jobs.slice(0,3).map(j => '<li><a href="/jobs?job='+encodeURIComponent(j.job_id)+'">'+P.esc(j.kind+' / '+j.status)+'</a></li>').join('');
-      $('jobsSummary').textContent = dashboard.jobs.filter(j => !['completed','failed','cancelled'].includes(j.status)).length + ' active jobs';
+      $('modelInfo').textContent = dashboard.model_error || (dashboard.model && dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Clean test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
+      $('inventorySummary').textContent = countLabel(dashboard.inventory.images, 'image') + ' / ' + countLabel(dashboard.inventory.ais_dir, 'AIS file');
+      const training = dashboard.training_inventory;
+      $('trainingInventory').textContent = countLabel(training.images, 'training image') + ' in ' + countLabel(training.albums, 'album') + '; ' + training.completed + ' reviewed.';
+      $('pendingReviews').textContent = countLabel(dashboard.pending_reviews, 'image') + ' waiting for review in Improve.';
+      $('recentRuns').innerHTML = dashboard.jobs.slice(0,3).map(j => '<li><a href="/jobs?job='+encodeURIComponent(j.job_id)+'">'+P.esc((jobNames[j.kind] || j.kind)+' · '+j.status)+'</a></li>').join('');
+      $('jobsSummary').textContent = countLabel(dashboard.jobs.filter(j => !['completed','failed','cancelled'].includes(j.status)).length, 'active job');
     }
     if (page === 'area') {
-      map = L.map('areaMap', {scrollWheelZoom: false}).setView([29.14,-94.65], 10);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+      initializeAreaMap();
       drawBounds(settings.bbox, true);
       Object.entries(dashboard.presets).forEach(([name]) => $('preset').add(new Option(name, name)));
+      const currentPreset = Object.entries(dashboard.presets).find(([, bbox]) => bbox.every((value, i) => Math.abs(value - settings.bbox[i]) < .00001));
+      if (currentPreset) $('preset').value = currentPreset[0];
       $('preset').onchange = () => { if (dashboard.presets[$('preset').value]) drawBounds(dashboard.presets[$('preset').value], true); P.logInteraction('choose_area_preset', {preset: $('preset').value}); };
-      ['west','south','east','north'].forEach(id => $(id).onchange = () => drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false));
+      ['west','south','east','north'].forEach(id => $(id).onchange = () => { $('preset').value = ''; drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false); });
       ['start','end','images'].forEach(key => $(key).value = settings[key]);
       $('drawArea').onclick = () => { corners = []; $('mapHint').textContent = 'Click the first corner, then the opposite corner.'; P.logInteraction('draw_area_started', {}); };
-      map.on('click', e => { if (corners === null) return; corners.push(e.latlng); if (corners.length === 2) { const b = L.latLngBounds(corners); drawBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], false); corners = null; $('mapHint').textContent = 'Area selected. Save to continue.'; P.logInteraction('draw_area_done', {}); } });
-      $('mapExtent').onclick = () => { const b = map.getBounds(); drawBounds([b.getWest(),b.getSouth(),b.getEast(),b.getNorth()], false); P.logInteraction('use_map_extent', {}); };
+      if (map) map.on('click', e => { if (corners === null) return; corners.push(e.latlng); if (corners.length === 2) { const b = L.latLngBounds(corners); $('preset').value = ''; drawBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], false); corners = null; $('mapHint').textContent = 'Area selected. Save to continue.'; P.logInteraction('draw_area_done', {}); } });
+      $('mapExtent').onclick = () => { const b = map.getBounds(); $('preset').value = ''; drawBounds([b.getWest(),b.getSouth(),b.getEast(),b.getNorth()], false); P.logInteraction('use_map_extent', {}); };
       $('areaForm').onsubmit = async e => { e.preventDefault(); try { await save({bbox: ['west','south','east','north'].map(k => Number($(k).value)), start: $('start').value, end: $('end').value, images: $('images').value}); P.logInteraction('save_area', dashboard.project); location.href = '/data'; } catch (err) {error(err);} };
     }
     if (page === 'data') {
-      $('imageCount').textContent = dashboard.inventory.images + ' image files'; $('imagePath').textContent = settings.images;
-      $('aisCount').textContent = dashboard.inventory.ais_dir + ' AIS files'; $('aisPath').value = settings.ais_dir; $('maxCloud').value = settings.max_cloud;
+      $('imageCount').textContent = countLabel(dashboard.inventory.images, 'image file'); $('imagePath').textContent = settings.images;
+      $('aisCount').textContent = countLabel(dashboard.inventory.ais_dir, 'AIS file'); $('aisPath').value = settings.ais_dir; $('maxCloud').value = settings.max_cloud;
       $('dateSummary').textContent = settings.start + ' → ' + settings.end;
       $('saveAis').onclick = () => save({ais_dir: $('aisPath').value}).then(() => notify('AIS source saved.')).catch(error);
       $('getAis').onclick = () => launch('ais').catch(error);
@@ -72,12 +152,25 @@
     }
     if (page === 'run') {
       $('runModel').textContent = dashboard.model ? 'Current model: ' + dashboard.model.filename : dashboard.model_error;
-      $('runButton').disabled = !dashboard.model || !dashboard.inventory.images;
+      $('runButton').disabled = !dashboard.readiness.ready;
       $('confidence').value = settings.confidence; $('radius').value = settings.radius;
-      $('runInputs').textContent = dashboard.inventory.images + ' image files selected, ' + settings.start + ' to ' + settings.end + '. AIS source: ' + settings.ais_dir;
+      $('runInputs').textContent = countLabel(dashboard.readiness.image_count, 'image file') + (dashboard.readiness.image_count === 1 ? ' matches ' : ' match ') + settings.start + ' to ' + settings.end + '. Same-day AIS records will be checked within ' + P.fmt(settings.radius, 0) + ' metres.';
+      const readinessBox = $('runReadiness').closest('.run-readiness-box');
+      if (readinessBox) readinessBox.dataset.ready = String(dashboard.readiness.ready);
+      for (const message of [...dashboard.readiness.blockers, ...dashboard.readiness.warnings]) { const item = document.createElement('p'); item.textContent = message; $('runReadiness').append(item); }
+      if (dashboard.readiness.ready && !dashboard.readiness.warnings.length) $('runReadiness').textContent = 'Ready to start detection.';
+      P.logInteraction('detection_readiness', dashboard.readiness);
       $('runForm').onsubmit = async e => { e.preventDefault(); $('runButton').disabled = true; try { await save({confidence: Number($('confidence').value), radius: Number($('radius').value)}); await launch('run'); } catch (err) { $('runButton').disabled = false; error(err); } };
     }
     if (page === 'jobs') { await refreshJobs(); $('refreshJobs').onclick = () => refreshJobs().catch(error); setInterval(() => refreshJobs().catch(error), 2500); }
-    document.querySelectorAll('input').forEach(input => input.addEventListener('change', () => P.logInteraction('change_setting', {field: input.id, value: input.value})));
+    document.querySelectorAll('input').forEach(input => {
+      input.addEventListener('change', () => P.logInteraction('change_setting', {field: input.id, value: input.value}));
+      input.addEventListener('invalid', () => {
+        const detail = input.closest('.ops-details');
+        if (detail) detail.open = true;
+        P.logInteraction('invalid_operation_setting', {field: input.id});
+      });
+    });
+    document.querySelectorAll('.ops-details').forEach((detail, index) => detail.addEventListener('toggle', () => P.logInteraction('toggle_operation_details', {page, section: index, open: detail.open})));
   } catch (err) { error(err); }
 })();

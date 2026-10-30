@@ -209,6 +209,14 @@ def test_step4_api_split_preview_reports_scene_groups(tmp_path: Path, monkeypatc
             server.base_url + "/api/dataset-selections",
             {"dataset_name": "Scene Fixture", "dataset_version": "v1", "image_keys": keys},
         )
+        zero_preview = post_json(
+            server.base_url + "/api/dataset-selections/split-preview",
+            {"image_keys": keys, "seed": 0},
+        )
+        zero_saved = post_json(
+            server.base_url + "/api/dataset-selections",
+            {"dataset_name": "Seed Zero Fixture", "image_keys": keys, "seed": 0},
+        )
 
     assert preview["split_mode"] == "group"
     assert preview["group_count"] == 3
@@ -216,6 +224,11 @@ def test_step4_api_split_preview_reports_scene_groups(tmp_path: Path, monkeypatc
     assert legacy["groups_spanning_splits"] > 0
     assert saved["split_summary"]["groups_spanning_splits"] == 0
     assert saved["split_summary"]["group_count"] == 3
+    assert zero_preview["seed"] == 0
+    assert zero_saved["selection"]["split_policy"]["seed"] == 0
+    assert {item["image_key"]: item["split"] for item in zero_preview["items"]} == {
+        item["image_key"]: item["split"] for item in zero_saved["selection"]["items"]
+    }
 
 
 def test_step4_api_exports_dataset_selection(tmp_path: Path, monkeypatch) -> None:
@@ -344,6 +357,7 @@ def test_step5_api_saves_training_config_and_lists_setup_inputs(tmp_path: Path, 
                 "image_size": 320,
                 "epochs": 1,
                 "batch": 2,
+                "seed": 0,
                 "device": "cpu",
                 "augmentation": {"fliplr": 0.5},
                 "selection_path": saved_selection["selection_path"],
@@ -367,12 +381,14 @@ def test_step5_api_saves_training_config_and_lists_setup_inputs(tmp_path: Path, 
 
     assert status == 201
     assert saved_config["config"]["augmentation"] == {"fliplr": 0.5}
+    assert saved_config["config"]["seed"] == 0
     assert configs["configs"][0]["run_name"] == "api_fixture_run"
     assert datasets["datasets"][0]["split_counts"]["train"] == 1
     assert isinstance(weights["weights"], list)
     assert readiness["ready"] is True
     assert preview["command_line"][:3] == ["yolo", "detect", "train"]
     assert "imgsz=320" in preview["command_line"]
+    assert "seed=0" in preview["command_line"]
     assert bad_aug_status == 400
     assert "not_real" in bad_aug["error"]
     interactions = (tmp_path / "reports" / "interactions.jsonl").read_text()

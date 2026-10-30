@@ -34,6 +34,17 @@ def test_module_cli_creates_isolated_workspace(tmp_path):
     assert result['model'] is None
 
 
+@pytest.mark.parametrize('arguments', [['--help'], ['--pretty', 'list-albums']])
+def test_application_cli_forwards_training_flags(tmp_path, arguments):
+    completed = subprocess.run([sys.executable, '-m', 'opendarksts', '--workspace', str(tmp_path),
+                                'training', *arguments], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    if '--help' in arguments:
+        assert 'import-data' in completed.stdout
+    else:
+        assert json.loads(completed.stdout)['ok']
+
+
 @pytest.mark.integration
 def test_real_bundled_example_pipeline(tmp_path):
     pytest.importorskip('ultralytics')

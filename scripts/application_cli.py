@@ -43,6 +43,7 @@ def build_parser():
     project = commands.add_parser("project")
     project.add_argument("--set", dest="settings", help="JSON object of project settings")
     project.add_argument("--start-job", choices=["ais", "imagery", "run"])
+    project.add_argument("--check-ready", action="store_true", help="Check detection inputs for the saved dates")
     results = commands.add_parser("results", help=argparse.SUPPRESS)
     results.add_argument("directory", nargs="?")
     results.add_argument("--detection")
@@ -84,6 +85,8 @@ def execute(args):
     if args.command == "project":
         if args.settings:
             operations.save_project(json.loads(args.settings))
+        if args.check_ready:
+            return operations.detection_readiness()
         return operations.submit_project_job(args.start_job) if args.start_job else operations.project()
     log = lambda message: print(message, file=sys.stderr, flush=True)
     if args.command == "jobs":
@@ -97,7 +100,10 @@ def execute(args):
 
 def main(argv=None):
     try:
-        args = build_parser().parse_args(argv)
+        parser = build_parser()
+        args, forwarded = parser.parse_known_args(argv)
+        if forwarded and args.command != "training":
+            parser.error("unrecognized arguments: " + " ".join(forwarded))
     except SystemExit as exc:
         code = int(exc.code or 0)
         if code:
@@ -107,7 +113,7 @@ def main(argv=None):
         os.environ["OPENDARKSTS_WORKSPACE"] = str(Path(args.workspace).expanduser().resolve())
     if args.command == "training":
         from .training_pipeline_cli import main as training_main
-        return training_main(args.arguments)
+        return training_main(forwarded + args.arguments)
     try:
         with redirect_stdout(sys.stderr):
             result = execute(args)

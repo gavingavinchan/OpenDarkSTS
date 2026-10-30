@@ -825,6 +825,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/training/configs":
             self._handle_list_training_configs()
             return
+        if path == "/api/training/defaults":
+            try:
+                self._respond_json(pipeline.training_defaults())
+            except (ValueError, OSError) as exc:
+                self._respond_json({"error": str(exc)}, status=400)
+            return
         if path == "/api/training/starting-weights":
             self._handle_list_starting_weights()
             return
@@ -1092,7 +1098,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 manifest_path=IMPORT_MANIFEST_PATH,
                 reviewer=IMPORT_REVIEWER,
                 album_ids=[str(value) for value in (payload.get("album_ids") or []) if str(value).strip()],
-                seed=int(payload.get("seed") or 42),
+                seed=int(42 if payload.get("seed") in (None, "") else payload["seed"]),
                 split_ratios=payload.get("split_ratios"),
                 split_mode=str(payload.get("split_mode") or "group"),
                 created_by=IMPORT_REVIEWER,
@@ -1111,7 +1117,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             payload = self._json_body()
             result = pipeline.preview_dataset_split(
                 [str(value) for value in (payload.get("image_keys") or []) if str(value).strip()],
-                seed=int(payload.get("seed") or 42),
+                seed=int(42 if payload.get("seed") in (None, "") else payload["seed"]),
                 split_ratios=payload.get("split_ratios"),
                 split_mode=str(payload.get("split_mode") or "group"),
                 reviews_dir=REVIEWS_DIR,
@@ -1332,8 +1338,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 epochs=int(payload.get("epochs") or 150),
                 batch=int(payload.get("batch") or 8),
                 patience=payload.get("patience"),
-                seed=int(payload.get("seed") or 42),
-                device=payload.get("device", "cpu"),
+                seed=int(42 if payload.get("seed") in (None, "") else payload["seed"]),
+                device=payload.get("device", "auto"),
                 workers=payload.get("workers"),
                 augmentation=payload.get("augmentation") or {},
                 overwrite=bool(payload.get("overwrite")),
@@ -1352,6 +1358,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             "config_path": result["config_path"],
             "run_group": result["config"]["run_group"],
             "run_name": result["config"]["run_name"],
+            "device": result["config"]["device"],
+            "device_request": result["config"].get("device_request"),
             "warnings": result.get("warnings") or [],
         })
         self._respond_json(result, status=201)
@@ -1471,7 +1479,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 result = pipeline.run_test_split(
                     run_dir,
                     dataset_dir=payload.get("dataset_dir"),
-                    device=payload.get("device", "cpu"),
+                    device=payload.get("device", "auto"),
                     image_size=payload.get("image_size"),
                 )
             except Exception as exc:
@@ -1553,7 +1561,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             result = pipeline.run_test_split(
                 run_dir,
                 dataset_dir=payload.get("dataset_dir"),
-                device=payload.get("device", "cpu"),
+                device=payload.get("device", "auto"),
                 image_size=payload.get("image_size"),
             )
         except (ValueError, FileNotFoundError) as exc:

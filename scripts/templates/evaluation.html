@@ -13,7 +13,7 @@
         <div class="filenum">07<sup>/07</sup></div>
         <div>
           <h1>Evaluate &amp; Promote</h1>
-          <p class="subtitle">Compare the runs in a run group, score the held-out test split, write the evaluation report, and promote the winning weight.</p>
+          <p class="subtitle">Compare trained models, check their performance, and choose a model for detection.</p>
         </div>
       </div>
       __STAGE_NAV__
@@ -176,7 +176,7 @@
       let job;
       try {
         job = await P.api('/api/training/runs/' + encodeURIComponent(state.group) + '/' +
-          encodeURIComponent(runName) + '/test-split', { method: 'POST', body: { background: true, device: 'cpu' } });
+          encodeURIComponent(runName) + '/test-split', { method: 'POST', body: { background: true, device: 'auto' } });
       } catch (error) {
         button.disabled = false;
         P.setStatus('testStatus', 'Test split failed to start: ' + error.message, 'err');

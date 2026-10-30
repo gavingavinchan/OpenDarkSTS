@@ -12,8 +12,8 @@
       <div class="titleblock">
         <div class="filenum">06<sup>/07</sup></div>
         <div>
-          <h1>Train YOLO</h1>
-          <p class="subtitle">Launch a pipeline-managed detached training run and watch its state, epoch progress, metrics, and log tail live.</p>
+          <h1>Train model</h1>
+          <p class="subtitle">Start a prepared run and follow its training progress.</p>
         </div>
       </div>
       __STAGE_NAV__
@@ -21,11 +21,16 @@
 
     <main>
       <section class="card">
-        <h2>Start A Run</h2>
-        <div class="grid2">
-          <label class="field"><span>Training config</span><select id="configSelect"></select></label>
-          <label class="field"><span>Dataset selection manifest</span><select id="selectionSelect"></select></label>
-        </div>
+        <h2>Start training</h2>
+        <label class="field"><span>Prepared training setup</span><select id="configSelect"></select></label>
+        <p class="hint" id="preparedSummary">Choose a saved setup or <a href="/training-setup">prepare a new run</a>.</p>
+        <details class="advanced" id="trainingAdvanced">
+          <summary>Advanced · change the dataset</summary>
+          <div class="advanced-body">
+            <label class="field"><span>Reviewed dataset</span><select id="selectionSelect"></select></label>
+            <p class="hint">The dataset saved with this setup is selected automatically. Change it only when intentionally reusing a setup.</p>
+          </div>
+        </details>
         <div class="row">
           <button id="refreshReadiness" type="button">Check Readiness</button>
           <button id="startRun" class="primary" type="button" disabled>Start Training</button>
@@ -47,7 +52,8 @@
             <h2>Selected Run</h2>
             <p class="hint" id="detailTitle">Pick a run card to see its live detail.</p>
             <div class="bar"><i id="epochBar" style="width:0%"></i></div>
-            <dl class="kv" id="detailMeta"></dl>
+            <p class="hint" id="runProgressSummary">No run selected.</p>
+            <details class="advanced" id="runTechnicalDetails"><summary>Run details</summary><div class="advanced-body"><dl class="kv" id="detailMeta"></dl></div></details>
             <div class="row">
               <button id="stopRun" class="danger" type="button" disabled>Stop Training</button>
               <button id="gotoEval" type="button" disabled>Go To Evaluation</button>
@@ -56,7 +62,7 @@
           </section>
 
           <section class="card">
-            <h2>Metrics (results.csv)</h2>
+            <h2>Training performance</h2>
             <div class="spark" id="spark"></div>
             <div class="scroll" style="max-height:220px;">
               <table><thead><tr><th>Epoch</th><th>box_loss</th><th>mAP50</th><th>mAP50-95</th></tr></thead>
@@ -64,10 +70,10 @@
             </div>
           </section>
 
-          <section class="card">
-            <h2>Log Tail</h2>
-            <pre class="log" id="logTail">No run selected.</pre>
-          </section>
+          <details class="advanced" id="trainingLog">
+            <summary>Training log</summary>
+            <div class="advanced-body"><pre class="log" id="logTail">No run selected.</pre></div>
+          </details>
         </div>
       </div>
     </main>
@@ -88,14 +94,27 @@
       state.selections = (selections.selections || []).filter(function (item) { return item.exported; });
       document.getElementById('configSelect').innerHTML = state.configs.map(function (config) {
         return '<option value="' + P.esc(config.config_path) + '">' + P.esc(config.run_group) + ' / ' +
-          P.esc(config.run_name) + ' — ' + P.esc(config.config_path) + '</option>';
+          P.esc(config.run_name) + '</option>';
       }).join('') || '<option value="">No training configs — create one in step 5</option>';
       document.getElementById('selectionSelect').innerHTML = state.selections.map(function (item) {
         return '<option value="' + P.esc(item.selection_path) + '">' + P.esc(item.dataset_name) + ' ' +
-          P.esc(item.dataset_version) + ' — ' + P.esc(item.selection_path) + '</option>';
+          P.esc(item.dataset_version) + '</option>';
       }).join('') || '<option value="">No exported dataset selections — export one in step 4</option>';
       if (params.get('config_path')) { document.getElementById('configSelect').value = params.get('config_path'); }
+      syncPreparedConfig();
       if (params.get('selection_path')) { document.getElementById('selectionSelect').value = params.get('selection_path'); }
+    }
+
+    function syncPreparedConfig() {
+      const config = state.configs.find(function (item) { return item.config_path === document.getElementById('configSelect').value; });
+      const selection = config && (state.selections.find(function (item) { return item.selection_path === config.selection_path; }) ||
+        state.selections.find(function (item) { return item.dataset_name === config.dataset_name && String(item.dataset_version) === String(config.dataset_version); }));
+      document.getElementById('selectionSelect').value = selection ? selection.selection_path : '';
+      document.getElementById('startRun').disabled = true;
+      const summary = document.getElementById('preparedSummary');
+      if (!config) { summary.innerHTML = 'No saved setup. <a href="/training-setup">Prepare a training run</a>.'; return; }
+      const device = String(config.device) === 'cpu' ? 'CPU' : (String(config.device) === 'mps' ? 'Apple GPU' : 'GPU ' + config.device);
+      summary.textContent = (selection ? selection.dataset_name + ' · ' : 'No matching exported dataset · ') + config.epochs + ' epochs · ' + device;
     }
 
     function pickedPaths() {
@@ -107,12 +126,16 @@
 
     async function checkReadiness() {
       const picked = pickedPaths();
+      document.getElementById('startRun').disabled = true;
       if (!picked.config_path || !picked.selection_path) {
-        P.setStatus('startStatus', 'Pick both a training config and an exported dataset selection.', 'err');
+        document.getElementById('startReadiness').innerHTML = '<li class="empty">Prepare a setup with an exported dataset in Training Setup.</li>';
+        P.setStatus('startStatus', 'This setup needs a matching reviewed dataset. Choose another setup or return to Training Setup.', 'err');
         return false;
       }
       try {
         const data = await P.api('/api/training/readiness', { method: 'POST', body: picked });
+        const now = pickedPaths();
+        if (now.config_path !== picked.config_path || now.selection_path !== picked.selection_path) { return false; }
         const items = [];
         if (data.ready) { items.push('<li>Ready to start training</li>'); }
         (data.missing || []).forEach(function (item) { items.push('<li class="miss">' + P.esc(item) + '</li>'); });
@@ -181,8 +204,7 @@
           '<div class="row" style="justify-content:space-between;"><strong>' + P.esc(run.run_group) + ' / ' + P.esc(run.run_name) + '</strong>' +
           statusPill(run.status) + '</div>' +
           '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
-          '<div class="hint">epoch ' + current + ' / ' + (total || '?') + ' · pid ' + P.esc(run.pid || '—') +
-          ' · started ' + P.esc(P.shortTime(run.started_at)) + '</div>' +
+          '<div class="hint">epoch ' + current + ' / ' + (total || '?') + ' · started ' + P.esc(P.shortTime(run.started_at)) + '</div>' +
           '<div class="row"><button type="button" class="ghost open-run">Open</button>' +
           (run.status === 'completed' ? '<button type="button" class="ghost eval-run">Evaluate &rarr;</button>' : '') +
           '</div></div>';
@@ -252,6 +274,7 @@
       document.getElementById('detailTitle').textContent = data.run_group + ' / ' + data.run_name + ' — ' + endedLabel(data);
       const total = Number(data.expected_epochs || 0);
       const current = Number(data.current_epoch || 0);
+      document.getElementById('runProgressSummary').textContent = 'Epoch ' + current + ' of ' + (total || '?') + ' · ' + endedLabel(data);
       document.getElementById('epochBar').style.width = (total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0) + '%';
       const best = data.best_metrics || {};
       document.getElementById('detailMeta').innerHTML =
@@ -290,6 +313,8 @@
     }
 
     function wire() {
+      document.getElementById('configSelect').addEventListener('change', function () { syncPreparedConfig(); checkReadiness(); });
+      document.getElementById('selectionSelect').addEventListener('change', checkReadiness);
       document.getElementById('refreshReadiness').addEventListener('click', checkReadiness);
       document.getElementById('startRun').addEventListener('click', startRun);
       document.getElementById('refreshRuns').addEventListener('click', function () { loadRuns(); refreshDetail(); });
@@ -306,7 +331,7 @@
     }
 
     wire();
-    loadPickers().then(loadRuns).then(function () {
+    loadPickers().then(function () { checkReadiness(); return loadRuns(); }).then(function () {
       if (params.get('run_group') && params.get('run_name')) {
         state.selectedRun = { run_group: params.get('run_group'), run_name: params.get('run_name') };
         return refreshDetail();

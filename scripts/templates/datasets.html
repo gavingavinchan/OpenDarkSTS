@@ -13,7 +13,7 @@
         <div class="filenum">04<sup>/07</sup></div>
         <div>
           <h1>Dataset Selection</h1>
-          <p class="subtitle">Pick reviewed images, assign train/val/test splits, save a reproducible selection manifest, and export it as a YOLO dataset.</p>
+          <p class="subtitle">Choose reviewed images and export a dataset for training.</p>
         </div>
       </div>
       __STAGE_NAV__
@@ -28,13 +28,13 @@
           </label>
           <label class="field"><span>Label class</span>
             <select id="labelFilter" multiple size="5">
-              <option value="ship">ship</option>
-              <option value="ships">ships</option>
-              <option value="neither">neither</option>
-              <option value="exportable">exportable</option>
+              <option value="ship">Single vessel (non-STS)</option>
+              <option value="ships">STS pair</option>
+              <option value="neither">Not a vessel / false detection</option>
+              <option value="exportable">All vessel bounding boxes</option>
             </select>
           </label>
-          <label class="field"><span>Has ships (bbox)</span>
+          <label class="field"><span>Vessel bounding boxes</span>
             <select id="hasShipsFilter">
               <option value="any">Any</option>
               <option value="yes">Only images with exportable bboxes</option>
@@ -54,6 +54,7 @@
             <input id="searchFilter" placeholder="filename or image key" autocomplete="off">
           </label>
         </div>
+        <p class="hint">Leave Albums and Label class unselected to include all. Hold Ctrl (Command on macOS) to select or clear multiple options, then select Apply Filters.</p>
         <div class="row">
           <button id="applyFilters" class="primary" type="button">Apply Filters</button>
           <button id="selectAll" type="button">Select All Visible</button>
@@ -71,7 +72,7 @@
             <table id="candidateTable">
               <thead><tr>
                 <th><input type="checkbox" id="headerToggle" title="Toggle all visible"></th>
-                <th>Image</th><th>Albums</th><th>Status</th><th>ship</th><th>ships</th><th>neither</th><th>Split</th>
+                <th>Image</th><th>Albums</th><th>Status</th><th>Single vessels</th><th>STS pairs</th><th>False detections</th><th>Split</th>
               </tr></thead>
               <tbody id="candidateBody"></tbody>
             </table>
@@ -81,15 +82,15 @@
         <div style="display:grid; gap:18px;">
           <section class="card">
             <h2>Split Preview</h2>
-            <p class="hint">Splits are assigned deterministically by the backend from the selected image keys and seed. In <code>group</code> mode every <code>&lt;region&gt;|&lt;date&gt;</code> scene group lands in exactly one split, so adjacent tiles of one observation cannot leak between train and val/test.</p>
+            <p class="hint">Training images teach the model. Validation images guide training, and test images provide a separate final assessment. The recommended scene grouping keeps images from the same location and date together, avoiding overlap between these groups. The seed reproduces the same assignment.</p>
             <div class="grid3">
               <label class="field"><span>Train %</span><input id="ratioTrain" type="number" min="0" max="100" step="1" value="80"></label>
-              <label class="field"><span>Val %</span><input id="ratioVal" type="number" min="0" max="100" step="1" value="10"></label>
+              <label class="field"><span>Validation %</span><input id="ratioVal" type="number" min="0" max="100" step="1" value="10"></label>
               <label class="field"><span>Test %</span><input id="ratioTest" type="number" min="0" max="100" step="1" value="10"></label>
               <label class="field"><span>Seed</span><input id="seed" type="number" value="42"></label>
               <label class="field"><span>Split mode</span><select id="splitMode">
-                <option value="group" selected>group (scene-safe)</option>
-                <option value="image">image (legacy, leaks scenes)</option>
+                <option value="group" selected>Keep each scene together (recommended)</option>
+                <option value="image">Split individual images (may overlap scenes)</option>
               </select></label>
             </div>
             <div class="row">
@@ -111,6 +112,7 @@
               <button id="exportSelection" type="button" disabled>Export YOLO Dataset</button>
               <button id="continueToSetup" type="button" disabled>Continue To Training Setup</button>
             </div>
+            <p class="hint" id="selectionDirtyStatus" role="status" aria-live="polite"></p>
             <div class="status" id="saveStatus"></div>
           </section>
         </div>
@@ -141,6 +143,8 @@
       selections: [],
       lastSelectionPath: null,
       lastExportDir: null,
+      lastSavedSignature: null,
+      lastExportSignature: null,
     };
 
     function currentFilters() {
@@ -203,9 +207,10 @@
         reviewerSelect.value = previous;
         const counts = data.bbox_counts || {};
         document.getElementById('candidateSummary').textContent =
-          data.candidate_count + ' candidate images · ship ' + (counts.ship || 0) +
-          ' · ships ' + (counts.ships || 0) + ' · neither ' + (counts.neither || 0) +
-          ' · exportable bboxes ' + (counts.exportable || 0);
+          data.candidate_count + ' candidate images · single vessels ' + (counts.ship || 0) +
+          ' · STS pairs ' + (counts.ships || 0) + ' · false detections ' + (counts.neither || 0) +
+          ' · vessel bounding boxes ' + (counts.exportable || 0);
+        delete document.getElementById('candidateSummary').dataset.base;
         P.setStatus('candidateStatus', '');
         applyClientFilters();
       } catch (error) {
@@ -244,13 +249,22 @@
 
     function updateSelectionSummary() {
       const count = state.selected.size;
+      const visibleSelected = state.visible.filter(item => state.selected.has(item.image_key)).length;
+      const headerToggle = document.getElementById('headerToggle');
+      headerToggle.checked = state.visible.length > 0 && visibleSelected === state.visible.length;
+      headerToggle.indeterminate = visibleSelected > 0 && visibleSelected < state.visible.length;
+      headerToggle.disabled = state.visible.length === 0;
       document.getElementById('saveSelection').disabled = count === 0;
-      document.getElementById('exportSelection').disabled = !state.lastSelectionPath;
-      document.getElementById('continueToSetup').disabled = !state.lastExportDir;
+      const signature = selectionSignature();
+      const unsaved = state.lastSelectionPath && signature !== state.lastSavedSignature;
+      document.getElementById('exportSelection').disabled = !state.lastSelectionPath || !!unsaved;
+      document.getElementById('continueToSetup').disabled = !state.lastExportDir || !!unsaved || signature !== state.lastExportSignature;
+      document.getElementById('selectionDirtyStatus').textContent = unsaved
+        ? 'The selected images or dataset settings have changed. Save Selection again before exporting.' : '';
       const summary = document.getElementById('candidateSummary');
       const base = summary.dataset.base || summary.textContent;
       summary.dataset.base = base;
-      summary.textContent = base.replace(/ · selected \d+$/, '') + ' · selected ' + count;
+      summary.textContent = base.replace(/ · selected \d+$/, '') + ' · visible ' + state.visible.length + ' · selected ' + count;
     }
 
     function splitRatios() {
@@ -260,6 +274,24 @@
       const total = train + val + test;
       if (total <= 0) { return { train: 0.8, val: 0.1, test: 0.1 }; }
       return { train: train / total, val: val / total, test: test / total };
+    }
+
+    function datasetSeed() {
+      const value = document.getElementById('seed').value.trim();
+      const number = Number(value);
+      return value && Number.isFinite(number) ? number : 42;
+    }
+
+    function selectionSignature() {
+      return JSON.stringify({
+        image_keys: Array.from(state.selected).sort(),
+        seed: datasetSeed(),
+        split_ratios: splitRatios(),
+        split_mode: document.getElementById('splitMode').value,
+        dataset_name: document.getElementById('datasetName').value.trim(),
+        dataset_version: document.getElementById('datasetVersion').value.trim() || 'v1',
+        description: document.getElementById('datasetDescription').value.trim() || null,
+      });
     }
 
     function renderSplitPreview(summary) {
@@ -281,7 +313,7 @@
     async function previewSplits() {
       const keys = Array.from(state.selected);
       const ratios = splitRatios();
-      const seed = Number(document.getElementById('seed').value) || 42;
+      const seed = datasetSeed();
       const splitMode = document.getElementById('splitMode').value;
       P.setStatus('splitStatus', 'Previewing splits\u2026');
       P.logInteraction('preview_splits', { selected_count: keys.length, seed: seed, ratios: ratios, split_mode: splitMode });
@@ -309,14 +341,16 @@
         description: document.getElementById('datasetDescription').value.trim() || null,
         image_keys: Array.from(state.selected),
         album_ids: currentFilters().album_ids,
-        seed: Number(document.getElementById('seed').value) || 42,
+        seed: datasetSeed(),
         split_ratios: splitRatios(),
         split_mode: document.getElementById('splitMode').value,
       };
+      const signature = selectionSignature();
       P.setStatus('saveStatus', 'Saving selection…');
       try {
         const data = await P.api('/api/dataset-selections', { method: 'POST', body: payload });
         state.lastSelectionPath = data.selection_path;
+        state.lastSavedSignature = signature;
         state.splits = {};
         ((data.selection || {}).items || []).forEach(function (item) { state.splits[item.image_key] = item.split; });
         if (data.split_summary) { renderSplitPreview(data.split_summary); }
@@ -334,12 +368,21 @@
     async function exportSelection(selectionPath) {
       const target = selectionPath || state.lastSelectionPath;
       if (!target) { P.setStatus('saveStatus', 'Save a selection first.', 'err'); return; }
+      const signature = selectionSignature();
+      if (!selectionPath && signature !== state.lastSavedSignature) {
+        P.setStatus('saveStatus', 'Save Selection again before exporting the changed images or settings.', 'err');
+        updateSelectionSummary();
+        return;
+      }
       P.setStatus('saveStatus', 'Exporting ' + target + '…');
       try {
         const data = await P.api('/api/dataset-selections/export', { method: 'POST', body: { selection_path: target } });
-        state.lastExportDir = data.dataset_dir;
+        const matchesCurrent = target === state.lastSelectionPath && signature === state.lastSavedSignature;
+        state.lastExportDir = matchesCurrent ? data.dataset_dir : null;
+        state.lastExportSignature = matchesCurrent ? signature : null;
         const warnings = (data.warnings || []).length ? ' Warnings: ' + data.warnings.join('; ') : '';
-        P.setStatus('saveStatus', 'Exported ' + data.exported_image_count + ' images to ' + data.dataset_dir + '.' + warnings, 'ok');
+        const next = matchesCurrent ? '' : ' To train this saved dataset, open Training Setup and select its name and version.';
+        P.setStatus('saveStatus', 'Exported ' + data.exported_image_count + ' images to ' + data.dataset_dir + '.' + warnings + next, 'ok');
         await loadSelections();
       } catch (error) {
         P.setStatus('saveStatus', 'Export failed: ' + error.message, 'err');
@@ -404,6 +447,14 @@
         renderCandidates();
       });
       document.getElementById('previewSplits').addEventListener('click', previewSplits);
+      ['ratioTrain', 'ratioVal', 'ratioTest', 'seed', 'splitMode', 'datasetName', 'datasetVersion', 'datasetDescription'].forEach(function (id) {
+        const control = document.getElementById(id);
+        control.addEventListener('input', updateSelectionSummary);
+        control.addEventListener('change', function () {
+          updateSelectionSummary();
+          P.logInteraction('dataset_settings_changed', { control: id, selected_count: state.selected.size });
+        });
+      });
       document.getElementById('saveSelection').addEventListener('click', function () { saveSelection(); });
       document.getElementById('exportSelection').addEventListener('click', function () { exportSelection(null); });
       document.getElementById('continueToSetup').addEventListener('click', function () {

@@ -2633,7 +2633,7 @@ def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str |
         f"imgsz={training_config['image_size']}",
         f"epochs={training_config['epochs']}",
         f"batch={training_config['batch']}",
-        f"device={training_config['device']}",
+        f"device={resolve_training_device(training_config['device'])}",
         f"seed={training_config['seed']}",
         f"project={output_root / run_group}",
         f"name={run_name}",
@@ -2842,6 +2842,63 @@ def export_dataset_selection(
     output_dir_override: str | Path | None = None,
     include_incomplete_override: bool | None = None,
 ) -> dict[str, Any]:
+    """Build a complete replacement before publishing any exported dataset files."""
+    selection_file = repo_resolve(selection_path)
+    selection = load_json(selection_file)
+    output_dir = output_dir_override or selection.get("export", {}).get("output_dir")
+    if not output_dir:
+        raise ValueError("Dataset selection manifest is missing export.output_dir")
+    dataset_dir = contained(repo_resolve(output_dir), WORKSPACE_DIR)
+    if dataset_dir == WORKSPACE_DIR:
+        raise ValueError("Dataset export requires its own subdirectory")
+    dataset_dir.parent.mkdir(parents=True, exist_ok=True)
+    token = hashlib.sha256(str(dataset_dir).encode()).hexdigest()
+    with exclusive_lock(WORKSPACE_DIR / "datasets" / ".export_locks" / token, blocking=True):
+        with tempfile.TemporaryDirectory(prefix=".dataset_export_", dir=dataset_dir.parent) as temporary:
+            staging = Path(temporary) / "new"
+            manifest = _export_dataset_selection_into(
+                selection_file, staging, dataset_dir,
+                output_dir_override=output_dir_override,
+                include_incomplete_override=include_incomplete_override,
+            )
+            _publish_dataset_export(staging, dataset_dir, Path(temporary) / "previous")
+            return manifest
+
+
+def _publish_dataset_export(staging: Path, dataset_dir: Path, backup: Path) -> None:
+    """Replace managed output entries, restoring the prior export on publish failure."""
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    backup.mkdir()
+    names = ("images", "labels", "data.yaml", "dataset_manifest.json")
+    for name in names:
+        if (dataset_dir / name).is_symlink():
+            raise ValueError(f"Dataset output entry must not be a symbolic link: {dataset_dir / name}")
+    replaced, saved = [], []
+    try:
+        for name in names:
+            target = contained(dataset_dir / name, WORKSPACE_DIR)
+            if target.exists():
+                target.replace(backup / name)
+                saved.append(name)
+            (staging / name).replace(target)
+            replaced.append(name)
+    except Exception:
+        for name in reversed(replaced):
+            target = dataset_dir / name
+            target.replace(staging / name)
+        for name in reversed(saved):
+            (backup / name).replace(dataset_dir / name)
+        raise
+
+
+def _export_dataset_selection_into(
+    selection_path: str | Path,
+    dataset_dir: Path,
+    published_dir: Path,
+    *,
+    output_dir_override: str | Path | None = None,
+    include_incomplete_override: bool | None = None,
+) -> dict[str, Any]:
     selection_file = repo_resolve(selection_path)
     selection = load_json(selection_file)
     if int(selection.get("schema_version", 0)) != SCHEMA_VERSION:
@@ -2858,11 +2915,8 @@ def export_dataset_selection(
     if not output_dir:
         raise ValueError("Dataset selection manifest is missing export.output_dir")
 
-    dataset_dir = contained(repo_resolve(output_dir), WORKSPACE_DIR)
-    if dataset_dir == WORKSPACE_DIR:
-        raise ValueError("Dataset export requires its own subdirectory")
     include_incomplete = bool(selection.get("export", {}).get("include_incomplete_reviews", False))
-    reset_dataset_split_dirs(dataset_dir)
+    ensure_dataset_dirs(dataset_dir)
 
     exported_files: list[dict[str, Any]] = []
     exported_image_keys: list[str] = []
@@ -2898,6 +2952,10 @@ def export_dataset_selection(
             exported_image_keys.append(image_key)
 
     write_data_yaml(dataset_dir)
+    yaml_path = dataset_dir / "data.yaml"
+    # The temporary build directory disappears after publication; YOLO must use
+    # the final dataset location recorded here and in the exported checksum.
+    yaml_path.write_text(yaml_path.read_text().replace(f"path: {dataset_dir}\n", f"path: {published_dir}\n", 1))
     exported_files.append(record_exported_file(dataset_dir, dataset_dir / "data.yaml"))
     warnings.extend(likely_duplicate_class_name_warnings(list(CLASS_ID_TO_NAME.values())))
 
@@ -3218,9 +3276,11 @@ def list_exported_datasets(datasets_dir: str | Path = DEFAULT_DATASETS_DIR) -> l
             "dataset_manifest": repo_relative(manifest_path),
             "data_yaml": repo_relative(dataset_dir / "data.yaml"),
             "data_yaml_exists": (dataset_dir / "data.yaml").is_file(),
-            "image_count": len(manifest.get("exported_image_keys") or []),
+            "image_count": sum(split_counts.values()),
             "split_counts": split_counts,
             "warnings": list(manifest.get("warnings") or []),
+            "selection_path": repo_relative(repo_resolve(manifest["dataset_selection_manifest"]))
+                if manifest.get("dataset_selection_manifest") and repo_resolve(manifest["dataset_selection_manifest"]).is_file() else None,
         })
     datasets.sort(key=lambda item: str(item.get("dataset_dir") or ""))
     return datasets
@@ -3229,6 +3289,58 @@ def list_exported_datasets(datasets_dir: str | Path = DEFAULT_DATASETS_DIR) -> l
 def training_config_filename(run_group: str, config_name: str | None = None) -> str:
     slug = slugify(config_name or run_group, "training_config")
     return f"{slug}.json"
+
+
+TRAINING_COMPUTE_SNIPPET = """
+import json, sys, torch
+cuda = torch.cuda.is_available()
+mps = bool(getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available())
+print(json.dumps({'device': 0 if cuda else 'mps' if mps else 'cpu',
+    'backend': 'cuda' if cuda else 'mps' if mps else 'cpu',
+    'label': torch.cuda.get_device_name(0) if cuda else 'Apple GPU' if mps else 'CPU',
+    'python_executable': sys.executable, 'torch_version': torch.__version__}))
+"""
+
+
+def training_compute(python_executable: str | Path | None = None) -> dict[str, Any]:
+    """Inspect the interpreter used for training; prefer a GPU when available."""
+    interpreter = str(python_executable or sys.executable)
+    if os.path.abspath(interpreter) != os.path.abspath(sys.executable):
+        completed = subprocess.run([interpreter, "-c", TRAINING_COMPUTE_SNIPPET],
+                                   capture_output=True, text=True, timeout=30)
+        if completed.returncode:
+            raise ValueError("Could not inspect training hardware in " + interpreter + ": " + completed.stderr.strip())
+        return json.loads(completed.stdout)
+    try:
+        import torch
+    except ImportError as exc:
+        raise ValueError("Automatic hardware selection requires PyTorch in the training Python environment; install the application dependencies or choose CPU explicitly") from exc
+    cuda = torch.cuda.is_available()
+    mps = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    return {"device": 0 if cuda else "mps" if mps else "cpu",
+            "backend": "cuda" if cuda else "mps" if mps else "cpu",
+            "label": torch.cuda.get_device_name(0) if cuda else "Apple GPU" if mps else "CPU",
+            "python_executable": sys.executable, "torch_version": torch.__version__}
+
+
+def resolve_training_device(device: str | int | None, *, python_executable: str | Path | None = None) -> str | int:
+    if device is None or str(device).strip().lower() in {"", "auto"}:
+        return training_compute(python_executable)["device"]
+    return device
+
+
+def training_defaults() -> dict[str, Any]:
+    compute = training_compute()
+    recommended = None
+    try:
+        model = current_model(DEFAULT_MODEL_WEIGHTS_DIR)
+        if model.is_file() and weight_is_documented(model):
+            recommended = repo_relative(model)
+    except (OSError, ValueError):
+        pass
+    return {"defaults": {"image_size": 960, "epochs": 150, "batch": 8, "patience": 30,
+                         "seed": 42, "workers": 4, "device": "auto", "augmentation": {}},
+            "compute": compute, "recommended_model": recommended}
 
 
 def save_training_config(
@@ -3243,7 +3355,7 @@ def save_training_config(
     batch: int = 8,
     patience: int | None = 30,
     seed: int = 42,
-    device: str | int = "cpu",
+    device: str | int = "auto",
     workers: int | None = 4,
     augmentation: dict[str, Any] | None = None,
     overwrite: bool = False,
@@ -3283,7 +3395,10 @@ def save_training_config(
         "batch": int(batch),
         "patience": None if patience is None else int(patience),
         "seed": int(seed),
-        "device": device,
+        "device": resolve_training_device(device),
+        "device_request": device,
+        "training_python": sys.executable,
+        "selection_path": repo_relative(repo_resolve(selection_path)) if selection_path is not None else None,
         "workers": None if workers is None else int(workers),
         "augmentation": normalize_augmentation(augmentation),
         "run_group": clean_group,
@@ -3342,6 +3457,8 @@ def list_training_configs(configs_dir: str | Path = DEFAULT_TRAINING_CONFIGS_DIR
             "epochs": config.get("epochs"),
             "batch": config.get("batch"),
             "device": config.get("device"),
+            "device_request": config.get("device_request"),
+            "selection_path": config.get("selection_path"),
             "seed": config.get("seed"),
             "patience": config.get("patience"),
             "workers": config.get("workers"),
@@ -4072,7 +4189,7 @@ def run_test_split(
     run_dir: str | Path,
     *,
     dataset_dir: str | Path | None = None,
-    device: str | int = "cpu",
+    device: str | int = "auto",
     image_size: int | None = None,
     python_executable: str | Path | None = None,
     timeout_seconds: float | None = 3600.0,
@@ -4095,6 +4212,7 @@ def run_test_split(
         raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
 
     interpreter = str(python_executable or sys.executable)
+    device = resolve_training_device(device, python_executable=interpreter)
     output_path = target / TEST_METRICS_FILENAME
     log_path = target / "test_eval.log"
     if safe_file_in_roots(log_path, [target]) is None:

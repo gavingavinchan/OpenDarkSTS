@@ -251,3 +251,17 @@ def test_list_exported_datasets_finds_nested_datasets_and_skips_raw(tmp_path: Pa
     names = {item["dataset_name"] for item in training_lib.list_exported_datasets(datasets_dir)}
 
     assert names == {"top_level", "derived_sts_clean_v1"}
+
+
+def test_legacy_exported_dataset_count_uses_files_on_disk(tmp_path: Path) -> None:
+    training_lib = load_training_lib()
+    dataset_dir = tmp_path / 'datasets' / 'legacy'
+    for split in ['train', 'val', 'test']:
+        directory = dataset_dir / 'images' / split
+        directory.mkdir(parents=True)
+        (directory / 'fixture.png').write_bytes(b'fixture')
+    # Older derived datasets do not have exported_image_keys.
+    write_json(dataset_dir / 'dataset_manifest.json', {'dataset_name': 'legacy'})
+    record = training_lib.list_exported_datasets(tmp_path / 'datasets')[0]
+    assert record['image_count'] == 3
+    assert record['split_counts'] == {'train': 1, 'val': 1, 'test': 1}

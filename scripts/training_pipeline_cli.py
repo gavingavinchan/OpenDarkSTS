@@ -556,6 +556,10 @@ def command_save_training_config(args: argparse.Namespace) -> tuple[int, dict[st
     return 0, envelope("save-training-config", ok=True, result=payload, warnings=list(result.get("warnings") or []))
 
 
+def command_training_defaults(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    return 0, envelope("training-defaults", ok=True, result=pipeline.training_defaults())
+
+
 def command_list_training_configs(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     configs = pipeline.list_training_configs(args.configs_dir)
     result = {"config_count": len(configs), "configs": configs}
@@ -720,6 +724,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--human", action="store_true", help="Print concise human-readable output")
     parser.add_argument("--verbose", action="store_true", help="Include additional diagnostics when available")
     subparsers = parser.add_subparsers(dest="command")
+    defaults_parser = subparsers.add_parser("training-defaults", help="Show recommended settings and available training hardware")
+    defaults_parser.set_defaults(handler=command_training_defaults)
 
     import_parser = subparsers.add_parser("import-data")
     import_parser.add_argument("--source", action="append", required=True)
@@ -905,7 +911,7 @@ def build_parser() -> argparse.ArgumentParser:
     save_config_parser.add_argument("--batch", type=int, default=8)
     save_config_parser.add_argument("--patience", type=int, default=30)
     save_config_parser.add_argument("--seed", type=int, default=42)
-    save_config_parser.add_argument("--device", default="cpu")
+    save_config_parser.add_argument("--device", default="auto", help="auto selects CUDA, then Apple GPU, then CPU; explicit device choices are preserved")
     save_config_parser.add_argument("--workers", type=int, default=4)
     save_config_parser.add_argument("--aug", action="append", help="Augmentation setting as key=value; repeatable")
     save_config_parser.add_argument("--overwrite", action="store_true")
@@ -982,7 +988,7 @@ def build_parser() -> argparse.ArgumentParser:
     test_split_parser.add_argument("--run-name")
     test_split_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
     test_split_parser.add_argument("--dataset-dir")
-    test_split_parser.add_argument("--device", default="cpu")
+    test_split_parser.add_argument("--device", default="auto")
     test_split_parser.add_argument("--image-size", type=int)
     test_split_parser.add_argument("--python-executable")
     test_split_parser.set_defaults(handler=command_run_test_split)

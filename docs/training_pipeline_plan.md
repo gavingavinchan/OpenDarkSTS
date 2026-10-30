@@ -1672,7 +1672,9 @@ First-version export rules:
 
 Purpose: choose which dataset and training settings will be used for one or more YOLO runs.
 
-The user must select:
+The default user route requires an exported reviewed dataset and permits an optional run name. The current documented detector is recommended as the starting model. A concise summary identifies the available compute device and the principal training settings. Saving checks readiness and continues to the training page when the configuration is ready; training starts separately on that page.
+
+A collapsed Advanced section preserves the complete controls for:
 
 - dataset name/version
 - model architecture or starting weights
@@ -1688,7 +1690,7 @@ The user must select:
 
 The selected dataset already owns the train/val/test split. Step 5 may display the split and validate that it exists, but should not define a conflicting split policy.
 
-Default training values depend on the dataset and should be decided later. The first implementation should make the fields explicit in the UI rather than hard-coding final project defaults.
+The current defaults are 960-pixel images, 150 epochs, batches of 8, patience 30, seed 42, and four data-loading workers. These values remain editable in Advanced. Automatic compute selection uses the active training Python environment and prefers NVIDIA CUDA device 0, then an available Apple GPU, then CPU. The configuration stores the concrete device, original device request, and Python interpreter; explicit CPU selection and the devices in previously saved configurations are preserved. The shared `training_defaults` helper is exposed by the `training-defaults` CLI command and `GET /api/training/defaults`.
 
 Augmentation should be stored as configuration, not pre-applied to source images. YOLO/Ultralytics can apply augmentation during training. The UI should expose all supported augmentation parameters, with sensible defaults and an advanced section for less common knobs. If offline augmentation is later needed, it should write derived images into a new derived dataset with its own manifest.
 

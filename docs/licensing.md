@@ -15,9 +15,17 @@ linked Sentinel legal notice. NOAA records are described in its
 [AIS metadata](https://www.fisheries.noaa.gov/inport/item/77594).
 
 Leaflet 1.9.4 is vendored for the map under its BSD 2-Clause licence, retained at
-`scripts/templates/static/vendor/leaflet/LICENSE`. Map tiles are fetched from
+`scripts/templates/static/vendor/leaflet/LICENSE`. Leaflet.draw 1.0.4 is vendored
+for image annotation under its MIT licence, retained at
+`scripts/templates/static/vendor/leaflet-draw/LICENSE`. The viewer scripts,
+stylesheets, and image assets are served locally. Map tiles are fetched from
 OpenStreetMap with visible attribution; local image review and numeric area entry
 remain usable without map tiles. Other Python dependencies retain their own licences.
+
+IBM Plex Sans is bundled for consistent interface typography under the SIL Open
+Font License 1.1, retained at `scripts/templates/static/vendor/ibm-plex/OFL.txt`.
+The four font weights were obtained from Google Fonts; the upstream family is
+maintained at https://github.com/IBM/plex. Interface fonts are served locally.
 
 Training inputs include Roboflow project `fleetdatascience/data-science-dark-fleet`,
 version 7, whose local metadata declares Public Domain, plus manually reviewed

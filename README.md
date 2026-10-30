@@ -74,6 +74,12 @@ opendarksts jobs
 opendarksts run --images workspace/inputs/imagery --ais-dir workspace/inputs/ais/full --background
 ```
 
+`opendarksts project --check-ready` checks the saved Detect settings and returns
+the same date-matched image count, launch blockers, and AIS-source warnings used
+by the Run page. A successful command can return `ready: false`; inspect the
+`blockers` before launching. Missing AIS remains a warning because detection can
+produce candidates with unknown vessel presence.
+
 Input images must be north-up EPSG:4326. Plain RGB images require a matching
 `IMAGE.json` containing `{"bbox": [west, south, east, north]}`. Filenames must include
 `YYYY-MM-DD`. External input folders are read only; derived files stay in the

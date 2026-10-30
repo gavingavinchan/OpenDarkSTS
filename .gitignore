@@ -91,3 +91,9 @@ skills-lock.json
 # Small, documented release example assets
 !opendarksts/example/*.tiff
 !opendarksts/example/*.csv
+
+# Bundled viewer icons and drawing-tool sprites
+!scripts/templates/static/vendor/leaflet/images/
+!scripts/templates/static/vendor/leaflet/images/*.png
+!scripts/templates/static/vendor/leaflet-draw/images/
+!scripts/templates/static/vendor/leaflet-draw/images/*.png

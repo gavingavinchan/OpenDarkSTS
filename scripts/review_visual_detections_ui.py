@@ -358,6 +358,11 @@ def reopen_if_completed(review: dict) -> None:
 
 
 def render_app_html(default_image_id: str | None, default_detection_id: str | None = None, album_id: str | None = None) -> str:
+    try:
+        from .training_pipeline_ui import render_stage_nav
+    except ImportError:
+        from training_pipeline_ui import render_stage_nav
+    stage_nav = render_stage_nav(2)
     initial_image = json.dumps(default_image_id)
     initial_detection = json.dumps(default_detection_id)
     initial_album = json.dumps(album_id)
@@ -367,10 +372,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Visual Detection Reviewer</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet-draw/leaflet.draw.css">
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/vendor/leaflet-draw/leaflet.draw.js"></script>
   <style>
     :root {{
       --ink: #102330;
@@ -469,7 +474,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     .meta-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
     .meta-block {{ padding: 10px 12px; border-radius: 14px; background: rgba(16, 35, 48, 0.04); }}
     .meta-block label {{ display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }}
-    .meta-block strong {{ font-size: 15px; }}
+    .meta-block strong {{ font-size: 15px; overflow-wrap: anywhere; }}
     .controls {{ display: grid; gap: 10px; }}
     .button-row {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
     button, select {{
@@ -751,36 +756,67 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       }}
     }}
   </style>
+  <link rel="stylesheet" href="/static/pipeline.css">
+  <style>
+    .review-page {{ height: 100vh; display: flex; flex-direction: column; overflow: hidden; }}
+    .review-page > .app-navigation {{ flex: 0 0 auto; }}
+    .review-page .shell {{ flex: 1; min-height: 0; height: auto; grid-template-rows: auto minmax(0, 1fr); }}
+    .review-page .sidebar {{ background: var(--card); padding: 20px; }}
+    .review-page .viewer {{ min-height: 0; padding: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0; }}
+    .review-page #map {{ height: 100%; min-height: 0; }}
+    .review-page .card {{ border-radius: 8px; box-shadow: none; }}
+    .review-page .card h2, .review-page .card h3 {{ font-family: var(--sans); font-size: 16px; font-weight: 600; }}
+    .review-page .meta-block {{ border-radius: 6px; }}
+    .review-page .image-details summary {{ color: var(--accent); font-size: 13px; cursor: pointer; padding-top: 6px; }}
+    .review-page .image-details .meta-grid {{ padding-top: 12px; }}
+    .review-page .queue-summary {{ border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 20px; }}
+    .review-page .queue-summary h2 {{ font-size: 13px; font-weight: 600; margin: 0 0 12px; }}
+    .review-page .queue-meta {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; text-align: left; }}
+    .review-page .queue-meta .pill {{ padding: 0; background: none; border: 0; text-transform: none; white-space: normal; }}
+    .review-page .review-toolbar {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 20px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--card); }}
+    .review-page .review-progress {{ position: static; transform: none; width: auto; padding: 0; background: none; border: 0; box-shadow: none; backdrop-filter: none; min-width: 0; }}
+    .review-page .review-progress-track {{ grid-auto-columns: minmax(0, 1fr); }}
+    .review-page .review-progress-segment {{ height: 8px; }}
+    .review-page .review-progress-count {{ font-size: 12px; }}
+    .review-page .map-nav-buttons {{ position: static; flex-wrap: wrap; gap: 6px; }}
+    .review-page .map-nav-buttons button {{ border-radius: 6px; height: 34px; box-shadow: none; font-size: 12px; padding: 0 10px; color: var(--ink); }}
+    .review-page .viewer-hint {{ position: static; grid-column: 1 / -1; padding: 0; border: 0; background: none; box-shadow: none; max-width: none; font-size: 12px; color: var(--muted); }}
+    @media (max-width: 980px) {{
+      .review-page {{ height: auto; overflow: auto; }}
+      .review-page .layout {{ overflow: visible; }}
+      .review-page .viewer {{ height: 70vh; min-height: 420px; }}
+      .review-page .review-toolbar {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
 </head>
-<body>
+<body class="review-page">
   <div class="shell">
-    <div class="topbar">
-      <div class="brand">
-        <h1>Visual Detection Reviewer</h1>
-        <p>Review Sentinel tile imagery, correct detections, and export clean YOLO labels.</p>
+    <header>
+      <div class="titleblock">
+        <div class="filenum">02<sup>/07</sup></div>
+        <div>
+          <h1>Manual Review</h1>
+          <p class="subtitle">Review each detection and correct vessel labels.</p>
+        </div>
       </div>
-      <nav class="pipeline-rail" aria-label="Training pipeline stages">
-        <a class="pipeline-stage enabled" href="/import">Import Data</a>
-        <a class="pipeline-stage active enabled" href="/manual-review">Manual Review</a>
-        <a class="pipeline-stage enabled" href="/bbox-overview">BBox Overview</a>
-        <a class="pipeline-stage enabled" href="/datasets">Dataset Selection</a>
-        <a class="pipeline-stage enabled" href="/training-setup">Training Setup</a>
-        <a class="pipeline-stage enabled" href="/training">Train YOLO</a>
-        <a class="pipeline-stage enabled" href="/evaluation">Evaluate</a>
-      </nav>
-      <div class="queue-meta" id="queueMeta"></div>
-    </div>
+      {stage_nav}
+    </header>
     <div class="layout">
-      <aside class="sidebar" id="sidebar"></aside>
+      <aside class="sidebar">
+        <section class="queue-summary"><h2>Review progress</h2><div class="queue-meta" id="queueMeta"></div></section>
+        <div id="sidebar"></div>
+      </aside>
       <main class="viewer">
         <div id="map"></div>
-        <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
-        <div class="review-progress" id="reviewProgress"></div>
-        <div class="map-nav-buttons">
-          <button onclick="navigateImageButton(-1, event)" data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
-          <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
-          <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
-          <button class="tooltip-right" onclick="navigateImageButton(1, event)" data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
+        <div class="review-toolbar">
+          <div class="review-progress" id="reviewProgress"></div>
+          <div class="map-nav-buttons">
+            <button onclick="navigateImageButton(-1, event)" data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
+            <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
+            <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
+            <button class="tooltip-right" onclick="navigateImageButton(1, event)" data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
+          </div>
+          <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
         </div>
       </main>
     </div>
@@ -832,7 +868,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       return (joiner || '?') + 'album_id=' + encodeURIComponent(albumFilterId);
     }}
     const statusLabels = {{ pending: 'Pending', overview_1: 'Overview 1', detail: 'Detail', overview_2: 'Overview 2', completed: 'Completed' }};
-    const defaultClassOptions = [{{value: 0, label: 'Ship'}}, {{value: 1, label: 'Ships'}}];
+    const defaultClassOptions = [{{value: 0, label: 'Single vessel (non-STS)'}}, {{value: 1, label: 'STS pair'}}];
 
     let state = null;
     let map = null;
@@ -854,8 +890,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     function detectionName(detection) {{
-      if (detection.pending_review_label === 'neither' || detection.review_label === 'neither') return 'neither';
-      return detection.class_id === 1 ? 'ships' : 'ship';
+      if (detection.pending_review_label === 'neither' || detection.review_label === 'neither') return 'False detection';
+      return detection.class_id === 1 ? 'STS pair' : 'Single vessel';
     }}
 
     function getImageIdFromUrl() {{
@@ -996,8 +1032,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       host.innerHTML = `
         <span class="pill">${{state.queue.completed_images}} / ${{state.queue.total_images}} completed</span>
         <span class="pill">Queue position ${{currentIndex}}</span>
-        <span class="pill">Ship reviewed ${{state.queue.reviewed_ship_bboxes || 0}}</span>
-        <span class="pill">Ships reviewed ${{state.queue.reviewed_ships_bboxes || 0}}</span>
+        <span class="pill">Single vessels reviewed ${{state.queue.reviewed_ship_bboxes || 0}}</span>
+        <span class="pill">STS pairs reviewed ${{state.queue.reviewed_ships_bboxes || 0}}</span>
       `;
     }}
 
@@ -1015,7 +1051,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     function renderSidebar() {{
       const host = document.getElementById('sidebar');
       if (!state.image) {{
-        host.innerHTML = '<div class="empty">No preprocessed images found. Run <code>scripts/preprocess_sentinel_tiles.py</code> first.</div>';
+        host.innerHTML = '<div class="empty">No images are available in this review queue. <a href="/import">Import images or choose another album</a> to begin.</div>';
         return;
       }}
 
@@ -1030,23 +1066,25 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         <div class="card">
           <div class="status-line">
             <span class="badge ${{current.review_status}}">${{statusLabels[current.review_status] || current.review_status}}</span>
-            <span>${{imageDisplayName(current)}}</span>
+            <span>Image ${{state.queue.current_index + 1}} of ${{state.queue.total_images}}</span>
           </div>
           <h2 style="margin-top:12px">${{imageLocationText(current)}}</h2>
           <div class="meta-grid">
+            <div class="meta-block"><label>Active boxes</label><strong>${{counts.active_detections}}</strong></div>
+            <div class="meta-block"><label>Reviewed boxes</label><strong>${{counts.reviewed_active_detections}}</strong></div>
+          </div>
+          <details class="image-details"><summary>Image details</summary><div class="meta-grid">
             <div class="meta-block"><label>${{current.date ? 'Grid' : 'Image Key'}}</label><strong>${{current.date ? `(${{current.tile_row}},${{current.tile_col}})` : current.image_key}}</strong></div>
             <div class="meta-block"><label>Size</label><strong>${{current.width}} x ${{current.height}}</strong></div>
-            <div class="meta-block"><label>Active</label><strong>${{counts.active_detections}}</strong></div>
-            <div class="meta-block"><label>Reviewed</label><strong>${{counts.reviewed_active_detections}}</strong></div>
-          </div>
+          </div></details>
         </div>
 
         <div class="card">
           <h3>Legend</h3>
           <div class="legend">
-            <div><span class="swatch" style="background:#2563eb"></span> ship</div>
-            <div><span class="swatch" style="background:#c81e1e"></span> ships</div>
-            <div><span class="swatch" style="background:#7c6f64"></span> neither</div>
+            <div><span class="swatch" style="background:#2563eb"></span> Single vessel</div>
+            <div><span class="swatch" style="background:#c81e1e"></span> STS pair</div>
+            <div><span class="swatch" style="background:#7c6f64"></span> Not a vessel / false detection</div>
             <div><span class="swatch" style="background:#f8fafc;border:1px solid rgba(16,35,48,0.18)"></span> Selected / editing</div>
           </div>
           <p class="note" style="margin-top:12px">Click any box to jump straight into edit mode. Use <kbd>N</kbd> or <kbd>Backspace</kbd> to mark it as neither, or <kbd>Del</kbd> to permanently delete it.</p>
@@ -1056,7 +1094,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <h3>Overview Controls</h3>
           <div class="class-picker">
             <select id="newClassSelect" class="cls-${{defaultClassValue === 1 ? 'ships' : 'ship'}}" onchange="onClassSelectChange(this)">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
-            <div class="shortcut-hint"><kbd>Tab</kbd> cycle Ship / Ships / Neither locally</div>
+            <div class="shortcut-hint"><kbd>Tab</kbd> cycle single vessel / STS pair / false detection locally</div>
           </div>
           <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode.'}}</p>
           <div class="button-row">
@@ -1089,8 +1127,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
             <button class="secondary" onclick="advanceReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Right arrow / Space]">Accept / Next &#9654;</button>
           </div>
           <div class="button-row">
-            <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">Ships (STS)</button>
-            <button class="ship" onclick="labelCurrent('ship_non_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as single ship [D]">Ship (non-STS)</button>
+            <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">STS pair</button>
+            <button class="ship" onclick="labelCurrent('ship_non_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as single ship [D]">Single vessel (non-STS)</button>
           </div>
           <div class="button-row">
             <button class="warn" onclick="labelCurrent('neither')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Mark as false positive [N]">Neither</button>
@@ -1125,6 +1163,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     function renderMap() {{
       if (!map) {{
         map = L.map('map', {{ crs: L.CRS.Simple, minZoom: -4, zoomSnap: 0.25, attributionControl: false }});
+        new ResizeObserver(() => map.invalidateSize({{ pan: false }})).observe(document.getElementById('map'));
         detectionGroup = L.featureGroup().addTo(map);
         map.on('draw:created', onDrawCreated);
         map.on('click', event => {{
@@ -1976,6 +2015,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._serve_cache_file(path[len("/cache/") :])
             return
 
+        if path.startswith("/static/"):
+            self._serve_static_file(path[len("/static/") :])
+            return
+
         self._respond_json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:
@@ -2098,6 +2141,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return None
         value = values[0].strip()
         return value or None
+
+    def _serve_static_file(self, relative_path: str) -> None:
+        static_root = (Path(__file__).resolve().parent / "templates" / "static").resolve()
+        try:
+            target = (static_root / relative_path).resolve()
+        except OSError:
+            target = None
+        if target is None or not target.is_file() or static_root not in target.parents:
+            self._respond_json({"error": "static file not found"}, status=404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(str(target))[0] or "application/octet-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(target.read_bytes())
 
     def _serve_cache_file(self, relative_path: str) -> None:
         target = resolve_cache_resource(relative_path)

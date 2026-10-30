@@ -75,7 +75,9 @@
 
   function shortTime(value) {
     if (!value) { return '—'; }
-    return String(value).replace('T', ' ').replace(/\.\d+Z?$/, '').replace('Z', '');
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) { return String(value); }
+    return date.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
   }
 
   /* Wire every button/select/input on the page so each control logs once. */
@@ -86,6 +88,13 @@
       button.dataset.logged = '1';
       button.addEventListener('click', function () {
         logInteraction('click', { control: button.id || button.textContent.trim().slice(0, 48) });
+      });
+    });
+    scope.querySelectorAll('details').forEach(function (node) {
+      if (node.dataset.logged === '1') { return; }
+      node.dataset.logged = '1';
+      node.addEventListener('toggle', function () {
+        logInteraction('toggle_details', { control: node.id || node.querySelector('summary').textContent.trim().slice(0, 64), open: node.open });
       });
     });
     scope.querySelectorAll('select, input[type="checkbox"], input[type="radio"]').forEach(function (node) {

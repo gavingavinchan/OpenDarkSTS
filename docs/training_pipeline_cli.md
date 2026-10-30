@@ -137,9 +137,11 @@ Options:
 
 In both modes `exported_image_count` and `exported_label_count` count the same thing: one image and one YOLO label file per exported item, including enabled background negatives. `--dry-run` does not read review JSONs, so it cannot report per-bbox label row counts.
 
-An export is a replacement, not a merge: every `images/<split>` and `labels/<split>`
-directory is emptied before the selection is written, so the exported dataset always equals
-the selection exactly. Re-exporting after dropping an image, or after moving an image
+An export replaces the managed `images/`, `labels/`, `data.yaml`, and
+`dataset_manifest.json` outputs. The selection is built in a temporary sibling
+directory before publication. Validation failures preserve the previous export;
+publication failures restore its managed files. Unrelated dataset notes are retained.
+Re-exporting after dropping an image, or after moving an image
 between splits, leaves no stale copy behind for YOLO to train on. The written
 `dataset_manifest.json` records `dataset_selection_manifest_sha256`, which
 `check-training-ready` uses to reject a stale export.
@@ -308,6 +310,16 @@ To run the command manually, use the project virtualenv's `yolo` executable or p
 
 For long training runs, start them detached and log under `workspace/runs/` or `workspace/reports/` so the LLM session remains usable.
 
+### `training-defaults`
+
+Returns the recommended settings, documented current starting model when available, and hardware detected in the active training Python environment. The graphical Training Setup page uses the same helper through `GET /api/training/defaults`.
+
+```bash
+.venv/bin/python scripts/training_pipeline_cli.py --pretty training-defaults
+```
+
+Automatic device selection prefers NVIDIA CUDA device `0`, then an available Apple GPU (`mps`), then CPU. The response identifies the selected device, hardware name, Python interpreter, and PyTorch version. Recommended settings are 960-pixel images, 150 epochs, batches of 8, early-stopping patience of 30, random seed 42, and four data-loading workers. Empty augmentation settings retain the training library defaults.
+
 ### `save-training-config`
 
 Writes a Step 5 training config to `workspace/training_configs/<run-group>.json` and reports readiness.
@@ -332,6 +344,7 @@ Options:
 - `--selection`: validate the config against an exported dataset with `check_training_readiness`.
 - `--overwrite`: allow the run directory to be reused.
 - `--aug key=value`: repeatable augmentation setting.
+- `--device`: defaults to `auto`; explicit choices such as `cpu`, `0`, and `mps` are retained. Automatic selection is resolved when the configuration is saved, so `device` contains the concrete choice. `device_request` records the original request and `training_python` records the active interpreter. Loading an existing configuration preserves its saved device.
 
 Only these Ultralytics augmentation args are accepted; anything else is rejected with exit `1`:
 
@@ -487,7 +500,7 @@ Evaluates a run's `best.pt` against the dataset `test` split and stores `test_me
   --run-group <run_group> --run-name <run_name> --device cpu
 ```
 
-The dataset and image size are read from the run's `training_metadata.json` unless `--dataset-dir` and `--image-size` are given. Ultralytics output is appended to `test_eval.log` in the run directory. This command runs synchronously and can take a while on CPU.
+The dataset and image size are read from the run's `training_metadata.json` unless `--dataset-dir` and `--image-size` are given. The default device is `auto`, using the same accelerator preference as training; an explicit `--device cpu` remains supported. When `--python-executable` is supplied, automatic hardware selection is checked in that interpreter. Ultralytics output is appended to `test_eval.log` in the run directory. This command runs synchronously and can take a while on CPU.
 
 ### `promote-weight`
 
@@ -695,7 +708,7 @@ Mutating training routes log to `workspace/reports/training_pipeline_ui_interact
 | `/manual-review` | 2 | `run-auto-detect`, `image-key` |
 | `/bbox-overview` | 3 | `list-dataset-candidates` |
 | `/datasets` (alias `/dataset-selection`) | 4 | `list-dataset-candidates`, `preview-dataset-split`, `save-dataset-selection`, `list-dataset-selections`, `export-dataset` |
-| `/training-setup` | 5 | `list-exported-datasets`, `list-starting-weights`, `save-training-config`, `list-training-configs`, `check-training-ready`, `build-train-command` |
+| `/training-setup` | 5 | `training-defaults`, `list-exported-datasets`, `list-starting-weights`, `save-training-config`, `list-training-configs`, `check-training-ready`, `build-train-command` |
 | `/training` (alias `/train-yolo`) | 6 | `start-training`, `training-status`, `stop-training`, `list-active-runs` |
 | `/evaluation` (alias `/evaluate`) | 7 | `list-run-groups`, `show-run-group`, `run-test-split`, `write-evaluation-report`, `promote-weight` |
 

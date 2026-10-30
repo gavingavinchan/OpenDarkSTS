@@ -54,6 +54,41 @@ def _save_project(payload):
     return settings
 
 
+def selected_detection_images(settings):
+    """Use the same dated image selection for readiness and job submission."""
+    from .sts_utils import resolve_image_inputs, parse_image_date
+    days = set(date_range(settings["start"], settings["end"]))
+    images = []
+    for path in resolve_image_inputs([str(Path(settings["images"]).expanduser())]):
+        try:
+            if parse_image_date(path) in days:
+                images.append(str(path))
+        except ValueError:
+            continue
+    return images
+
+
+def detection_readiness(settings=None):
+    settings = settings or project()
+    images = selected_detection_images(settings)
+    blockers, warnings = [], []
+    if not images:
+        blockers.append("No image filenames match the selected dates. Choose an imagery folder and check Area & dates.")
+    try:
+        if not current_model().is_file():
+            blockers.append("No detection model is available. Initialize the workspace or select a model in Improve.")
+    except (ValueError, OSError) as exc:
+        blockers.append(str(exc))
+    if any(job["kind"] in {"ais", "imagery"} and job["status"] not in jobs.TERMINAL for job in jobs.list_jobs()):
+        blockers.append("Wait for the active downloads to finish before starting detection.")
+    ais = Path(settings["ais_dir"]).expanduser()
+    has_ais = (ais.is_file() and ais.suffix.lower() == ".csv") or (ais.is_dir() and any(
+        path.is_file() and path.suffix.lower() == ".csv" for path in ais.rglob("*")))
+    if not has_ais:
+        warnings.append("No AIS CSV files are available at the selected source. Detection can run, but vessel presence will be unknown. Select AIS on Data.")
+    return {"ready": not blockers, "image_count": len(images), "blockers": blockers, "warnings": warnings}
+
+
 def dashboard():
     model = None
     model_error = None
@@ -74,31 +109,41 @@ def dashboard():
         paths = [root] if root.is_file() else root.rglob("*") if root.is_dir() else []
         inventory[key] = sum(1 for item in paths if item.is_file() and item.suffix.lower() in suffixes)
     pending_reviews = 0
+    training_images, completed_images = set(), set()
+    manifest = WORKSPACE_DIR / "manifests" / "training_import_manifest.json"
+    try:
+        imported = json.loads(manifest.read_text())
+        if isinstance(imported, dict) and isinstance(imported.get("images"), dict):
+            training_images.update(imported["images"])
+    except (OSError, ValueError):
+        pass
     for path in (WORKSPACE_DIR / "reviews").glob("*/*.json"):
         try:
-            if json.loads(path.read_text()).get("review_status") != "completed":
+            review = json.loads(path.read_text())
+            if not isinstance(review, dict):
+                continue
+            key = review.get("image_key") or path.stem
+            training_images.add(key)
+            if review.get("review_status") != "completed":
                 pending_reviews += 1
+            else:
+                completed_images.add(key)
         except (OSError, ValueError):
             continue
     return {"pending_reviews": pending_reviews, "project": settings, "presets": PRESETS, "model": model, "model_error": model_error,
+            "training_inventory": {"images": len(training_images), "completed": len(completed_images),
+                                   "albums": len(list((WORKSPACE_DIR / "albums").glob("alb_*.json")))},
+            "readiness": detection_readiness(settings),
             "inventory": inventory, "jobs": jobs.list_jobs(include_training=True), "workspace": str(WORKSPACE_DIR)}
 
 
 def submit_project_job(kind):
     settings = project()
     if kind == "run":
-        if any(job["kind"] in {"ais", "imagery"} and job["status"] not in jobs.TERMINAL for job in jobs.list_jobs()):
-            raise ValueError("Wait for the active downloads to finish before starting detection")
-        # The whole saved date interval is enforced by selecting its dated images.
-        from .sts_utils import resolve_image_inputs, parse_image_date
-        days = set(date_range(settings["start"], settings["end"]))
-        images = []
-        for path in resolve_image_inputs([settings["images"]]):
-            try:
-                if parse_image_date(path) in days:
-                    images.append(str(path))
-            except ValueError:
-                continue
+        readiness = detection_readiness(settings)
+        if not readiness["ready"]:
+            raise ValueError(" ".join(readiness["blockers"]))
+        images = selected_detection_images(settings)
         options = {"images": images, "ais_dir": settings["ais_dir"], "conf": settings["confidence"], "radius": settings["radius"]}
     elif kind in {"ais", "imagery"}:
         options = {"start": settings["start"], "end": settings["end"]}

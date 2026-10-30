@@ -49,15 +49,33 @@ def validate_options(kind, options):
 def _read_job(job_id, *, reconcile=True):
     directory = job_dir(job_id)
     record = json.loads(contained(directory / "job.json", directory).read_text())
+    if (not isinstance(record, dict) or record.get("job_id") != job_id
+            or not isinstance(record.get("kind"), str) or not isinstance(record.get("status"), str)
+            or record.get("kind") not in {"ais", "imagery", "run"}
+            or record.get("status") not in TERMINAL | {"queued", "running"}
+            or not isinstance(record.get("options"), dict)
+            or not isinstance(record.get("created_at"), str)):
+        raise ValueError(f"Invalid job record: {job_id}")
+    try:
+        created_at = datetime.fromisoformat(record["created_at"])
+        if created_at.tzinfo is None:
+            raise ValueError("Job timestamp must include a timezone")
+    except ValueError as exc:
+        raise ValueError(f"Invalid job creation timestamp: {job_id}") from exc
     launch = contained(directory / "launch.json", directory)
     if launch.is_file():
-        record.update(json.loads(launch.read_text()))
+        launch_record = json.loads(launch.read_text())
+        if (not isinstance(launch_record, dict) or set(launch_record) - {"pid", "start_ticks"}
+                or type(launch_record.get("pid")) is not int or launch_record["pid"] <= 0
+                or (launch_record.get("start_ticks") is not None and type(launch_record["start_ticks"]) is not int)):
+            raise ValueError(f"Invalid job launch record: {job_id}")
+        record.update(launch_record)
     if reconcile and record["status"] not in TERMINAL and record.get("pid"):
         if not process_is_alive(record["pid"], record.get("start_ticks")):
             record.update(status="failed", error="Job process exited without a completion record", ended_at=now())
             atomic_json(directory / "job.json", record)
     if reconcile and record["status"] == "queued" and not record.get("pid"):
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(record["created_at"])).total_seconds()
+        age = (datetime.now(timezone.utc) - created_at).total_seconds()
         if age > 30:
             record.update(status="failed", error="Submission interrupted before worker launch", ended_at=now())
             atomic_json(directory / "job.json", record)

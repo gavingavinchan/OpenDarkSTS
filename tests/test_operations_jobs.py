@@ -130,3 +130,53 @@ def test_gui_download_areas_have_distinct_destinations(isolated, monkeypatch):
     operations.save_project({"bbox": [-95, 28, -94.9, 28.1]})
     operations.submit_project_job("imagery")
     assert submitted[0]["output_dir"] != submitted[1]["output_dir"]
+
+
+def test_readiness_and_submission_use_the_same_dates(isolated, monkeypatch):
+    images = isolated / 'imagery'
+    images.mkdir()
+    for name in ['2020-01-24_scene.tiff', '2020-01-25_scene.tiff', 'undated.png']:
+        (images / name).write_bytes(b'fixture')
+    model = isolated / 'model.pt'
+    model.write_bytes(b'fixture')
+    monkeypatch.setattr(operations, 'current_model', lambda: model)
+    operations.save_project({'images': str(images), 'start': '2020-01-24', 'end': '2020-01-24'})
+    readiness = operations.detection_readiness()
+    assert readiness['ready'] and readiness['image_count'] == 1
+    assert readiness['warnings']  # Missing AIS is explicitly unknown, but not a launch blocker.
+    submitted = []
+    monkeypatch.setattr(jobs, 'submit_job', lambda kind, options, **kw: submitted.append(options) or {'job_id': 'fixture'})
+    operations.submit_project_job('run')
+    assert submitted[0]['images'] == [str(images / '2020-01-24_scene.tiff')]
+    operations.save_project({'start': '2021-01-01', 'end': '2021-01-01'})
+    with pytest.raises(ValueError, match='No image filenames match'):
+        operations.submit_project_job('run')
+    assert len(submitted) == 1
+
+
+def test_dashboard_distinguishes_training_data_from_detection_inputs(isolated, monkeypatch):
+    manifest = isolated / 'manifests' / 'training_import_manifest.json'
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps({'images': {'imported': {}}}))
+    reviews = isolated / 'reviews' / 'tester'
+    reviews.mkdir(parents=True)
+    (reviews / 'imported.json').write_text(json.dumps({'image_key': 'imported', 'review_status': 'completed'}))
+    (reviews / 'legacy.json').write_text(json.dumps({'image_key': 'legacy', 'review_status': 'overview_1'}))
+    (isolated / 'albums').mkdir()
+    (isolated / 'albums' / 'alb_fixture.json').write_text('{}')
+    dashboard = operations.dashboard()
+    assert dashboard['inventory']['images'] == 0
+    assert dashboard['training_inventory'] == {'images': 2, 'completed': 1, 'albums': 1}
+    assert not dashboard['readiness']['ready']
+
+
+def test_dashboard_skips_nonobject_legacy_records(isolated):
+    manifest = isolated / 'manifests' / 'training_import_manifest.json'
+    manifest.parent.mkdir()
+    manifest.write_text('[]')
+    reviews = isolated / 'reviews' / 'tester'
+    reviews.mkdir(parents=True)
+    (reviews / 'invalid.json').write_text('[]')
+    dashboard = operations.dashboard()
+    assert dashboard['training_inventory']['images'] == 0
+    assert not dashboard['readiness']['ready']

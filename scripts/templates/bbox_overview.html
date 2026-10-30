@@ -6,12 +6,12 @@
   <title>OpenDarkSTS / BBox Overview</title>
   <style>
     :root {
-      --ink: #111713;
-      --muted: #667164;
-      --paper: #ece7da;
-      --card: #f8f4e8;
-      --line: rgba(17, 23, 19, 0.16);
-      --green: #0f6b4f;
+      --ink: #142c3a;
+      --muted: #637680;
+      --paper: #f6f5f0;
+      --card: #ffffff;
+      --line: rgba(20, 44, 58, 0.14);
+      --green: #236b70;
       --red: #a83226;
       --blue: #2458a6;
       --amber: #b7791f;
@@ -23,15 +23,13 @@
       margin: 0;
       min-height: 100vh;
       color: var(--ink);
-      background:
-        linear-gradient(90deg, rgba(17, 23, 19, 0.045) 1px, transparent 1px) 0 0 / 36px 36px,
-        linear-gradient(180deg, #ded7c5 0%, #f2eddf 48%, #d9e1d7 100%);
+      background: var(--paper);
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
     .shell { min-height: 100vh; display: grid; grid-template-rows: auto auto 1fr; }
     header {
       display: grid;
-      grid-template-columns: minmax(260px, 1fr) auto;
+      grid-template-columns: minmax(320px, 1fr) minmax(0, 1.5fr);
       gap: 24px;
       align-items: end;
       padding: 22px 28px 14px;
@@ -69,22 +67,22 @@
     .stage .stage-num { display: inline-block; min-width: 14px; margin-right: 5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
     .controls {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) repeat(3, auto);
+      grid-template-columns: minmax(220px, 1fr) repeat(4, auto);
       gap: 10px;
       align-items: center;
       padding: 14px 28px;
       border-bottom: 1px solid var(--line);
-      background: rgba(236, 231, 218, 0.72);
+      background: var(--card);
       position: sticky;
-      top: 92px;
+      top: var(--overview-header-height, 92px);
       z-index: 3;
     }
     input, select, button {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 6px;
       padding: 10px 12px;
       font: inherit;
-      background: rgba(248, 244, 232, 0.92);
+      background: var(--card);
       color: var(--ink);
     }
     button { cursor: pointer; font-weight: 800; }
@@ -94,10 +92,8 @@
     .contact-sheet { padding: 24px 28px 36px; min-width: 0; }
     .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
     .stat {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 7px 11px;
-      background: rgba(248, 244, 232, 0.8);
+      padding: 4px 0;
+      margin-right: 10px;
       font-size: 12px;
       color: var(--muted);
     }
@@ -111,39 +107,40 @@
     .tile {
       min-width: 0;
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 8px;
       overflow: hidden;
-      background: rgba(248, 244, 232, 0.92);
-      box-shadow: 0 10px 26px rgba(17, 23, 19, 0.08);
+      background: var(--card);
       cursor: pointer;
-      transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+      transition: border-color 140ms ease;
     }
-    .tile:hover, .tile.selected { transform: translateY(-2px); border-color: rgba(15, 107, 79, 0.55); box-shadow: var(--shadow); }
+    .tile:hover, .tile.selected { border-color: var(--green); }
+    .tile:focus-visible { outline: 3px solid #a1d3cf; outline-offset: 3px; }
     .thumb {
-      aspect-ratio: 1 / 0.72;
+      height: var(--crop-height, 140px);
       display: grid;
       place-items: center;
-      background: #17211b;
+      background: #e7edef;
       color: rgba(255, 250, 240, 0.78);
       overflow: hidden;
     }
     .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; image-rendering: auto; }
-    .tile-meta { padding: 10px 11px 12px; display: grid; gap: 7px; }
-    .tile-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13px; font-weight: 900; }
-    .tile-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .badge-row { display: flex; gap: 5px; flex-wrap: wrap; }
-    .badge { border-radius: 999px; padding: 4px 7px; font-size: 11px; font-weight: 900; }
+    .tile-meta { padding: 12px; display: grid; gap: 7px; text-align: center; }
+    .tile-title { display: flex; justify-content: center; align-items: center; min-height: 24px; }
+    .tile-sub { color: var(--ink); font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tile-context { color: var(--muted); font-size: 11px; line-height: 16px; }
+    .badge-row { display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; }
+    .badge { display: inline-flex; justify-content: center; align-items: center; border-radius: 4px; padding: 4px 8px; font-size: 11px; line-height: 16px; font-weight: 600; }
     .badge.ship { background: rgba(36, 88, 166, 0.14); color: var(--blue); }
     .badge.ships { background: rgba(168, 50, 38, 0.14); color: var(--red); }
     .badge.neither { background: rgba(68, 81, 90, 0.14); color: var(--slate); }
     .badge.warn { background: rgba(183, 121, 31, 0.18); color: #7a4d0e; }
     aside {
       border-left: 1px solid var(--line);
-      background: rgba(248, 244, 232, 0.86);
+      background: var(--card);
       padding: 22px;
       position: sticky;
-      top: 154px;
-      height: calc(100vh - 154px);
+      top: var(--overview-sticky-height, 154px);
+      height: calc(100vh - var(--overview-sticky-height, 154px));
       overflow: auto;
     }
     .panel { display: grid; gap: 16px; }
@@ -154,6 +151,9 @@
     .empty { padding: 56px 20px; text-align: center; color: var(--muted); }
     .conflicts { margin-bottom: 16px; display: grid; gap: 8px; }
     .conflict { border: 1px solid rgba(168, 50, 38, 0.28); border-radius: 14px; padding: 11px; background: rgba(168, 50, 38, 0.08); }
+    .metadata summary { cursor: pointer; color: var(--green); font-size: 13px; padding: 8px 0; }
+    .metadata .kv { padding-top: 12px; }
+    #overviewStatus:empty { display: none; }
     @media (max-width: 980px) {
       header, .controls { position: static; grid-template-columns: 1fr; }
       .rail { justify-content: flex-start; }
@@ -161,13 +161,22 @@
       aside { position: static; height: auto; border-left: 0; border-top: 1px solid var(--line); }
     }
   </style>
+  <link rel="stylesheet" href="/static/pipeline.css">
+  <style>
+    .bbox-page .shell { grid-template-rows: auto auto minmax(0, 1fr); }
+    .bbox-page .main { padding: 0; gap: 0; align-content: normal; }
+    .bbox-page .panel h2 { font-family: var(--sans); font-size: 18px; line-height: 1.4; overflow-wrap: anywhere; }
+  </style>
 </head>
-<body>
+<body class="bbox-page" data-page="bbox-overview">
   <div class="shell">
     <header>
-      <div>
-        <h1>BBox Overview</h1>
-        <p class="subtitle">Reviewed crop contact sheet for final visual QA before dataset selection.</p>
+      <div class="titleblock">
+        <div class="filenum">03<sup>/07</sup></div>
+        <div>
+          <h1>BBox Overview</h1>
+          <p class="subtitle">Inspect reviewed bounding boxes before selecting images for training.</p>
+        </div>
       </div>
       __STAGE_NAV__
     </header>
@@ -175,9 +184,9 @@
       <input id="search" placeholder="Search image, detection, reviewer, model" oninput="renderAndPersist()">
       <select id="classFilter" onchange="renderAndPersist()">
         <option value="all">All reviewed bboxes</option>
-        <option value="ship_non_sts">Ship</option>
-        <option value="ships_sts">Ships</option>
-        <option value="neither">Neither</option>
+        <option value="ship_non_sts">Single vessel (non-STS)</option>
+        <option value="ships_sts">STS pair</option>
+        <option value="neither">Not a vessel / false detection</option>
         <option value="warnings">Warnings</option>
         <option value="conflicts">Needs Reconciliation</option>
       </select>
@@ -188,10 +197,11 @@
         <option value="confidence_desc">Highest confidence first</option>
       </select>
       <label class="size-control">Tile <input id="tileSize" type="range" min="120" max="280" value="170" oninput="renderAndPersist()"></label>
-      <button class="primary" onclick="reloadOverview(true)">Refresh Crops</button>
+      <button class="primary" id="refreshCrops" onclick="reloadOverview(true)">Refresh Crops</button>
     </section>
     <main class="main">
       <section class="contact-sheet">
+        <p id="overviewStatus" role="status" aria-live="polite"></p>
         <div class="stats" id="stats"></div>
         <div class="conflicts" id="conflicts"></div>
         <div class="grid" id="grid"></div>
@@ -199,13 +209,33 @@
       <aside><div class="panel" id="sidebar"></div></aside>
     </main>
   </div>
+  <script src="/static/pipeline.js"></script>
   <script>
+    const P = window.Pipeline;
     const manualReviewUrl = __MANUAL_REVIEW_URL__;
     const overviewStateKey = 'opendarksts.bboxOverview.state.v1';
     let overview = { counts: {}, tiles: [], conflicts: [] };
     let selectedTileId = null;
     let pendingScrollY = null;
     let scrollSaveTimer = null;
+    let imageNames = {};
+    let imageNamesLoaded = false;
+
+    function imageDisplayName(tile) {
+      return tile.display_filename || tile.original_filename || imageNames[tile.image_key] || tile.image_filename || tile.image_key;
+    }
+
+    async function loadImageNames() {
+      if (imageNamesLoaded) return;
+      try {
+        const manifest = await P.api('/api/import');
+        imageNames = Object.fromEntries((manifest.images || []).map(image => [image.image_key, image.original_filename || image.display_filename || image.image_filename]));
+        imageNamesLoaded = true;
+      } catch (error) {
+        // Crop inspection remains available if source-name lookup is unavailable.
+        P.logInteraction('overview_source_names_unavailable', { message: error.message });
+      }
+    }
 
     function readStoredOverviewState() {
       try {
@@ -259,11 +289,23 @@
     }
 
     async function reloadOverview(forceGenerate=false) {
-      const response = await fetch('/api/overview' + (forceGenerate ? '?generate=1' : ''));
-      overview = await response.json();
-      if (!overview.tiles.some(tile => tile.tile_id === selectedTileId)) selectedTileId = null;
-      render();
-      restoreScrollIfNeeded();
+      const refresh = document.getElementById('refreshCrops');
+      refresh.disabled = true;
+      P.setStatus('overviewStatus', 'Loading reviewed bounding boxes…');
+      P.logInteraction('overview_reload_started', { generate_crops: forceGenerate });
+      try {
+        [overview] = await Promise.all([P.api('/api/overview' + (forceGenerate ? '?generate=1' : '')), loadImageNames()]);
+        if (!overview.tiles.some(tile => tile.tile_id === selectedTileId)) selectedTileId = null;
+        render();
+        restoreScrollIfNeeded();
+        P.setStatus('overviewStatus', '');
+        P.logInteraction('overview_reload_succeeded', { tile_count: overview.tiles.length, conflict_count: (overview.conflicts || []).length });
+      } catch (error) {
+        P.setStatus('overviewStatus', 'Could not load reviewed bounding boxes: ' + error.message + '. Select Refresh Crops to try again.', 'err');
+        P.logInteraction('overview_reload_failed', { message: error.message });
+      } finally {
+        refresh.disabled = false;
+      }
     }
 
     function labelClass(tile) {
@@ -273,9 +315,9 @@
     }
 
     function labelText(tile) {
-      if (tile.review_label === 'ships_sts') return 'ships';
-      if (tile.review_label === 'neither') return 'neither';
-      return 'ship';
+      if (tile.review_label === 'ships_sts') return 'STS pair';
+      if (tile.review_label === 'neither') return 'False detection';
+      return 'Single vessel';
     }
 
     function filteredTiles() {
@@ -286,7 +328,7 @@
         if (filter === 'warnings' && (!tile.warnings || tile.warnings.length === 0)) return false;
         if (filter !== 'all' && filter !== 'warnings' && tile.review_label !== filter) return false;
         if (!query) return true;
-        const haystack = [tile.image_key, tile.image_filename, tile.detection_id, tile.reviewer, tile.source_type, ...(tile.source_models || [])].join(' ').toLowerCase();
+        const haystack = [tile.image_key, imageDisplayName(tile), tile.detection_id, tile.reviewer, tile.source_type, ...(tile.source_models || [])].join(' ').toLowerCase();
         return haystack.includes(query);
       });
       const sort = document.getElementById('sortMode').value;
@@ -305,9 +347,9 @@
         <span class="stat"><strong>${tiles.length}</strong> visible</span>
         <span class="stat"><strong>${counts.reviewed_bbox_count || 0}</strong> reviewed bboxes</span>
         <span class="stat"><strong>${counts.reviewed_image_count || 0}</strong> images</span>
-        <span class="stat"><strong>${counts.reviewed_ship_bboxes || 0}</strong> ship</span>
-        <span class="stat"><strong>${counts.reviewed_ships_bboxes || 0}</strong> ships</span>
-        <span class="stat"><strong>${counts.neither_bboxes || 0}</strong> neither</span>
+        <span class="stat"><strong>${counts.reviewed_ship_bboxes || 0}</strong> single vessels</span>
+        <span class="stat"><strong>${counts.reviewed_ships_bboxes || 0}</strong> STS pairs</span>
+        <span class="stat"><strong>${counts.neither_bboxes || 0}</strong> false detections</span>
         <span class="stat"><strong>${counts.warning_tile_count || 0}</strong> warning tiles</span>
         <span class="stat"><strong>${counts.conflict_image_count || 0}</strong> conflicts</span>
       `;
@@ -333,24 +375,23 @@
       const grid = document.getElementById('grid');
       const tileSize = document.getElementById('tileSize').value;
       grid.style.setProperty('--tile-size', `${tileSize}px`);
+      grid.style.setProperty('--crop-height', `${Math.round(Number(tileSize) * 0.82)}px`);
       if (document.getElementById('classFilter').value === 'conflicts') {
         grid.innerHTML = '';
         return;
       }
       if (!tiles.length) {
-        grid.innerHTML = '<div class="empty">No reviewed bbox crops match the current filters.</div>';
+        grid.innerHTML = '<div class="empty">No reviewed bounding boxes match these filters. Complete image reviews in <a href="/manual-review">Manual Review</a>, or change the filters above.</div>';
         return;
       }
       grid.innerHTML = tiles.map(tile => `
-        <article class="tile ${tile.tile_id === selectedTileId ? 'selected' : ''}" onclick="selectTile('${tile.tile_id}')" ondblclick="openManualReview('${tile.image_key}', '${tile.detection_id}')">
+        <article class="tile ${tile.tile_id === selectedTileId ? 'selected' : ''}" role="button" tabindex="0" aria-label="${P.esc(labelText(tile) + ' in ' + imageDisplayName(tile))}" aria-pressed="${tile.tile_id === selectedTileId}" onclick="selectTile('${tile.tile_id}')" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectTile('${tile.tile_id}'); }" ondblclick="openManualReview('${tile.image_key}', '${tile.detection_id}')">
           <div class="thumb">${tile.crop_url ? `<img loading="lazy" src="${tile.crop_url}" alt="${tile.image_key} ${tile.detection_id}">` : 'No crop'}</div>
           <div class="tile-meta">
-            <div class="tile-title"><span>${tile.detection_id}</span><span class="badge ${labelClass(tile)}">${labelText(tile)}</span></div>
-            <div class="tile-sub">${tile.image_filename || tile.image_key}</div>
-            <div class="badge-row">
-              <span class="badge">${tile.source_type || 'unknown'}</span>
-              ${(tile.warnings || []).map(warning => `<span class="badge warn">${warning}</span>`).join('')}
-            </div>
+            <div class="tile-title"><span class="badge ${labelClass(tile)}">${labelText(tile)}</span></div>
+            <div class="tile-sub" title="${P.esc(imageDisplayName(tile))}">${P.esc(imageDisplayName(tile))}</div>
+            <div class="tile-context">${P.esc(tile.detection_id)} · ${P.esc(tile.source_type || 'unknown')}</div>
+            ${(tile.warnings || []).length ? `<div class="badge-row">${tile.warnings.map(warning => `<span class="badge warn">${P.esc(warning)}</span>`).join('')}</div>` : ''}
           </div>
         </article>
       `).join('');
@@ -364,15 +405,17 @@
       const tile = selectedTile();
       const host = document.getElementById('sidebar');
       if (!tile) {
-        host.innerHTML = '<h2>No Tile Selected</h2><p class="subtitle">Single-click a crop to inspect metadata. Double-click a crop to open the source image in manual review.</p>';
+        host.innerHTML = '<h2>Choose a reviewed box</h2><p class="subtitle">Select an image crop to inspect its label. Double-click it to open the source image in Manual Review.</p>';
         return;
       }
       host.innerHTML = `
-        <h2>${labelText(tile)} <span class="badge ${labelClass(tile)}">${tile.detection_id}</span></h2>
+        <h2>${P.esc(imageDisplayName(tile))}</h2>
+        <div><span class="badge ${labelClass(tile)}">${labelText(tile)}</span> <span class="tile-context">${P.esc(tile.detection_id)}</span></div>
         <button class="primary" onclick="openManualReview('${tile.image_key}', '${tile.detection_id}')">Edit In Manual Review</button>
+        <details class="metadata"><summary>Detection details</summary>
         <div class="kv">
-          <span>Image</span><span class="mono">${tile.image_filename || tile.image_key}</span>
-          <span>Image Key</span><span class="mono">${tile.image_key}</span>
+          <span>Image</span><span class="mono">${P.esc(imageDisplayName(tile))}</span>
+          <span>Image Key</span><span class="mono">${P.esc(tile.image_key)}</span>
           <span>Reviewer</span><span>${tile.reviewer || 'unknown'}</span>
           <span>Source</span><span>${tile.source_type || 'unknown'}</span>
           <span>Confidence</span><span>${tile.confidence === null || tile.confidence === undefined ? '-' : tile.confidence}</span>
@@ -382,16 +425,22 @@
           <span>BBox</span><span class="mono">x=${tile.bbox.x_center.toFixed(6)} y=${tile.bbox.y_center.toFixed(6)} w=${tile.bbox.width.toFixed(6)} h=${tile.bbox.height.toFixed(6)}</span>
           <span>Review File</span><span class="mono">${tile.review_file}</span>
         </div>
+        </details>
       `;
+      P.autoLogControls(host);
     }
 
     function selectTile(tileId) {
+      const restoreFocus = document.activeElement?.classList.contains('tile');
       selectedTileId = tileId;
+      P.logInteraction('overview_tile_selected', { tile_id: tileId, filters: currentOverviewState() });
       renderAndPersist();
+      if (restoreFocus) document.querySelector('.tile.selected')?.focus({ preventScroll: true });
     }
 
     function openManualReview(imageKey, detectionId) {
       persistOverviewState();
+      P.logInteraction('overview_manual_review_opened', { image_key: imageKey, detection_id: detectionId });
       const url = `${manualReviewUrl.replace(/[/]$/, '')}/?image_id=${encodeURIComponent(imageKey)}&detection_id=${encodeURIComponent(detectionId)}`;
       window.location.href = url;
     }
@@ -414,6 +463,22 @@
     });
 
     restoreOverviewState();
+    // Stage navigation wraps at different widths; keep sticky controls below it.
+    const header = document.querySelector('header');
+    const controls = document.querySelector('.controls');
+    const resizeObserver = new ResizeObserver(() => {
+      const headerHeight = header.getBoundingClientRect().height;
+      const controlsHeight = controls.getBoundingClientRect().height;
+      document.documentElement.style.setProperty('--overview-header-height', headerHeight + 'px');
+      document.documentElement.style.setProperty('--overview-sticky-height', (headerHeight + controlsHeight) + 'px');
+    });
+    resizeObserver.observe(header);
+    resizeObserver.observe(controls);
+    P.autoLogControls(document);
+    P.captureConsoleErrors();
+    document.querySelectorAll('#search, #tileSize').forEach(control => {
+      control.addEventListener('input', () => P.logInteraction('overview_filter_changed', { control: control.id, filters: currentOverviewState() }));
+    });
     reloadOverview(false);
   </script>
 </body>
