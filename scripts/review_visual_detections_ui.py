@@ -92,10 +92,6 @@ QUEUE_WINDOW_RADIUS = 80
 QUEUE_CACHE_LOCK = threading.Lock()
 QUEUE_CACHE: list[dict] | None = None
 
-# DELETE BEFORE SHIP: temporary interaction logger for diagnosing missed UI saves.
-DEBUG_INTERACTION_LOG_PATH = repo_resolve("workspace/reports/visual_review_interactions_DELETE_BEFORE_SHIP.jsonl")
-
-
 def render_bbox_overview_html() -> str:
     try:
         from .training_pipeline_ui import render_app_html
@@ -110,18 +106,6 @@ def json_body(handler: BaseHTTPRequestHandler) -> dict:
         return {}
     raw = handler.rfile.read(content_length)
     return json.loads(raw.decode("utf-8")) if raw else {}
-
-
-def append_debug_interaction_event(payload: dict) -> None:
-    # DELETE BEFORE SHIP: temporary click/key logger. Remove this helper and endpoint before release.
-    DEBUG_INTERACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "server_received_at": utcnow_iso(),
-        "reviewer": REVIEWER,
-        "event": payload,
-    }
-    with DEBUG_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 def invalidate_review_queue_cache() -> None:
@@ -1773,71 +1757,6 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       return data;
     }}
 
-    // DELETE BEFORE SHIP: temporary full click/key logger for diagnosing missed review saves.
-    // DELETE BEFORE SHIP: remove logDebugInteraction plus both capture listeners before release.
-    function summarizeTarget(target) {{
-      if (!target) return null;
-      const text = (target.innerText || target.textContent || '').replace(/\\s+/g, ' ').trim();
-      return {{
-        tag: target.tagName || null,
-        id: target.id || null,
-        class_name: typeof target.className === 'string' ? target.className : null,
-        name: target.getAttribute ? target.getAttribute('name') : null,
-        type: target.getAttribute ? target.getAttribute('type') : null,
-        aria_label: target.getAttribute ? target.getAttribute('aria-label') : null,
-        title: target.getAttribute ? target.getAttribute('title') : null,
-        text: text.slice(0, 120),
-      }};
-    }}
-
-    function logDebugInteraction(kind, event) {{
-      // DELETE BEFORE SHIP: this intentionally logs every click and keydown.
-      const payload = {{
-        kind,
-        browser_time: new Date().toISOString(),
-        url: window.location.href,
-        image_id: state?.image?.image_id || null,
-        review_status: state?.image?.review_status || null,
-        selected_detection_id: selectedDetectionId || null,
-        current_detection_id: state?.current_detection_id || null,
-        target: summarizeTarget(event.target),
-        event_phase: event.eventPhase,
-        default_prevented_at_capture: event.defaultPrevented,
-      }};
-      if (kind === 'click') {{
-        payload.button = event.button;
-        payload.buttons = event.buttons;
-        payload.client_x = event.clientX;
-        payload.client_y = event.clientY;
-        payload.ctrl_key = event.ctrlKey;
-        payload.shift_key = event.shiftKey;
-        payload.alt_key = event.altKey;
-        payload.meta_key = event.metaKey;
-      }} else if (kind === 'keydown') {{
-        payload.key = event.key;
-        payload.code = event.code;
-        payload.repeat = event.repeat;
-        payload.ctrl_key = event.ctrlKey;
-        payload.shift_key = event.shiftKey;
-        payload.alt_key = event.altKey;
-        payload.meta_key = event.metaKey;
-        payload.active_tag = document.activeElement ? document.activeElement.tagName : null;
-      }}
-
-      console.debug('[DELETE BEFORE SHIP visual-review-interaction]', payload);
-      const body = JSON.stringify(payload);
-      if (navigator.sendBeacon) {{
-        navigator.sendBeacon('/api/debug-interaction', new Blob([body], {{ type: 'application/json' }}));
-        return;
-      }}
-      fetch('/api/debug-interaction', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body,
-        keepalive: true,
-      }}).catch(() => {{}});
-    }}
-
     function onClassSelectChange(selectEl) {{
       selectEl.className = selectEl.value === '1' ? 'cls-ships' : 'cls-ship';
     }}
@@ -1860,10 +1779,6 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       const nextImageId = direction < 0 ? state.queue.prev_image_id : state.queue.next_image_id;
       if (nextImageId) await openImage(nextImageId);
     }}
-
-    // DELETE BEFORE SHIP: temporary capture-phase diagnostics for every click and keydown.
-    document.addEventListener('click', event => logDebugInteraction('click', event), true);
-    document.addEventListener('keydown', event => logDebugInteraction('keydown', event), true);
 
     document.addEventListener('keydown', async event => {{
       if (event.key === 'Escape' && document.getElementById('hotkeyOverlay')?.classList.contains('visible')) {{
@@ -2033,12 +1948,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         payload = json_body(self)
         album_id = self._query_album_id(parsed)
-
-        if parsed.path == "/api/debug-interaction":
-            # DELETE BEFORE SHIP: temporary diagnostic endpoint for click/key logging.
-            append_debug_interaction_event(payload)
-            self._respond_json({"ok": True})
-            return
 
         try:
             image_id = parse_image_id(payload)

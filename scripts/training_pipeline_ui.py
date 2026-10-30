@@ -147,13 +147,18 @@ def update_job(job_id: str, **fields) -> None:
 
 
 def append_training_ui_interaction(payload: dict) -> None:
-    TRAINING_UI_INTERACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from .workspace import contained
+    except ImportError:
+        from workspace import contained
+    log_path = contained(TRAINING_UI_INTERACTION_LOG_PATH, WORKSPACE_DIR)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "server_received_at": utcnow_iso(),
         "reviewer": IMPORT_REVIEWER,
         "event": payload,
     }
-    with TRAINING_UI_INTERACTION_LOG_PATH.open("a", encoding="utf-8") as handle:
+    with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
