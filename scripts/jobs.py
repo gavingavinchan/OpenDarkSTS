@@ -170,7 +170,7 @@ def execute_job(kind, options, log=print):
 
 def _execute_pipeline(options, output, log):
     results = pipeline.run_pipeline(options["images"], weights=options.get("weights"),
-                ais_dir=options.get("ais_dir") or WORKSPACE_DIR / "inputs" / "ais" / "full", date=options.get("date"),
+                ais_dir=options.get("ais_dir", WORKSPACE_DIR / "inputs" / "ais" / "full"), date=options.get("date"),
                 conf=float(options.get("conf", .25)), radius_m=float(options.get("radius", 1000)),
                 preview_dir=output / "previews", record_path=output / "run.json", warn=log)
     pipeline.write_pipeline_output(output / "dark_sts.json", results)

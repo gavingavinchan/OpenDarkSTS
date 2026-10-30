@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - import only for type checking
     from ultralytics import YOLO
 
+
+MAX_BOX_AREA_FRACTION = 0.5
+
 try:
     from .sts_utils import load_image_size, parse_image_date, resolve_image_inputs, write_json
 except ImportError:
@@ -50,6 +53,10 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
             continue
 
         xywh = box.xywh[0].tolist()
+        # The paper's safety filter applies to the original tile dimensions.
+        # Exactly half is allowed; larger predictions are implausible vessels.
+        if float(xywh[2]) * float(xywh[3]) > image_width * image_height * MAX_BOX_AREA_FRACTION:
+            continue
         detections.append(
             {
                 "detection_id": f"{image_path.stem}_{image_id}:{index}",

@@ -83,6 +83,8 @@ def correlate_detections(detections: list[dict[str, Any]], ais_dir: str | Path, 
         raise ValueError("AIS radius must be positive and finite")
     if not detections:
         return []
+    if not str(ais_dir or "").strip():
+        return unavailable_results(detections, "AIS_MISSING", "No AIS source supplied")
 
     grouped: dict[str, list[dict[str, Any]]] = {}
     for detection in detections:

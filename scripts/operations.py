@@ -10,11 +10,13 @@ from . import jobs
 
 PROJECT_PATH = WORKSPACE_DIR / "detection_project.json"
 PRESETS = {
+    "Gulf of Mexico (US waters)": [-98.0, 24.0, -80.0, 31.0],
     "Galveston offshore": [-94.73, 29.07, -94.57, 29.205],
     "Los Angeles / Long Beach": [-118.4, 33.55, -118.05, 33.8],
     "New York approaches": [-74.15, 40.3, -73.7, 40.6],
     "San Francisco approaches": [-123.0, 37.5, -122.4, 37.9],
 }
+SENSITIVITY_PRESETS = {"Low": .10, "Medium": .25, "High": .45}
 
 
 def project():
@@ -22,7 +24,7 @@ def project():
         return json.loads(PROJECT_PATH.read_text())
     return {"bbox": PRESETS["Galveston offshore"], "start": "2020-01-04", "end": "2020-01-04",
             "images": str(WORKSPACE_DIR / "inputs" / "imagery"), "ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full"),
-            "confidence": .25, "radius": 1000, "max_cloud": 30}
+            "confidence": .25, "radius": 1000, "max_cloud": 35}
 
 
 def save_project(payload):
@@ -82,8 +84,8 @@ def detection_readiness(settings=None):
     if any(job["kind"] in {"ais", "imagery"} and job["status"] not in jobs.TERMINAL for job in jobs.list_jobs()):
         blockers.append("Wait for the active downloads to finish before starting detection.")
     ais = Path(settings["ais_dir"]).expanduser()
-    has_ais = (ais.is_file() and ais.suffix.lower() == ".csv") or (ais.is_dir() and any(
-        path.is_file() and path.suffix.lower() == ".csv" for path in ais.rglob("*")))
+    has_ais = bool(str(settings["ais_dir"]).strip()) and ((ais.is_file() and ais.suffix.lower() == ".csv") or (ais.is_dir() and any(
+        path.is_file() and path.suffix.lower() == ".csv" for path in ais.rglob("*"))))
     if not has_ais:
         warnings.append("No AIS CSV files are available at the selected source. Detection can run, but vessel presence will be unknown. Select AIS on Data.")
     return {"ready": not blockers, "image_count": len(images), "blockers": blockers, "warnings": warnings}
@@ -130,11 +132,23 @@ def dashboard():
                 completed_images.add(key)
         except (OSError, ValueError):
             continue
-    return {"pending_reviews": pending_reviews, "project": settings, "presets": PRESETS, "model": model, "model_error": model_error,
+    history = jobs.list_jobs(include_training=True)
+    completed = [job for job in history if job["kind"] == "run" and job["status"] == "completed"]
+    detection_summary = {"runs": len(completed), "detections": 0, "FULLY_DARK": 0, "PARTIALLY_DARK": 0,
+                         "AIS_PRESENT": 0, "AIS_MISSING": 0, "AIS_INVALID": 0}
+    for job in completed:
+        result = job.get("result")
+        summary = result.get("summary") if isinstance(result, dict) else None
+        for key, value in (summary if isinstance(summary, dict) else {}).items():
+            if key in detection_summary and key != "runs" and type(value) is int and value >= 0:
+                detection_summary[key] += value
+    return {"pending_reviews": pending_reviews, "project": settings, "presets": PRESETS,
+            "sensitivity_presets": SENSITIVITY_PRESETS, "detection_summary": detection_summary,
+            "model": model, "model_error": model_error,
             "training_inventory": {"images": len(training_images), "completed": len(completed_images),
                                    "albums": len(list((WORKSPACE_DIR / "albums").glob("alb_*.json")))},
             "readiness": detection_readiness(settings),
-            "inventory": inventory, "jobs": jobs.list_jobs(include_training=True), "workspace": str(WORKSPACE_DIR)}
+            "inventory": inventory, "jobs": history, "workspace": str(WORKSPACE_DIR)}
 
 
 def submit_project_job(kind):

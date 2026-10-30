@@ -535,7 +535,7 @@ def command_save_training_config(args: argparse.Namespace) -> tuple[int, dict[st
         seed=int(args.seed),
         device=args.device,
         workers=None if args.workers is None else int(args.workers),
-        augmentation=parse_augmentation_args(args.aug),
+        augmentation={**pipeline.augmentation_presets().get(args.aug_preset, {}), **parse_augmentation_args(args.aug)},
         overwrite=bool(args.overwrite),
         output_dir=args.output_dir,
         configs_dir=args.configs_dir,
@@ -914,6 +914,8 @@ def build_parser() -> argparse.ArgumentParser:
     save_config_parser.add_argument("--device", default="auto", help="auto selects CUDA, then Apple GPU, then CPU; explicit device choices are preserved")
     save_config_parser.add_argument("--workers", type=int, default=4)
     save_config_parser.add_argument("--aug", action="append", help="Augmentation setting as key=value; repeatable")
+    save_config_parser.add_argument("--aug-preset", choices=list(pipeline.augmentation_presets()),
+                                    help="Online augmentation starting values; --aug overrides individual values")
     save_config_parser.add_argument("--overwrite", action="store_true")
     save_config_parser.add_argument("--output-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
     save_config_parser.add_argument("--configs-dir", default=str(pipeline.DEFAULT_TRAINING_CONFIGS_DIR))
