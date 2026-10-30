@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "identity": {
+    "date": "2020-01-24",
+    "bbox": [
+      -94.387,
+      28.587508860759492,
+      -94.24340677966103,
+      28.720835443037974
+    ],
+    "source_sha256": "fd683b88370627c5a2635a199efb817f72e812794fe17457370cf595f2a661e9"
+  },
+  "sha256": "d17c531639aa074101ffd08d996c357558a9176b97b8641d65f4b2cf432ea054",
+  "row_count": 1653,
+  "source_url": "https://noaaocm.blob.core.windows.net/ais/csv2/csv2020/ais-2020-01-24.csv.zst"
+}

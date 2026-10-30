@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenDarkSTS / Training Setup</title>
+  <link rel="stylesheet" href="/static/pipeline.css">
+
+  <style>
+    .setup-main {max-width:1120px; width:100%; margin:0 auto; gap:18px; padding-top:24px;}
+    .setup-grid {display:grid; grid-template-columns:minmax(0,1.28fr) minmax(0,1fr); gap:28px; align-items:start;}
+    .setup-form {padding:24px; gap:12px;}
+    .setup-form h2,.recommended-card h2 {font-size:22px; font-weight:600; letter-spacing:-.4px;}
+    .setup-eyebrow {margin:0 0 7px; color:var(--muted); font-size:11px; letter-spacing:.09em; text-transform:uppercase;}
+    .setup-intro {margin:0 0 4px; font-size:14px; color:var(--muted); line-height:1.6;}
+    .setup-form .field > span {font-size:13px; font-weight:600; letter-spacing:0; text-transform:none; color:var(--ink);}
+    .setup-form .field small {margin-left:6px; font-size:12px; color:var(--muted); font-weight:400;}
+    .setup-form input,.setup-form select {padding:12px; font-size:14px;}
+    .setup-form .hint,.setup-aside .hint {font-size:13px; line-height:1.5;}
+    .model-recommendation {padding:12px 14px; margin:2px 0; border-left:3px solid var(--green); background:#f0f5f3; display:grid; gap:4px;}
+    .model-recommendation strong {font-size:14px; overflow-wrap:anywhere;}
+    .setup-actions {display:flex; align-items:center; gap:12px; margin-top:6px;}
+    .setup-actions .primary {padding:12px 20px; font-size:14px; background:var(--green); border-color:var(--green);}
+    .setup-aside {display:grid; gap:22px;}
+    .recommended-card,.readiness-card {padding:24px; gap:14px;}
+    .compute-summary {display:flex; align-items:start; gap:10px; padding:15px 0; border-bottom:1px solid var(--line);}
+    .compute-summary strong {font-size:14px; line-height:1.5;}
+    .compute-dot {width:8px; height:8px; border-radius:50%; background:var(--green); flex:none; margin-top:7px;}
+    .settings-summary {margin:0; display:grid; gap:12px; font-size:13px;}
+    .settings-summary div {display:flex; justify-content:space-between; gap:20px;}
+    .settings-summary dt {color:var(--muted);}.settings-summary dd {margin:0; font-weight:600;}
+    .setup-advanced {padding:0; display:block; box-shadow:none;}
+    .setup-advanced > summary {padding:16px 24px; cursor:pointer; font-size:15px; font-weight:600;}
+    .setup-advanced > summary .hint {margin-left:12px; font-weight:400; font-size:12px;}
+    .advanced-body {display:grid; gap:28px; border-top:1px solid var(--line); padding:26px;}
+    .advanced-section {display:grid; gap:14px; min-width:0;}
+    .advanced-section h3 {font-size:13px;}.advanced-section .grid3 {grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px;}
+    .advanced-section .row.check {font-size:13px;}.setup-advanced:not([open]) .advanced-body {display:none;}
+    #readinessList:empty,#warningList:empty {display:none;}#setupStatus:empty {display:none;}
+    @media(max-width:850px) {.setup-grid{grid-template-columns:1fr;gap:20px;}.setup-advanced > summary .hint{display:block;margin:8px 0 0;}.setup-form,.recommended-card,.readiness-card{padding:22px;}}
+    @media(max-width:550px) {.advanced-section .grid3{grid-template-columns:repeat(2,minmax(0,1fr));}.setup-main{padding-left:16px;padding-right:16px;}.advanced-body{padding:20px;}}
+  </style>
+</head>
+<body data-page="training-setup">
+  <div class="shell">
+    <header>
+      <div class="titleblock">
+        <div class="filenum">05<sup>/07</sup></div>
+        <div>
+          <h1>Training Setup</h1>
+          <p class="subtitle">Choose your dataset. We will prepare a training run with recommended settings.</p>
+        </div>
+      </div>
+      __STAGE_NAV__
+    </header>
+
+    <main class="setup-main">
+      <div class="setup-grid">
+        <section class="card setup-form">
+          <h2>Prepare a training run</h2>
+          <label class="field"><span>Training dataset</span><select id="datasetSelect" aria-describedby="datasetHint"></select></label>
+          <p class="hint" id="datasetHint">Loading exported datasets…</p>
+          <div class="model-recommendation"><span class="setup-eyebrow">Starting model</span><strong id="startingModelSummary">Loading recommended model…</strong></div>
+          <label class="field"><span>Run name <small>Optional</small></span><input id="runName" aria-describedby="runNameHint" placeholder="A name will be created for you"></label><p class="hint" id="runNameHint">Use a name without spaces; underscores and hyphens are allowed.</p>
+          <div class="setup-actions"><button id="saveConfig" class="primary" type="button" disabled>Save &amp; continue</button><button id="goTrain" type="button" disabled hidden>Continue to training</button></div>
+          <p class="hint">Saving prepares the run. Training starts on the next page.</p>
+          <div class="status" id="setupStatus" role="status" aria-live="polite"></div>
+        </section>
+        <aside class="setup-aside">
+          <section class="card recommended-card">
+            <div><p class="setup-eyebrow">Recommended for this computer</p><h2>Training settings</h2></div>
+            <div class="compute-summary"><span class="compute-dot" aria-hidden="true"></span><div><strong id="computeSummary">Checking available hardware…</strong><p class="hint" id="computeHint">The GPU is used automatically when available.</p></div></div>
+            <dl class="settings-summary"><div><dt>Training length</dt><dd id="epochSummary">150 epochs</dd></div><div><dt>Image size</dt><dd id="imageSummary">960 pixels</dd></div><div><dt>Images per batch</dt><dd id="batchSummary">8</dd></div></dl>
+            <p class="hint">An epoch is one pass through the training images. Training can finish early when results stop improving.</p>
+          </section>
+          <section class="card readiness-card">
+            <h2>Before training</h2><p class="hint" id="readinessSummary">Save your setup to check the dataset and run.</p>
+            <ul class="checklist" id="readinessList"></ul><ul class="checklist" id="warningList"></ul>
+            <button id="checkReadiness" type="button" disabled hidden>Check readiness again</button>
+          </section>
+        </aside>
+      </div>
+      <details class="card setup-advanced" id="advancedSettings">
+        <summary><span>Advanced</span><span class="hint">Change settings, choose a different model, or load a saved setup</span></summary>
+        <div class="advanced-body">
+          <section class="advanced-section"><h3>Model and run details</h3>
+            <label class="field"><span>Starting model</span><select id="weightSelect"></select></label><p class="hint" id="weightHint">—</p>
+            <div class="grid2"><label class="field"><span>Training batch</span><input id="runGroup" placeholder="Created from the dataset"></label><label class="field"><span>Config filename</span><input id="configName" placeholder="Created from the run name"></label></div>
+            <label class="row check"><input id="overwrite" type="checkbox"> Replace results from an existing run with this name</label>
+          </section>
+          <section class="advanced-section"><h3>Training settings</h3>
+            <div class="grid3">
+              <label class="field"><span>Image size (pixels)</span><input id="imageSize" type="number" value="960"></label>
+              <label class="field"><span>Epochs</span><input id="epochs" type="number" value="150"></label>
+              <label class="field"><span>Batch size</span><input id="batch" type="number" value="8"></label>
+              <label class="field"><span>Early stopping patience</span><input id="patience" type="number" value="30"></label>
+              <label class="field"><span>Random seed</span><input id="seed" type="number" value="42"></label>
+              <label class="field"><span>Device</span><input id="device" value="auto" list="deviceOptions"><datalist id="deviceOptions"><option value="auto">Automatic hardware selection</option><option value="cpu">CPU</option><option value="0">First NVIDIA GPU</option><option value="mps">Apple GPU</option></datalist></label>
+              <label class="field"><span>Data loading workers</span><input id="workers" type="number" value="4"></label>
+            </div><p class="hint">Auto chooses an available GPU, then CPU. The saved setup records the actual device so it can be reproduced.</p>
+          </section>
+          <section class="advanced-section"><h3>Image variations (augmentation)</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><label class="field"><span>Augmentation preset</span><select id="augPreset" disabled><option value="">Custom / library defaults</option><option value="none">None</option><option value="light">Light</option><option value="default">Default</option><option value="heavy">Heavy</option></select></label><p class="hint">Presets fill explicit values below. Adjust them before saving. Augmentation affects training images only.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button" disabled>Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
+          <section class="advanced-section"><h3>Save and inspect</h3><div class="row"><button id="saveOnly" type="button">Save without continuing</button><button id="previewCommand" type="button" disabled>Preview command</button></div><div class="status" id="advancedStatus" role="status" aria-live="polite"></div><pre class="code" id="commandPreview">Save a setup to preview the exact training command.</pre><dl class="kv" id="commandMeta"></dl></section>
+          <section class="advanced-section"><h3>Saved training setups</h3><div class="scroll"><table><thead><tr><th>Config</th><th>Training batch</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead><tbody id="configBody"></tbody></table></div></section>
+        </div>
+      </details>
+    </main>
+  </div>
+
+  <script src="/static/pipeline.js"></script>
+  <script>
+    const P = window.Pipeline;
+    const AUG_LABELS = {hsv_h:'Colour hue variation',hsv_s:'Colour saturation variation',hsv_v:'Brightness variation',degrees:'Rotation in degrees',translate:'Position shifts',scale:'Size variation',shear:'Slant variation',perspective:'Perspective variation',flipud:'Vertical flip probability',fliplr:'Horizontal flip probability',mosaic:'Combine four images',mixup:'Blend training images',copy_paste:'Copy objects between images',erasing:'Hide random image patches',crop_fraction:'Fraction retained when cropping'};
+    const AUG_KEYS = ['hsv_h', 'hsv_s', 'hsv_v', 'degrees', 'translate', 'scale', 'shear',
+                      'perspective', 'flipud', 'fliplr', 'mosaic', 'mixup', 'copy_paste',
+                      'erasing', 'crop_fraction'];
+    const state = { datasets: [], selections: [], weights: [], configPath: null, ready: false, defaults: null, autoGroup: null };
+
+    async function loadDefaults() {
+      state.defaults = await P.api('/api/training/defaults');
+      document.getElementById('augPreset').disabled = false;
+      document.getElementById('augDefaults').disabled = false;
+      const defaults = state.defaults.defaults;
+      ['imageSize','epochs','batch','patience','seed','workers','device'].forEach(function(id) {
+        const key = id === 'imageSize' ? 'image_size' : id;
+        setFieldValue(id, defaults[key]);
+      });
+      updateSettingsSummary();
+    }
+
+    function updateSettingsSummary() {
+      const device = document.getElementById('device').value.trim() || 'auto';
+      const compute = state.defaults && state.defaults.compute;
+      const auto = device.toLowerCase() === 'auto';
+      const label = auto && compute ? compute.label : device === 'cpu' ? 'CPU' : compute && String(compute.device) === device ? compute.label : 'Device ' + device;
+      document.getElementById('computeSummary').textContent = label + (auto ? ' · automatic' : ' · selected');
+      document.getElementById('computeHint').textContent = (auto && compute && compute.backend === 'cpu') || device === 'cpu'
+        ? 'CPU training is available. A GPU can reduce training time.' : 'GPU acceleration is available for this run.';
+      const epochs = document.getElementById('epochs').value;
+      document.getElementById('epochSummary').textContent = epochs + (Number(epochs) === 1 ? ' epoch' : ' epochs');
+      document.getElementById('imageSummary').textContent = document.getElementById('imageSize').value + ' pixels';
+      document.getElementById('batchSummary').textContent = document.getElementById('batch').value;
+    }
+
+    function invalidateSavedSetup() {
+      if (!state.configPath) return;
+      state.configPath = null;
+      state.ready = false;
+      document.getElementById('goTrain').hidden = true;
+      document.getElementById('goTrain').disabled = true;
+      document.getElementById('checkReadiness').disabled = true;
+      document.getElementById('previewCommand').disabled = true;
+      document.getElementById('readinessSummary').textContent = 'Settings changed. Save again to check this setup.';
+      document.getElementById('readinessList').innerHTML = '';
+      document.getElementById('warningList').innerHTML = '';
+    }
+
+    function renderAugFields() {
+      document.getElementById('augFields').innerHTML = AUG_KEYS.map(function (key) {
+        return '<label class="field"><span>' + AUG_LABELS[key] + ' <small>(' + key + ')</small></span>' +
+          '<input class="aug" data-key="' + key + '" type="number" step="0.01" placeholder="—"></label>';
+      }).join('');
+    }
+
+    function augmentationPayload() {
+      const payload = {};
+      document.querySelectorAll('input.aug').forEach(function (input) {
+        const raw = input.value.trim();
+        if (raw !== '') { payload[input.dataset.key] = Number(raw); }
+      });
+      return payload;
+    }
+
+    async function loadDatasets() {
+      const [datasets, selections] = await Promise.all([
+        P.api('/api/training/exported-datasets'),
+        P.api('/api/dataset-selections'),
+      ]);
+      state.datasets = datasets.datasets || [];
+      state.selections = selections.selections || [];
+      const options = state.datasets.map(function (dataset, index) {
+        const match = state.selections.find(function (item) {
+          return item.export_output_dir && String(item.export_output_dir).replace(/\/$/, '') === String(dataset.dataset_dir).replace(/\/$/, '');
+        });
+        dataset.selection_path = dataset.selection_path || (match ? match.selection_path : null);
+        return '<option value="' + index + '">' + P.esc(dataset.dataset_name || dataset.dataset_dir) +
+          ' ' + P.esc(dataset.dataset_version || '') + ' (' + (dataset.image_count || 0) + ' images)</option>';
+      });
+      document.getElementById('datasetSelect').innerHTML = options.join('') ||
+        '<option value="">No exported datasets — export one in step 4</option>';
+      const latestSelection = state.selections.find(function(selection) { return selection.exported && selection.export_is_current; });
+      const recommended = state.datasets.findIndex(function(dataset) { return latestSelection && dataset.selection_path === latestSelection.selection_path; });
+      if (recommended >= 0) document.getElementById('datasetSelect').value = String(recommended);
+      const requested = new URLSearchParams(window.location.search).get('selection_path');
+      const requestedIndex = state.datasets.findIndex(dataset => dataset.selection_path === requested);
+      if (requestedIndex >= 0) document.getElementById('datasetSelect').value = String(requestedIndex);
+      onDatasetChange();
+    }
+
+    function currentDataset() {
+      const value = document.getElementById('datasetSelect').value;
+      if (value === '') return null;
+      const index = Number(value);
+      return state.datasets[index] || null;
+    }
+
+    function onDatasetChange() {
+      const dataset = currentDataset();
+      const hint = document.getElementById('datasetHint');
+      if (!dataset) { hint.textContent = 'No exported dataset available.'; return; }
+      const counts = dataset.split_counts || {};
+      const imageCount = (count, label) => count + ' ' + label + ' image' + (count === 1 ? '' : 's');
+      hint.textContent = imageCount(counts.train || 0, 'training') + ' · ' + imageCount(counts.val || 0, 'validation') + ' · ' + imageCount(counts.test || 0, 'test') +
+        (dataset.selection_path ? '' : '. This source dataset has no reviewed export. Choose a reviewed dataset or export one in Dataset Builder.');
+      const nameField = document.getElementById('runGroup');
+      if (!nameField.value || nameField.value === state.autoGroup) {
+        state.autoGroup = String(dataset.dataset_name || 'training').replace(/[^a-zA-Z0-9_.-]+/g, '_');
+        nameField.value = state.autoGroup;
+      }
+    }
+
+    async function loadWeights() {
+      const data = await P.api('/api/training/starting-weights');
+      state.weights = data.weights || [];
+      document.getElementById('weightSelect').innerHTML = state.weights.map(function (weight, index) {
+        return '<option value="' + index + '">' + P.esc(weight.path) + (weight.documented ? '' : '  [undocumented]') + '</option>';
+      }).join('') || '<option value="">No .pt weights found</option>';
+      const recommended = state.weights.findIndex(function(weight) { return state.defaults && weight.path === state.defaults.recommended_model; });
+      const documented = state.weights.findIndex(function(weight) { return weight.documented; });
+      document.getElementById('weightSelect').value = String(recommended >= 0 ? recommended : documented >= 0 ? documented : 0);
+      onWeightChange();
+    }
+
+    function currentWeight() {
+      const index = Number(document.getElementById('weightSelect').value);
+      return state.weights[index] || null;
+    }
+
+    function onWeightChange() {
+      const weight = currentWeight();
+      const hint = document.getElementById('weightHint');
+      if (!weight) { hint.textContent = 'No starting weights found.'; return; }
+      if (weight.documented) {
+        hint.innerHTML = 'Provenance documented in <a href="/training-recipe?weight=' + encodeURIComponent(weight.path) + '" target="_blank" rel="noopener">' + P.esc(weight.recreation_document) + '</a> (' + P.esc(weight.source) + ').';
+        hint.style.color = '';
+      } else {
+        hint.textContent = 'WARNING: ' + weight.provenance_warning;
+        hint.style.color = 'var(--amber)';
+      }
+      const recommended = state.defaults && weight.path === state.defaults.recommended_model;
+      document.getElementById('startingModelSummary').textContent = recommended ? 'Current STS detector · recommended' : weight.name;
+    }
+
+    function numberOrNull(id) {
+      const raw = document.getElementById(id).value.trim();
+      return raw === '' ? null : Number(raw);
+    }
+
+    async function saveConfig(continueAfter) {
+      const statusId = continueAfter ? 'setupStatus' : 'advancedStatus';
+      const dataset = currentDataset();
+      const weight = currentWeight();
+      if (!dataset || !weight) { P.setStatus(statusId, 'Pick an exported dataset and a starting weight first.', 'err'); return; }
+      if (!dataset.selection_path) { P.setStatus(statusId, 'Choose a reviewed dataset, or export the reviewed images in Dataset Builder first.', 'err'); return; }
+      const runGroup = document.getElementById('runGroup').value.trim();
+      const runName = document.getElementById('runName').value.trim() || 'training_' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0,14);
+      const runField = document.getElementById('runName');
+      runField.ariaInvalid = String(/\s/.test(runName));
+      if (/\s/.test(runName)) {
+        P.setStatus(statusId, 'Run name must not contain spaces. Use underscores or hyphens instead.', 'err');
+        return;
+      }
+      const explicitName = document.getElementById('configName').value.trim();
+      const payload = {
+        dataset_name: dataset.dataset_name,
+        dataset_version: dataset.dataset_version || 'v1',
+        model: weight.path,
+        run_group: runGroup,
+        run_name: runName,
+        image_size: numberOrNull('imageSize') || 960,
+        epochs: numberOrNull('epochs') || 1,
+        batch: numberOrNull('batch') || 1,
+        patience: numberOrNull('patience'),
+        seed: numberOrNull('seed') ?? 42,
+        device: document.getElementById('device').value.trim() || 'auto',
+        workers: numberOrNull('workers'),
+        augmentation: augmentationPayload(),
+        overwrite: document.getElementById('overwrite').checked,
+        selection_path: dataset.selection_path,
+        config_name: explicitName || (runGroup + '_' + runName),
+      };
+      P.setStatus(statusId, 'Saving training config…');
+      document.getElementById('saveConfig').disabled = true;
+      try {
+        const data = await P.api('/api/training/configs', { method: 'POST', body: payload });
+        state.configPath = data.config_path;
+        setFieldValue('runName', data.config.run_name);
+        P.setStatus(statusId, 'Setup saved. ' + (data.readiness.ready ? 'Ready to continue.' : 'Resolve the items shown before training.'), data.readiness.ready ? 'ok' : 'err');
+        document.getElementById('checkReadiness').disabled = false;
+        document.getElementById('checkReadiness').hidden = false;
+        document.getElementById('previewCommand').disabled = false;
+        renderReadiness(data.readiness || {}, data.warnings || []);
+        await loadConfigs();
+        if (continueAfter && state.ready) goToTraining();
+      } catch (error) {
+        P.setStatus(statusId, 'Save failed: ' + error.message, 'err');
+      } finally {
+        document.getElementById('saveConfig').disabled = false;
+      }
+    }
+
+    function renderReadiness(readiness, warnings) {
+      const missing = readiness.missing || [];
+      state.ready = Boolean(readiness.ready);
+      document.getElementById('readinessSummary').textContent = state.ready
+        ? 'Ready to train.'
+        : missing.length + ' blocking item(s) must be fixed before training can start.';
+      const items = [];
+      if (state.ready) { items.push('<li>All backend readiness checks passed</li>'); }
+      missing.forEach(function (item) { items.push('<li class="miss">' + P.esc(item) + '</li>'); });
+      document.getElementById('readinessList').innerHTML = items.join('') || '<li class="empty">No readiness result yet.</li>';
+      const allWarnings = [...new Set((warnings || []).concat(readiness.warnings || []))];
+      document.getElementById('warningList').innerHTML = allWarnings.length
+        ? allWarnings.map(function (item) { return '<li class="miss">' + P.esc(item) + '</li>'; }).join('')
+        : '';
+      document.getElementById('goTrain').disabled = !state.ready;
+      document.getElementById('goTrain').hidden = !state.configPath;
+    }
+
+    async function checkReadiness() {
+      const dataset = currentDataset();
+      if (!state.configPath || !dataset || !dataset.selection_path) {
+        P.setStatus('setupStatus', 'Need a saved config and an exported dataset with a selection manifest.', 'err');
+        return;
+      }
+      try {
+        const data = await P.api('/api/training/readiness', {
+          method: 'POST',
+          body: { selection_path: dataset.selection_path, config_path: state.configPath },
+        });
+        renderReadiness(data, []);
+        P.setStatus('setupStatus', data.ready ? 'Readiness: ready.' : 'Readiness: blocked.', data.ready ? 'ok' : 'err');
+      } catch (error) {
+        P.setStatus('setupStatus', 'Readiness check failed: ' + error.message, 'err');
+      }
+    }
+
+    async function previewCommand() {
+      const dataset = currentDataset();
+      if (!state.configPath || !dataset || !dataset.selection_path) {
+        P.setStatus('setupStatus', 'Need a saved config and an exported dataset with a selection manifest.', 'err');
+        return;
+      }
+      try {
+        const data = await P.api('/api/training/command-preview', {
+          method: 'POST',
+          body: { selection_path: dataset.selection_path, config_path: state.configPath },
+        });
+        document.getElementById('commandPreview').textContent = '# ' + data.shell + '\n' + data.display_command;
+        document.getElementById('commandMeta').innerHTML =
+          '<dt>run dir</dt><dd>' + P.esc(data.run_dir) + '</dd>' +
+          '<dt>data.yaml</dt><dd>' + P.esc(data.data_yaml) + '</dd>' +
+          '<dt>config</dt><dd>' + P.esc(state.configPath) + '</dd>' +
+          '<dt>selection</dt><dd>' + P.esc(dataset.selection_path) + '</dd>';
+        P.setStatus('setupStatus', 'Command preview generated.', 'ok');
+      } catch (error) {
+        document.getElementById('commandPreview').textContent = 'Preview failed: ' + error.message;
+        P.setStatus('setupStatus', 'Command preview failed: ' + error.message, 'err');
+      }
+    }
+
+    async function loadConfigs() {
+      const data = await P.api('/api/training/configs');
+      const configs = data.configs || [];
+      const body = document.getElementById('configBody');
+      if (!configs.length) {
+        body.innerHTML = '<tr><td colspan="9" class="empty">No saved training configs yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = configs.map(function (config) {
+        const complete = !(config.missing || []).length;
+        return '<tr><td>' + P.esc(config.config_path) + '</td><td>' + P.esc(config.run_group) + '</td>' +
+          '<td>' + P.esc(config.run_name) + '</td><td>' + P.esc(config.model) + '</td>' +
+          '<td>' + P.esc(config.epochs) + '</td><td>' + P.esc(config.batch) + '</td><td>' + P.esc(config.device) + '</td>' +
+          '<td><span class="pill ' + (complete ? 'ok' : 'bad') + '">' + (complete ? 'complete' : 'incomplete') + '</span></td>' +
+          '<td><button type="button" class="ghost use-config" data-path="' + P.esc(config.config_path) + '">Use</button></td></tr>';
+      }).join('');
+      body.querySelectorAll('button.use-config').forEach(function (button) {
+        button.addEventListener('click', function () {
+          const config = configs.find(function (item) { return item.config_path === button.dataset.path; });
+          state.ready = false;
+          state.configPath = button.dataset.path;
+          document.getElementById('checkReadiness').disabled = false;
+          document.getElementById('previewCommand').disabled = false;
+          P.logInteraction('click', { control: 'use_config', config_path: button.dataset.path });
+          /* Load the whole config into the form: readiness and the command preview are
+             sent for this config, so the visible fields must be this config's fields. */
+          const applied = applyConfigToForm(config);
+          P.setStatus('setupStatus', 'Using config ' + button.dataset.path +
+            (applied ? '.' : ' (its dataset is not in the exported-dataset list).'), applied ? 'ok' : 'err');
+          checkReadiness();
+        });
+      });
+    }
+
+    function setFieldValue(id, value) {
+      document.getElementById(id).value = (value === null || value === undefined) ? '' : String(value);
+    }
+
+    function selectDatasetFor(config) {
+      const index = state.datasets.findIndex(function (dataset) {
+        if (config.selection_path) return dataset.selection_path === config.selection_path;
+        return String(dataset.dataset_name) === String(config.dataset_name) &&
+          String(dataset.dataset_version || 'v1') === String(config.dataset_version || 'v1');
+      });
+      if (index < 0) { document.getElementById('datasetSelect').value = ''; return false; }
+      document.getElementById('datasetSelect').value = String(index);
+      onDatasetChange();
+      return true;
+    }
+
+    function selectWeightFor(config) {
+      let index = state.weights.findIndex(function (weight) {
+        return String(weight.path) === String(config.model) || String(weight.name) === String(config.model);
+      });
+      if (index < 0) {
+        index = state.weights.length;
+        state.weights.push({path: config.model, name: String(config.model).split(/[\\/]/).pop(), documented: false,
+          provenance_warning: 'This saved model is not in the available model list. Check that its file and recreation documentation are available.'});
+        const option = document.createElement('option'); option.value = String(index); option.textContent = config.model + ' [saved model]';
+        document.getElementById('weightSelect').appendChild(option);
+      }
+      document.getElementById('weightSelect').value = String(index);
+      onWeightChange();
+      return true;
+    }
+
+    function applyConfigToForm(config) {
+      if (!config) { return false; }
+      const datasetLoaded = selectDatasetFor(config);
+      selectWeightFor(config);
+      setFieldValue('runGroup', config.run_group);
+      setFieldValue('runName', config.run_name);
+      setFieldValue('imageSize', config.image_size);
+      setFieldValue('epochs', config.epochs);
+      setFieldValue('batch', config.batch);
+      setFieldValue('patience', config.patience);
+      setFieldValue('seed', config.seed);
+      setFieldValue('device', config.device);
+      setFieldValue('workers', config.workers);
+      setFieldValue('configName', String(config.config_path || '').split('/').pop().replace(/\.json$/, ''));
+      document.getElementById('overwrite').checked = Boolean(config.overwrite);
+      const augmentation = config.augmentation || {};
+      document.getElementById('augPreset').value = '';
+      document.querySelectorAll('input.aug').forEach(function (input) {
+        const value = augmentation[input.dataset.key];
+        input.value = (value === null || value === undefined) ? '' : String(value);
+      });
+      updateSettingsSummary();
+      return datasetLoaded;
+    }
+
+    function goToTraining() {
+      const dataset = currentDataset();
+      if (!state.ready || !state.configPath || !dataset || !dataset.selection_path) return;
+      const params = new URLSearchParams({config_path: state.configPath, selection_path: dataset.selection_path});
+      P.logInteraction('continue_to_training', {config_path: state.configPath, selection_path: dataset.selection_path});
+      window.location.href = '/training?' + params.toString();
+    }
+
+    function wire() {
+      renderAugFields();
+      document.querySelectorAll('input.aug').forEach(input => input.addEventListener('input', () => { document.getElementById('augPreset').value = ''; }));
+      document.getElementById('datasetSelect').addEventListener('change', onDatasetChange);
+      document.getElementById('weightSelect').addEventListener('change', onWeightChange);
+      function applyAugmentationPreset(name) {
+        invalidateSavedSetup();
+        const values = (state.defaults && state.defaults.augmentation_presets[name]) || {};
+        document.getElementById('augPreset').value = name;
+        document.querySelectorAll('input.aug').forEach(function (input) {
+          input.value = values[input.dataset.key] === undefined ? '' : values[input.dataset.key];
+        });
+        P.logInteraction('augmentation_preset', {preset: name, values});
+      }
+      document.getElementById('augPreset').addEventListener('change', function () { applyAugmentationPreset(this.value); });
+      document.getElementById('augDefaults').addEventListener('click', function () { applyAugmentationPreset('default'); });
+      document.getElementById('augClear').addEventListener('click', function () {
+        invalidateSavedSetup();
+        applyAugmentationPreset('');
+      });
+      document.getElementById('saveConfig').addEventListener('click', function() { saveConfig(true); });
+      document.getElementById('saveOnly').addEventListener('click', function() { saveConfig(false); });
+      document.getElementById('checkReadiness').addEventListener('click', checkReadiness);
+      document.getElementById('previewCommand').addEventListener('click', previewCommand);
+      document.getElementById('goTrain').addEventListener('click', goToTraining);
+      document.querySelectorAll('main input, main select').forEach(function(control) {
+        control.addEventListener('input', function() { invalidateSavedSetup(); updateSettingsSummary(); });
+        control.addEventListener('change', function() { invalidateSavedSetup(); updateSettingsSummary(); });
+      });
+      document.getElementById('advancedSettings').addEventListener('toggle', function(event) { P.logInteraction('training_setup_advanced', {open: event.target.open}); });
+      P.autoLogControls(document);
+      P.captureConsoleErrors();
+    }
+
+    wire();
+    loadDefaults().then(function() { return Promise.all([loadDatasets(), loadWeights(), loadConfigs()]); }).then(function() {
+      document.getElementById('saveConfig').disabled = !currentDataset() || !currentWeight();
+    }).catch(function (error) {
+      P.setStatus('setupStatus', 'Load failed: ' + error.message, 'err');
+    });
+  </script>
+</body>
+</html>

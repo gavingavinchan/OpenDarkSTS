@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opendarksts"
+version = "0.1.0"
+description = "Local satellite candidate detection and same-day US AIS comparison"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "ultralytics==8.4.23",
+  "rasterio>=1.4,<2",
+  "Pillow>=10,<13",
+  "numpy>=1.26,<3",
+  "psutil>=5.9,<8",
+  "zstandard>=0.22,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "build>=1.2,<2"]
+
+[project.scripts]
+opendarksts = "scripts.application_cli:main"
+
+[tool.setuptools]
+include-package-data = false
+packages = ["scripts", "opendarksts"]
+
+[tool.setuptools.package-data]
+scripts = ["templates/*.html", "templates/static/*.css", "templates/static/*.js", "templates/static/vendor/leaflet/*", "templates/static/vendor/leaflet/images/*", "templates/static/vendor/leaflet-draw/*", "templates/static/vendor/leaflet-draw/images/*", "templates/static/vendor/ibm-plex/*"]
+opendarksts = ["assets/*.json", "assets/*.md", "example/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: real inference with the documented default model"]

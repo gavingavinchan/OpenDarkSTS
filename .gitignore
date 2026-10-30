@@ -73,3 +73,27 @@ workspace/
 *.jpg
 *.jpeg
 *.mp4
+
+# Two-CLI council coordination (peer notes, signal server config, runtime)
+council/
+
+# Per-CLI / per-tool local state and skill caches
+.agents/
+.claude/
+.opencode/
+.mcp.json
+opencode.jsonc
+SKILL.md
+skills-lock.json
+
+
+*.egg-info/
+# Small, documented release example assets
+!opendarksts/example/*.tiff
+!opendarksts/example/*.csv
+
+# Bundled viewer icons and drawing-tool sprites
+!scripts/templates/static/vendor/leaflet/images/
+!scripts/templates/static/vendor/leaflet/images/*.png
+!scripts/templates/static/vendor/leaflet-draw/images/
+!scripts/templates/static/vendor/leaflet-draw/images/*.png

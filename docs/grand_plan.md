@@ -1,5 +1,7 @@
 # OpenDarkSTS — Grand Plan
 
+This is the original operational pipeline plan. For the current two-pipeline hierarchy, use `docs/grand_plan_v2.md` as the project-level plan. The training-side pipeline is defined in `docs/training_pipeline_plan.md`.
+
 Detect dark ship-to-ship (STS) transfers by running YOLO on satellite imagery to find
 active STS events, then cross-referencing those detections against AIS records to
 determine whether either vessel was broadcasting. If one or both vessels are absent from

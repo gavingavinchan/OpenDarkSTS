@@ -1,10 +1,23 @@
 # Progress Tracking
 
+## Current Release Default — SNAME 2026
+
+The application default is `opendarksts_yolo11s_v4_best.pt`, the fine-tuned
+YOLO11s checkpoint presented in the paper. Overall held-out test mAP50 is 0.895;
+`ships` mAP50 is 0.920. The 21-image v4 test split shares some source scenes with
+training because the source dataset was pre-augmented. The
+[model card](../opendarksts/assets/model_card.md) records all per-class results
+and limitations. The clean-split YOLO26n remains an alternative. The default
+selection and preprocessing notes below record earlier development stages;
+current detection and auto-detection use the shared initialized or explicitly
+promoted model. The obsolete additional YOLOv8n default has been removed.
+
 ## Current Dataset Workspace
 
 - Source copied from read-only folder: `/home/gavin/Downloads/AIS data/Madhulika/data science dark fleet.v7i.yolov8 (1).zip`
 - Working copy stored at `workspace/datasets/raw/data_science_dark_fleet_v7i_yolov8.zip`
 - Extracted dataset stored at `workspace/datasets/extracted/madhulika_yolov8`
+- Rectangular bbox copy stored at `workspace/datasets/derived/madhulika_yolov8_rectbbox`
 - Dataset split sizes: 336 train, 27 valid, 18 test
 - Current classes in `workspace/datasets/extracted/madhulika_yolov8/data.yaml`: `ship`, `ships`
 
@@ -21,7 +34,7 @@
 - YOLO26 test metrics: precision 0.7295, recall 0.7575, mAP50 0.7902, mAP50-95 0.4933
 - Initial conclusion: results were very close; YOLOv8 was slightly better overall and faster, while YOLO26 had slightly better recall
 
-## YOLO Benchmark: 150 Epochs Max
+## YOLO Benchmark: 150 Epochs Max (Mixed Labels)
 
 - Report: `workspace/reports/yolo_compare_summary_150.json`
 - YOLOv8 run directory: `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960`
@@ -43,22 +56,64 @@
 - YOLOv8: precision 0.8753, recall 0.6421, mAP50 0.8079, mAP50-95 0.4970
 - YOLO26: precision 0.8601, recall 0.7020, mAP50 0.8263, mAP50-95 0.5251
 
-### Current Conclusion
+### Conclusion For Mixed-Label Run
 
 - With longer training, YOLO26 is the stronger model on the current test split
 - YOLOv8 keeps slightly higher precision
 - YOLO26 now has better recall and better mAP, which is promising for candidate STS event detection
 
-## Known Dataset Issue
+## Mixed-Label Dataset Issue
 
 - Ultralytics warned that the dataset appears to mix boxes and segments
 - Training proceeded using boxes only
 - This dataset should be cleaned or standardized before treating current metrics as final
 
+## Rectangular BBox Dataset Conversion
+
+- Conversion script: `scripts/copy_yolo_dataset_as_bboxes.py`
+- Copied dataset: `workspace/datasets/extracted/madhulika_yolov8` -> `workspace/datasets/derived/madhulika_yolov8_rectbbox`
+- Conversion result: `381` label files scanned, `377` files changed, `932` polygon annotations converted, `19` existing bbox annotations kept
+- Verification result: `0` polygon lines remain in `train`, `valid`, or `test`
+
+## YOLO Benchmark: 150 Epochs Max (Rectangular BBoxes)
+
+- Report: `workspace/reports/yolo_compare_rectbbox_summary_150.json`
+- YOLOv8 run directory: `runs/detect/workspace/runs/model_compare_rectbbox_150/yolov8n_e150_img960`
+- YOLO26 run directory: `runs/detect/workspace/runs/model_compare_rectbbox_150/yolo26n_e150_img960`
+
+### Early Stopping Behavior
+
+- YOLOv8 stopped early after epoch `84`; best validation mAP50-95 was at epoch `64`
+- YOLO26 stopped early after epoch `82`; best validation mAP50-95 was at epoch `62`
+- Conclusion: both models still plateaued before the 150-epoch cap under `patience=20`
+
+### Best Validation Scores
+
+- YOLOv8: best val mAP50 `0.8892`, best val mAP50-95 `0.5229`
+- YOLO26: best val mAP50 `0.8853`, best val mAP50-95 `0.5520`
+
+### Test Set Results From Best Weights
+
+- YOLOv8: precision `0.8624`, recall `0.6447`, mAP50 `0.8000`, mAP50-95 `0.4775`
+- YOLO26: precision `0.7556`, recall `0.7144`, mAP50 `0.8303`, mAP50-95 `0.5301`
+
+### Current Conclusion
+
+- The bbox-only retrain removes the mixed polygon/box ambiguity from the training set
+- YOLO26 remains the stronger overall model on the test split
+- YOLOv8 keeps higher test precision, but YOLO26 has better recall and better mAP50/mAP50-95
+
+## Named Weight Copies
+
+- Archived mixed-label YOLOv8 weights: `workspace/model_weights/yolov8n_madhulika_mixed_labels_e150_img960_2026-03-19_best.pt`
+- Archived mixed-label YOLO26 weights: `workspace/model_weights/yolo26n_madhulika_mixed_labels_e150_img960_2026-03-19_best.pt`
+- Current rectbbox YOLOv8 weights: `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+- Current rectbbox YOLO26 weights: `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+
 ## Current Best Weights
 
-- YOLOv8 best weights: `runs/detect/workspace/runs/model_compare_150/yolov8n_e150_img960/weights/best.pt`
-- YOLO26 best weights: `runs/detect/workspace/runs/model_compare_150/yolo26n_e150_img960/weights/best.pt`
+- YOLOv8 best weights: `workspace/model_weights/yolov8n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
+- YOLO26 best weights: `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt`
 
 ## Real Pipeline Smoke Test
 
@@ -92,6 +147,131 @@
 
 ## Suggested Next Steps
 
-- Inspect false positives and false negatives from the best YOLO26 model
-- Clean the mixed box/segment dataset issue and rerun the benchmark
+- Inspect false positives and false negatives from the bbox-trained YOLO26 model
+- Compare old mixed-label and new rectbbox weights on the same held-out imagery
 - Decide whether to force a full 150-epoch run with early stopping disabled for curve inspection
+
+## Denmark AIS Test Scan
+
+- Scanner script added at `scripts/scan_ais_sts_candidates.py`
+- Criteria note stored at `docs/ais_denmark_sts_criteria.md`
+- Test source scanned: `/home/gavin/Downloads/AIS data/AIS Denmark/AIS DK 2026/aisdk-2026-01-01.zip`
+- Output database written to `workspace/databases/ais_denmark_candidates.sqlite`
+- Scan summary: `14,516,337` rows read, `12,883,565` usable `Class A` rows, `288` five-minute bins processed
+- Candidate output inserted with criteria version `ais_denmark_v1`: `37` events total (`25` `HIGH`, `12` `MEDIUM`) and `2,148` supporting point rows
+- Many candidates carry `anchor_status_present`, which suggests the next precision improvement should be an anchorage/port-distance filter before bulk ingesting more Denmark dates
+
+## Clean Evaluation v1 (2026-09-15)
+
+### Why the old numbers could not be trusted
+
+An audit of the evaluation path found leakage at every level:
+
+- `workspace/datasets/derived/madhulika_yolov8_rectbbox` is a pre-augmented Roboflow export. `381` files come from only `88` distinct scene base names; each source appears `3`-`6` times as random crops, flips, rotations and brightness variants. `17` of those `88` scene base names have copies in more than one of the Roboflow `train`/`valid`/`test` folders, so the same image was both trained on and tested on.
+- The same set mixes `True_color` and `False_color` renders of the same scene on the same date (`7` such duplicates), which the old split treated as unrelated images.
+- The balanced `v1`-`v4` datasets built by `scripts/build_madhulika_manual_sts_balanced_dataset.py` copy the Roboflow splits verbatim, so they inherit that leak, and their manual val/test splits held only `2` and `3` images.
+- The `v4` test split is `21` images / `30` `ships` boxes, so the 11-model suite ranking published from it is noise.
+- A leak that had not been noticed before: `5` scene dates (`2020-01-24`, `2020-02-08`, `2020-02-28`, `2020-05-18`, `2021-07-22`) appear in *both* the Madhulika Roboflow set and the manual review corpus. They are the same Gulf of Mexico observations reaching the dataset through two different source collections, so splitting per source collection would still have leaked.
+
+### What replaced it
+
+- `scripts/dataset_splits.py` assigns whole `<region>|<date>` scene groups to a single split, deterministically for a given seed. Region is resolved from raster bounds (`texas_gulf`, `gibraltar`, `suez`, `singapore`), with documented fallbacks. The scene token is parsed and recorded but deliberately not part of the key.
+- `scripts/build_clean_sts_dataset.py` builds `workspace/datasets/derived/sts_clean_v1/` from the deduplicated Madhulika scenes (`88` images) plus all `474` completed manual reviews, including ship-only images and the `3` pure negatives. No augmentation is baked into the dataset; Ultralytics online augmentation is used at train time.
+
+### sts_clean_v1 split
+
+`562` images across `290` scene groups, split with `seed=42`, target `70/15/15`, and hard floors of `100` test images and `60` test `ships` boxes.
+
+| Split | Images | Groups | `ship` boxes | `ships` boxes | Negatives | Madhulika / review images |
+|---|---|---|---|---|---|---|
+| train | 350 | 173 | 1486 | 353 | 0 | 49 / 301 |
+| val | 102 | 65 | 313 | 96 | 0 | 27 / 75 |
+| test | 110 | 52 | 547 | 69 | 3 | 12 / 98 |
+
+Leak check: `PASS` - zero of the `290` groups appear in more than one split. No two images in different splits are even byte-identical.
+
+Actual ratios are about `62/18/20` by image count rather than exactly `70/15/15`. That is deliberate: the group allocator balances image count and both class counts at once, and the test floor pulls extra groups into `test`. The test split is the honest one that matters, and it reached `110` images and `69` `ships` boxes, above the `100`/`60` targets.
+
+### First honest test-split comparison
+
+All three weights evaluated with `yolo detect val split=test` on the same `sts_clean_v1` test split (`110` images, `547` `ship` boxes, `69` `ships` boxes), `imgsz=960`, `batch=8`, `device=0`.
+
+| Weight | all P | all R | all mAP50 | all mAP50-95 | ship mAP50 | ship mAP50-95 | ships mAP50 | ships mAP50-95 |
+|---|---|---|---|---|---|---|---|---|
+| `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt` | 0.841 | 0.842 | 0.868 | 0.583 | 0.897 | 0.560 | 0.839 | 0.607 |
+| `workspace/model_weights/yolo26n_madhulika_rectbbox_e150_img960_2026-03-21_best.pt` (old promoted) | 0.661 | 0.613 | 0.639 | 0.385 | 0.765 | 0.439 | 0.513 | 0.331 |
+| `workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/yolo26n_aug_e300_img960/weights/best.pt` (v4) | 0.809 | 0.858 | 0.880 | 0.602 | 0.875 | 0.494 | 0.886 | 0.711 |
+
+Reading of these numbers:
+
+- The new clean model is a large, real improvement over the previously promoted weight: `ships` mAP50 `0.513` -> `0.839`, overall mAP50 `0.639` -> `0.868`.
+- The v4 row must not be used as a ranking. That model was trained on the balanced v4 dataset, which contains most of the images in this test split, so its `ships` mAP50-95 of `0.711` is memorisation, not generalisation. It is reported only to show how much apparent skill contamination buys.
+- Even so, the clean model beats v4 on `ship` mAP50-95 (`0.560` vs `0.494`) despite v4 having seen the test images, which suggests the clean dataset - with ship-only images and negatives included - teaches the common class better than the artificially class-balanced v4 dataset did.
+
+### Training run
+
+`yolo26n.pt` -> 300 epochs, `imgsz=960`, `batch=8`, `patience=60`, `seed=42`, `device=0`, `workers=4`, v4 suite online augmentation (`degrees=180 fliplr=0.5 flipud=0.5 hsv_h=0.015 hsv_s=0.35 hsv_v=0.25 mixup=0.05 mosaic=1.0 scale=0.4 translate=0.1 copy_paste=0`). All 300 epochs ran in `0.288` hours; early stopping never triggered, and best validation fitness landed at epoch `296`, so the run was still improving and a longer schedule is worth trying.
+
+Run directory: `workspace/runs/sts_clean_v1_yolo26n_aug_e300_img960/yolo26n_aug_e300_img960`. Log: `workspace/reports/train_sts_clean_v1_yolo26n.log`.
+
+### Promotion
+
+- Promoted weight: `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`
+- `scripts/preprocess_sentinel_tiles.py` now defaults `--weights-yolo26n` to that file.
+- Recreation recipe: `docs/yolo_weight_recreation.md`, section "Clean STS Dataset Weights (sts_clean_v1)".
+
+### Follow-ups
+
+- Re-run the multi-model suite on `sts_clean_v1` before making any architecture claims; the v3/v4 suite rankings are not evidence.
+- The YOLOv8n default in `scripts/preprocess_sentinel_tiles.py` still points at a v2 balanced run and is still contaminated; retrain it on `sts_clean_v1` or drop it from the review prefill.
+- Consider a longer schedule (the run had not converged) and revisit the Madhulika deduplication if the lost crops turn out to matter.
+
+## Operational Run 2026-09
+
+First real end-to-end runs of the satellite-first pipeline (`scripts/pipeline.py`) with the promoted clean-split weight `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`, `--conf 0.25`, `--radius 1000`.
+
+Command shape:
+
+```bash
+.venv/bin/python scripts/pipeline.py \
+  --images workspace/inputs/<date> \
+  --ais-dir "/home/gavin/Downloads/AIS data" \
+  --date <YYYY-MM-DD> \
+  --output workspace/reports/operational/<date>/dark_sts.csv \
+  --also-write workspace/reports/operational/<date>/dark_sts.json
+```
+
+Dates were chosen by intersecting the Sentinel-2 tile dates under `Sentinel 2A/sentinel2/` with the NOAA AIS day files under `AIS data 20xx/all_csv/`: `59` dates have both. Tiles were copied into `workspace/inputs/<date>/` per the workspace rule; the read-only source was never modified.
+
+### Results
+
+| Date | Inputs | STS detections | FULLY_DARK | PARTIALLY_DARK | AIS_PRESENT |
+|---|---|---|---|---|---|
+| 2020-01-14 | 1 cropped JPEG (sidecar bbox) + 4 root GeoTIFFs | 4 | 1 | 1 | 2 |
+| 2020-01-04 | 4 tiles | 0 | 0 | 0 | 0 |
+| 2020-01-24 | 8 tiles (4 of them `_scene1_`) | 1 | 0 | 0 | 1 |
+| 2023-01-13 | 4 tiles | 0 | 0 | 0 | 0 |
+
+The three Sentinel-2 tile dates together take about `15 s` end to end on GPU device 0, AIS streaming included. Outputs live in `workspace/reports/operational/<date>/` as `dark_sts.csv`, `dark_sts.json`, and `previews/<detection_id>.png`.
+
+### Notable detections
+
+- `2020-01-14 ... cropped_small:2` — `FULLY_DARK`, conf `0.554`, `28.44323 / -94.50262`. The preview shows two hulls moored side by side and no AIS ping within `1000 m` all day. This is the cleanest dark-STS candidate found so far.
+- `2020-01-14 ... cropped_small:4` — reported `PARTIALLY_DARK`, conf `0.466`, but the single AIS match is `APL HOLLAND` at `702 m`, `SOG 9.7 kn`, ping at `07:44:43Z` — roughly nine hours before the likely mid-morning-local capture, and moving. This is a same-day-but-wrong-time artefact of having no time window; by eye the detection is really fully dark. It is the clearest argument for adding a time window once acquisition time is available.
+- `2020-01-14 True_color:1` and `zoomed_in:1` — the same STS pair seen in two crops of the same scene, both `AIS_PRESENT` with `EAGLE KLANG` (type `80`, `243 m`) and `MANIFA` (type `80`, `332 m`) at `93-161 m`, both at `SOG 0.2-0.3 kn` around `17:01-17:05Z`. Two stationary tankers alongside each other with both transponders on: a textbook legitimate STS, and a good positive control that the correlator works.
+- `2020-01-24_scene1_tile_3_3:5` — `AIS_PRESENT`, conf `0.639`, matched `EAGLE KINARUT` (`58.7 m`) and MMSI `636019025` (`83.9 m`), both `SOG ~5.2 kn` at `17:06Z`. Confirms that the `_scene1_` tile naming is handled.
+
+The two zoomed-out root GeoTIFFs for 2020-01-14 produced no detections, as expected: the model is trained at 10 m/px and those scenes are far coarser.
+
+### Preview sanity check
+
+Annotated PNGs inspected by eye; in all four cases the red box sits squarely on a pair of hulls, not on wake, cloud, or open water:
+
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14-00_00_2020-01-14-23_59_Sentinel-2_L2A_True_color_1.png`
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14_lat_28.40449_long_-94.50870_cropped_small_2.png`
+- `workspace/reports/operational/2020-01-14/previews/2020-01-14_lat_28.40449_long_-94.50870_cropped_small_4.png`
+- `workspace/reports/operational/2020-01-24/previews/2020-01-24_scene1_tile_3_3_5.png`
+
+### Reading of these runs
+
+Recall, not precision, is the open question. Four dates of Texas Gulf tiles yielded five detections and no obvious false positive, which is encouraging for precision but says nothing about how many STS events the model walked past. The tile sets are also tiny (4-8 tiles per date) and cover a small part of the Gulf, so zero detections on 2020-01-04 and 2023-01-13 is unremarkable rather than evidence of anything.

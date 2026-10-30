@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ultralytics import YOLO
+from PIL import Image
+
+if TYPE_CHECKING:  # pragma: no cover - import only for type checking
+    from ultralytics import YOLO
+
+
+MAX_BOX_AREA_FRACTION = 0.5
 
 try:
     from .sts_utils import load_image_size, parse_image_date, resolve_image_inputs, write_json
@@ -12,22 +19,38 @@ except ImportError:
     from sts_utils import load_image_size, parse_image_date, resolve_image_inputs, write_json
 
 
+def require_ships_class(names: Any) -> set[int]:
+    mapping = dict(enumerate(names)) if isinstance(names, (list, tuple)) else names
+    ships_ids = {int(key) for key, value in (mapping or {}).items() if value == "ships"}
+    if not ships_ids:
+        raise ValueError("The loaded YOLO model does not expose a 'ships' class; select a trained STS checkpoint")
+    return ships_ids
+
+
 def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> list[dict[str, Any]]:
+    require_ships_class(model.names)
     image_path = Path(image_path).resolve()
     image_width, image_height = load_image_size(image_path)
     image_date = parse_image_date(image_path)
 
-    results = model.predict(source=str(image_path), conf=conf, verbose=False)
+    # Decode 8-bit RGB GeoTIFFs with Pillow: OpenCV's TIFF reader emits "unknown
+    # field" warnings for valid georeferencing tags. RGB pixels are unchanged;
+    # other formats retain the model's usual decoder and its diagnostics.
+    source = str(image_path)
+    if image_path.suffix.lower() in {".tif", ".tiff"}:
+        with Image.open(image_path) as image:
+            if image.mode in {"RGB", "RGBA"}:
+                source = image.convert("RGB")
+    results = model.predict(source=source, conf=conf, verbose=False)
     if not results:
         return []
 
     result = results[0]
     names = getattr(result, "names", {}) or {}
-    ships_ids = {class_id for class_id, class_name in names.items() if class_name == "ships"}
-    if not ships_ids and 1 in names:
-        ships_ids = {1}
-    if not ships_ids:
-        raise ValueError("The loaded YOLO model does not expose a 'ships' class")
+    ships_ids = require_ships_class(names)
+    if isinstance(names, (list, tuple)):
+        names = dict(enumerate(names))
+    image_id = hashlib.sha256(str(image_path).encode("utf-8")).hexdigest()[:20]
 
     detections: list[dict[str, Any]] = []
     boxes = getattr(result, "boxes", None)
@@ -40,9 +63,13 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
             continue
 
         xywh = box.xywh[0].tolist()
+        # The paper's safety filter applies to the original tile dimensions.
+        # Exactly half is allowed; larger predictions are implausible vessels.
+        if float(xywh[2]) * float(xywh[3]) > image_width * image_height * MAX_BOX_AREA_FRACTION:
+            continue
         detections.append(
             {
-                "detection_id": f"{image_path.stem}:{index}",
+                "detection_id": f"{image_path.stem}_{image_id}:{index}",
                 "image_path": str(image_path),
                 "date": image_date,
                 "cx_px": round(float(xywh[0]), 4),
@@ -61,6 +88,8 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
 
 
 def detect_images(image_paths: list[str | Path], weights: str | Path, conf: float = 0.25) -> list[dict[str, Any]]:
+    from ultralytics import YOLO  # imported lazily so unit tests can run without torch
+
     model = YOLO(str(weights))
     detections: list[dict[str, Any]] = []
     for image_path in image_paths:

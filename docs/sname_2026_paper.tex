@@ -1,0 +1,397 @@
+\documentclass[10pt, letterpaper, twocolumn]{article}
+
+% --- Packages ---
+\usepackage[utf8]{inputenc}
+\usepackage{times} % Times New Roman font
+\usepackage[letterpaper, top=1.30cm, bottom=3.05cm, left=1.20cm, right=1.20cm, columnsep=0.89cm]{geometry}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{graphicx}
+\usepackage[fleqn]{amsmath}
+\usepackage{caption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+% --- Paragraph Formatting ---
+\setlength{\parindent}{0.25in}
+
+% --- Header & Footer Configuration ---
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+
+\fancypagestyle{firstpage}{
+    \fancyhf{}
+    \fancyfoot[L]{\fontsize{9}{11}\selectfont SNAME Maritime Convention 2026}
+    \fancyfoot[R]{\fontsize{9}{11}\selectfont \thepage}
+}
+
+\fancyhead[L]{\fontsize{9}{11}\selectfont OpenDarkSTS: Open-Source Dark Ship-to-Ship Transfers Detector \\ Chan, Dey, Ansari, Koola}
+\fancyfoot[L]{\fontsize{9}{11}\selectfont SNAME Maritime Convention 2026}
+\fancyfoot[R]{\fontsize{9}{11}\selectfont \thepage}
+
+% --- Section Heading Formatting ---
+\setcounter{secnumdepth}{0}
+\titleformat{\section}{\normalfont\fontsize{12}{14}\selectfont\MakeUppercase}{}{0em}{}
+\titleformat{\subsection}{\normalfont\fontsize{12}{14}\bfseries}{}{0em}{}
+\titleformat{\subsubsection}[runin]{\normalfont\fontsize{10}{12}\bfseries\itshape}{}{0em}{}[.]
+
+% --- Caption Formatting ---
+\captionsetup[table]{position=top, labelsep=period, justification=raggedright, singlelinecheck=false, font=small}
+\captionsetup[figure]{position=bottom, labelsep=period, justification=raggedright, singlelinecheck=false, font=small}
+
+% --- Bibliography Setup ---
+\usepackage[authordate, backend=biber]{biblatex-chicago}
+\addbibresource{references.bib}
+
+\begin{document}
+
+\twocolumn[{
+  \begin{center}
+      {\fontsize{18}{20}\bfseries OpenDarkSTS: Open-Source Dark Ship-to-Ship Transfers Detector\par}
+      \vspace{1.5em}
+  \end{center}
+
+  \begin{flushleft}
+      {\fontsize{12}{14}\bfseries Pou Hei Chan {\normalfont\fontsize{10}{12}\selectfont (SM)}
+      \fontsize{12}{14}\bfseries Madhulika Dey {\normalfont\fontsize{10}{12}\selectfont (SM)}
+      \fontsize{12}{14}\bfseries Sohail Ansari {\normalfont\fontsize{10}{12}\selectfont (SM)}
+      \fontsize{12}{14}\bfseries Paul M. Koola {\normalfont\fontsize{10}{12}\selectfont (V)}\par}
+      {\fontsize{10}{12}\selectfont 1. Texas A\&M University, Department of Ocean Engineering\par}
+  \end{flushleft}
+
+  \vspace{1.5em}
+
+  \begin{center}
+      \parbox{\dimexpr\textwidth-1in}{
+          \itshape\fontsize{10}{12}\selectfont
+          Ship-to-ship (STS) transfers are a primary method by which sanctioned vessels conceal the origin of cargo, constituting a significant enforcement challenge for maritime authorities. This paper presents OpenDarkSTS, an open-source system for detecting candidate dark-fleet STS events from freely available Sentinel-2 satellite imagery and cross-checking detections against Automatic Identification System (AIS) broadcasts. OpenDarkSTS is released as two complementary tools that share trained weights and a common AIS-correlation backend: a six-step training pipeline that produces reproducible Sentinel-2 detectors, and a Flask-based operator GUI that ingests fresh imagery, runs detection, and classifies each candidate's AIS-broadcast context. Eleven YOLO-family architectures were trained under an identical configuration on the same reviewed Sentinel-2 corpus; the strongest architecture, YOLO11s, achieves a held-out test mean average precision at 50\% intersection-over-union (mAP50) of 0.895 overall, with 0.869 on single vessels and 0.920 on STS-pair candidates. The AIS-correlation backend is described as implemented system architecture; a quantitative evaluation of dark-status classification accuracy is left to a separate study.
+
+          \vspace{1em}
+          \noindent KEY WORDS: Dark fleet; ship-to-ship transfer; satellite imagery; object detection; open-source.
+      }
+  \end{center}
+  \vspace{2em}
+}]
+\thispagestyle{firstpage}
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Nomenclature}
+% ─────────────────────────────────────────────────────────────
+
+\noindent AIS \quad Automatic Identification System \\
+EEZ \quad Exclusive Economic Zone \\
+GUI \quad Graphical User Interface \\
+mAP \quad Mean Average Precision \\
+mAP50 \quad Mean Average Precision at 50\% intersection-over-union \\
+MMSI \quad Maritime Mobile Service Identity \\
+SAR \quad Synthetic Aperture Radar \\
+STS \quad Ship-to-Ship Transfer \\
+YOLO \quad You Only Look Once (object-detection model family)
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Introduction}
+% ─────────────────────────────────────────────────────────────
+
+Ship-to-Ship (STS) operations involve transferring large cargoes, like crude oil and liquefied natural gas, directly between vessels at sea \autocite{tokic2021}. These transfers are perfectly legal under International Maritime Organization (IMO) and MARPOL rules, as long as ships report them and stay within approved sea areas \autocite{mepc2010, nawrot2020}. However, illegal shipping networks frequently abuse this process to smuggle goods, evade sanctions, and hide the true origins of oil products \autocite{seto2022, welch2022}. These illicit activities rely on dark transfers, which occur when one or more vessels purposefully deactivate or alter their AIS tracking systems, allowing ships to hide their identities and location from authorities \autocite{miller2018}.
+
+To mitigate these security threats, maritime regulatory bodies globally have substantially intensified their legislative frameworks. For example, the Panama Maritime Authority created new regulations for its tankers, and Malaysia now requires ships to get permission before transferring cargo and restricts them to specific anchorages. Other countries like Greece, Spain, Denmark, and South Africa have also increased their patrols at sea \autocite{cai2026}. While such policy interventions have successfully restricted the operational scope of illicit STS transfers to some degree, they also risk displacing these activities to adjacent maritime regions, creating decentralised risk vulnerabilities.
+
+For a long time, the Automatic Identification System (AIS) has been the main tool used to track ships, mostly to improve supply chains and plan regular shipping routes \autocite{herzog2025}. Lately, researchers have also used AIS data to spot STS operations, map global transfer areas \autocite{boerder2018}, and track illegal fishing fleets \autocite{miller2018, saito2022}. Unfortunately, this tracking system fails when illegal operators intentionally turn off or fake their AIS signals \autocite{bernabe2024}. By conducting transfers in international waters or on the edges of Exclusive Economic Zones (EEZs) \autocite{miller2018}, these ships exploit legal gaps and evade enforcement teams. As a result, traditional tracking systems are easily undermined by intentional deception, proving that a sole reliance on standard AIS data and port reports is no longer sufficient. Countering these hiding tactics requires independent observation tools that cannot be tampered with or disabled by the ship's crew \autocite{androjna2021}. Consequently, rapid improvements in satellite technology have prompted global authorities to integrate satellite remote sensing into regular maritime monitoring workflows \autocite{li2020}. A significant advantage of satellite-based remote sensing is its ability to acquire data without active data transmission from the target vessel. This independent observation capability enables the systematic extraction of essential maritime intelligence, such as exact location coordinates and vessel type, thereby bridging the operational security gaps left by manipulated AIS signals \autocite{paolo2024}.
+
+To mitigate these surveillance vulnerabilities, this study presents OpenDarkSTS, a three-step detection framework utilising freely available AIS records and Sentinel-2 optical imagery. In the first phase, potential STS encounters are identified by screening AIS logs for vessels that linger or travel in close proximity. Second, these identified coordinates serve as training data for an object detection algorithm designed to recognise STS layouts in Sentinel-2 images. Finally, satellite detections are compared back against active AIS signals to reveal ``dark vessels'' operating without a tracking signature. The unique novelty of this work is its global accessibility: the entire system is released as an open-source tool, allowing researchers, authorities, and conservationists anywhere in the world to freely monitor and detect STS activities in any maritime region.
+
+% ─────────────────────────────────────────────────────────────
+\section{Data}
+\label{sec:data}
+% ─────────────────────────────────────────────────────────────
+
+\subsection{Satellite imagery}
+\label{sec:data-satellite}
+
+Vessel detection has been studied extensively using both Synthetic Aperture Radar (SAR) and electro-optical sensors. For instance, a direct, fast methodology for ship recognition in Sentinel-2 imagery has been demonstrated \autocite{heiselberg2016}, while an automated detection system has been developed for medium-resolution optical data \autocite{stepec2019}.Building upon these advancements in optical remote sensing, this study utilizes Sentinel-2 MultiSpectral Instrument (MSI) imagery as its primary satellite dataset. The Sentinel-2 mission provides freely available, globally consistent multispectral optical observations across 13 spectral bands at 10 m, 20 m, and 60 m spatial resolutions, with a swath width of  290 km. These characteristics allow repeated observation of large maritime areas while preserving sufficient spatial detail to represent vessel-scale features required for image-based detection. Level-2A surface reflectance products were acquired from the Copernicus Data Space Ecosystem (CDSE) through Sentinel Hub for the period 1 January 2020 to 31 December 2025. Scenes with cloud cover greater than 35\% were excluded to minimize atmospheric obstruction. The analysis used the four native 10 m bands, B2 blue, B3 green, B4 red, and B8 near-infrared, which provide spatial information on large vessels, vessel-pair geometry, wake structures, and surrounding sea-surface conditions. Each scene was divided into 640 × 640 pixel tiles, corresponding to 6.4 km × 6.4 km at the native 10 m resolution, and exported as georeferenced RGB GeoTIFFs in the WGS84 coordinate reference system. These optical image tiles provide the visual features required by the YOLO detection framework, including vessel shape, size, orientation, and proximity. These processed Sentinel-2 tiles were used as optical image inputs for training and evaluating the YOLO-based dark STS detection model.
+
+
+\subsection{Annotation corpus}
+\label{sec:data-annotation}
+
+Annotations were produced inside OpenDarkSTS over a corpus of 474 reviewed image chips (Table~\ref{tab:annotation-corpus}). Across these chips, reviewers placed 2{,}636 bounding boxes: 2{,}115 single-vessel positives, 404 STS-pair positives (a single box enclosing both hulls of an STS event), and 117 explicit negatives---regions a previous detector had flagged but a reviewer judged to contain no ship at all. The negatives are retained rather than discarded, because they record a known false positive of an earlier detector and can be reused later to train the next detector against the same kind of mistake. Of the 2{,}636 boxes, 2{,}047 originated as proposals from a previous detector and were then accepted, resized, or relabeled by a reviewer; the remaining 589 were drawn manually. The resulting ``machine-proposed, human-corrected'' share is approximately 78\%, which we read as a coarse measure of how much annotation effort the auto-proposal step saves in steady state.
+
+Each tile was first run through a previous detector to seed candidate boxes and then passed to the reviewer, who could accept, resize, relabel, delete, or add boxes in the manual review interface. Because reviews are keyed to the image's content-derived identifier rather than its filename, re-running the auto-proposal step or re-importing the same source tile does not overwrite a human edit. The three review labels (\texttt{ship\_non\_sts}, \texttt{ships\_sts}, \texttt{neither}) collapse into the two positive detector classes (\texttt{ship}, \texttt{ships}), with \texttt{neither} boxes excluded from positive labels but retained on the same tile as evidence of a known false-positive region.
+
+The positive STS-pair class is roughly $5\times$ rarer than the single-vessel class in raw box counts (404 vs. 2{,}115). This ratio is a \emph{lower bound} on the underlying class imbalance in the imagery rather than a measurement of it: once enough \texttt{ship} instances had accumulated in the reviewed corpus, reviewers deliberately stopped manually adding new \texttt{ship} boxes and concentrated annotation effort on finding additional \texttt{ships} (STS pairs). Further \texttt{ship} instances visible in unreviewed tiles were not labeled. The corpus-level imbalance motivates the train-only STS-pair augmentation used in the v4 balanced dataset described in Section~\ref{sec:results-datasets}.
+
+\begin{table}[h]
+\caption{Annotation corpus.}
+\label{tab:annotation-corpus}
+\begin{tabular}{lr}
+\toprule
+\textbf{Quantity} & \textbf{Count} \\
+\midrule
+Reviewed image chips/tiles                 & 474 \\
+Total reviewed bounding boxes              & 2{,}636 \\
+\quad \texttt{ship\_non\_sts} (single vessel)       & 2{,}115 \\
+\quad \texttt{ships\_sts} (STS pair)                 & 404 \\
+\quad \texttt{neither} (rejected, kept as hard negative) & 117 \\
+Origin: auto-proposed then reviewer-corrected & 2{,}047 (78\%) \\
+Origin: drawn manually by reviewer          & 589 (22\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Training Tool: Six-Step Pipeline}
+\label{sec:training-tool}
+% ─────────────────────────────────────────────────────────────
+
+The first of the two OpenDarkSTS tools is a six-step training pipeline that carries a user from raw Sentinel-2 imagery to a trained, deployable detector. Working through the six steps in order (Figure~\ref{fig:training-flowchart}), a user ends with a set of trained YOLO weights and an evaluation report; those weights are the input consumed by the operational tool of Section~\ref{sec:operational-tool}. The detector the pipeline produces predicts two classes: \texttt{ship} (a single vessel) and \texttt{ships} (an STS pair, marked as a single bounding box enclosing both hulls together).
+
+Two design goals run through the whole pipeline. The first is reproducibility: every image, every human-reviewed bounding box, every dataset, and every training run is identified and recorded, so that a published model can be traced back to the exact data and parameters that produced it. The second is parity between the interactive and programmatic interfaces. The pipeline may be operated through a browser-based graphical interface or through a command-line interface; the latter provides programmatic access to the same operations, supporting automated execution, including operation by large language model agents. Because both interfaces invoke identical underlying operations, the records a run produces are independent of the interface through which it was conducted.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.75\linewidth]{figures/placeholder training tool flowchart.png}
+    \caption{PLACEHOLDER FIG: Data flow through the six-step training pipeline. Imported satellite images receive content-derived identifiers that persist across all later steps; machine-proposed bounding boxes are corrected through human review and a quality-control pass before a curated subset is fixed as a versioned dataset with frozen training, validation, and test splits. That dataset, together with an associated training configuration, drives detector training and yields the trained YOLO weights and evaluation report consumed by the operational tool. Records emitted at each step preserve the provenance required to reproduce a given model.}
+    \label{fig:training-flowchart}
+\end{figure}
+
+
+\subsection{Step 1 --- Import and album-based provenance}
+
+Step~1 imports new satellite imagery into the tool and organizes it into \emph{albums}---named groups of images. The import accepts any RGB satellite imagery and is not specific to Sentinel-2, although the imagery used in this work is drawn from Sentinel-2 (Section~\ref{sec:data}). Because the collection of imported images may grow to many thousands of tiles, this grouping is primarily an organizational aid: an album can be selected as a unit so that a reviewer works through one group at a time rather than all the images at once. The import is performed identically from the browser interface or the command line, so interactive and automated batch imports are interchangeable. On the backend, each imported image is assigned a stable identifier derived from its pixel content rather than its filename; the same tile re-imported from a different folder or under a different name is therefore recognized as the existing image rather than silently duplicated, and any review work already attached to it is preserved. Album membership is recorded by reference, so images are not copied between albums, and every import job is appended to an audit log that records when and how each tile entered the dataset.
+
+\subsection{Step 2 --- Auto-assisted bounding-box annotation}
+
+Step~2 produces the human-reviewed bounding boxes on which the rest of the pipeline depends. Each imported tile is first passed to a previously trained detector, which proposes candidate boxes; the reviewer then confirms, adjusts, or rejects each proposal, labels it as a single vessel or an STS pair (or marks it a false positive), and adds any boxes the detector missed. This reduces the manual effort required relative to annotating from scratch: of the bounding boxes in the dataset assembled for this work, roughly four-fifths began as detector proposals that a reviewer accepted or adjusted, the remainder being drawn by hand (Section~\ref{sec:data-annotation}).
+
+The annotation screen places the tile, with its boxes overlaid, in a central image viewer and groups the controls in a sidebar to its left, together with a class legend and the queue of tiles awaiting review. A tile is annotated in one of two modes. The overview mode makes the whole tile editable at once: any box can be selected and moved, resized, reclassified, marked a false positive, or deleted, and a new box can be drawn anywhere on the tile rather than only corrected from a proposal. The detail mode advances through the detections in turn, centering each one for close labeling while the remaining boxes stay in view. The most frequent actions---assigning a class, marking a box a false positive, deleting it, and moving between detections and between tiles---are bound to single-key shortcuts, so they are reachable from the keyboard without moving the pointer to the sidebar.
+
+These labels are recorded as \texttt{ship\_non\_sts}, \texttt{ships\_sts}, and \texttt{neither}. A box labeled \texttt{neither} marks a proposal judged incorrect; these boxes are retained rather than discarded, as each records a location where the previous detector produced a false positive and can serve as a hard-negative example when a subsequent detector is trained. Each review is keyed to the content-derived image identifier assigned in Step~1, so re-running auto-proposal or re-importing a tile does not overwrite existing edits. When multiple reviewers annotate the same tile, the disagreement blocks dataset export rather than being merged silently, leaving conflicting labels visible until they are reconciled.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{figures/bboxes_2025-07-28_tile_4_1.tiff.png}
+    \caption{Representative sample of the annotated Sentinel 2 image with bounding boxes on single ship (blue box) and ships performing STS (red box)}
+    \label{fig:bbox_image}
+\end{figure}
+
+\subsection{Step 3 --- Reviewed bounding-box overview}
+
+Step~3 presents the reviewed bounding boxes as a single grid that can be filtered by class, allowing the annotations to be examined collectively, and one class at a time, rather than reopened image by image. Restricting the grid to the \texttt{ships} class, for instance, assembles every STS-pair crop in a single view, in which a mislabeled box is readily identified against its peers. Each box is shown as an individual cropped thumbnail, drawn from the completed reviews and labeled with its class (\texttt{ship}, \texttt{ships}, or \texttt{neither}), its source image, and its origin as either an automatic proposal or a manually drawn box. The grid may further be restricted to crops carrying a warning; a free-text search matches a crop's source image, detection, reviewer, or model; and sort controls (by source image, class, box area, or detector confidence), together with a thumbnail-size control, reorder and rescale the display.
+
+The view itself modifies neither labels nor box geometry. Selecting a crop opens a metadata panel reporting its source image, reviewer, origin, confidence, source models, warnings, and normalized box coordinates; a crop found to be mislabeled is corrected by reopening its source image in Step~2 with the box preselected, through a link provided directly from the crop. Images associated with more than one completed review are omitted from the grid and reported separately through a conflict count and a ``needs reconciliation'' listing; the same condition is re-evaluated at dataset export in Step~4, where it blocks export until the reviews are reconciled.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\linewidth]{figures/step3_bbox_overview.png}
+    \caption{Step~3 reviewed bounding-box overview. The reviewed boxes are consolidated into a single grid of cropped thumbnails, one crop per box. The grid can be filtered by class, so that the annotations are examined collectively, and one class at a time, rather than one source image at a time. Each thumbnail records the box's class and whether it originated as an automatic proposal or a manually drawn box. The view is read-only: selecting a crop displays its metadata, and a crop found to be mislabeled is corrected by reopening its source image in Step~2 with the box preselected. Images carrying more than one completed review are withheld from the grid and reported as conflicts for reconciliation before dataset export.}
+    \label{fig:step3-overview}
+\end{figure}
+
+\subsection{Step 4 --- Dataset selection}
+
+Step~4 assembles a dataset from the reviewed images. The user chooses which images to include---narrowing them by album, label, or search---sets the train, validation, and test split ratios (default 80/10/10), and saves the selection; a separate export then writes out the dataset and passes it to Step~5.
+
+A dataset is stored as a \emph{selection record}: it lists the chosen images and the partition each is assigned to, rather than duplicating the image files. The split is fixed when the selection is saved---computed from the chosen ratios with a fixed random seed and recorded per image---so re-exporting the same selection reproduces the same partitions, and because the split is assigned by image, no image appears in more than one partition. Export is blocked if a selected image has an unresolved review conflict or no completed review, so an inconsistent dataset cannot be produced.
+
+\subsection{Step 5 --- Augmentation and training setup}
+
+Step~5 turns an exported dataset into a saved training configuration. The user selects the dataset, one or more starting weight files (pretrained detectors to be fine-tuned), the main training settings---image size, the number of training passes (epochs), batch size, early-stopping patience, random seed, and compute device---and the image-augmentation settings, then saves these choices as a named configuration. Image augmentation randomly transforms the training images, for example by flipping, rotating, rescaling, or shifting them, so that the detector sees more variation than the labeled images alone provide; four presets (none, light, default, and heavy) supply starting values that can then be adjusted.
+
+Selecting more than one starting weight expands a single configuration into a suite of runs---a \emph{run group}---that share the same dataset, settings, and augmentation and differ only in the starting weights. This makes a controlled comparison between detector architectures possible, one in which only the architecture changes rather than a mixture of factors; the eleven-architecture comparison in Section~\ref{sec:results-test} was produced in exactly this way.
+
+The saved configuration records everything needed to repeat the runs---the dataset, the starting weights, the training settings, the random seed, and the augmentation values---so that a result can be traced back to the exact settings that produced it. The augmentation is applied while training, not by creating new image files. Before the configuration is saved, and again before training begins, a readiness check confirms that the dataset has been exported with usable training and validation splits, that it declares the two detector classes (\texttt{ship} and \texttt{ships}), that the required settings are present, and that an existing run will not be overwritten unless the user permits it.
+
+\subsection{Step 6 --- Train detector}
+
+Step~6 executes the configured run and monitors its progress. Training is carried out as a background process, decoupled from the interface, so that the operator may continue to work elsewhere in the tool---or close and later reopen it---without interrupting the run. Progress is reported directly from the artifacts the training framework writes as it proceeds, its running metrics table and its log, rather than from a secondary record kept by the tool, so that the quantities displayed are those the trainer itself produced. A running job may be halted; on completion, the trained weights, the recorded metrics, and the associated diagnostic plots are retained in the run's directory.
+
+Each run is accompanied by a provenance record written at launch. The record captures the exact training command, the complete training configuration together with checksums of that configuration and of the dataset description files, the source-code revision from which the run was launched---annotated when uncommitted local changes were present---and the versions of Python, PyTorch, Ultralytics, and the operating system in effect at the time. The starting weights and the selected compute device are identified within the recorded configuration and command. Together these fields allow a completed run to be associated with the precise inputs and software environment that produced it.
+
+\subsection{Reproducibility contract}
+
+A training result in OpenDarkSTS is reproducible when eight records are preserved together: the imagery import record, the per-image review records, the dataset selection record, the exported dataset, the training configuration, the run-metadata snapshot, the evaluation report, and the final weight file. Together these records allow a third party to start from raw Sentinel-2 imagery and reproduce a published detector---same data, same parameters, same machine assumptions.
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Operational Tool: Flask GUI and AIS Verification}
+\label{sec:operational-tool}
+% ─────────────────────────────────────────────────────────────
+
+The second OpenDarkSTS tool is a Flask-based operator GUI that consumes the trained weights produced by the training pipeline and adds an AIS-verification runtime. Implementation note: the GUI and the training pipeline share an AIS-correlation backend---a small set of Python modules (\texttt{pipeline.py}, \texttt{correlate\_ais.py}, \texttt{georeference.py}, \texttt{detect.py}) that implement YOLO inference, georeferencing, and AIS correlation---so the two tools share library code in addition to trained weights.
+
+\subsection{Runtime detection pipeline}
+
+The operational pipeline runs in three stages:
+
+\subsubsection{Stage 1 --- STS candidate detection.}
+Uploaded Sentinel-2 tiles are passed to the YOLO detector, which produces bounding boxes for the two trained classes (\texttt{ship}, \texttt{ships}). A configurable confidence threshold filters detections; three operator-selectable presets are exposed (Low~$=0.10$, Medium~$=0.25$, High~$=0.45$). A safety filter discards any predicted box that occupies more than half the tile area, on the assumption that any single bounding box covering that fraction of a $6.4 \times 6.4$~km tile is implausible as a vessel.
+
+\subsubsection{Stage 2 --- Georeferencing and AIS correlation.}
+Each detection's pixel coordinates are converted to a geographic center (latitude, longitude) using the tile's WGS84 metadata. The system then queries the supplied AIS dataset for vessel records within a configurable search radius (default 1{,}000~m) of the detection center, using a coarse latitude/longitude bounding-box filter followed by exact great-circle (haversine) distance check.
+
+\subsubsection{Stage 3 --- Dark-status classification.}
+Each detection is assigned one of the status labels in Table~\ref{tab:dark-status}, based on whether AIS data were supplied at all and on the number of vessels that broadcast within the search radius. The classification logic deliberately separates ``the detector found an STS candidate but no AIS context is available'' from ``the detector found an STS candidate and the AIS context says no one was broadcasting,'' so that the system does not falsely report dark-fleet activity in the absence of AIS evidence.
+
+\begin{table}[h]
+\caption{Dark-status classification labels.}
+\label{tab:dark-status}
+\begin{tabular}{p{2.1cm} p{4.2cm}}
+\toprule
+\textbf{Status} & \textbf{Criteria} \\
+\midrule
+\texttt{FULLY\_DARK}     & STS candidate detected; AIS dataset supplied; zero vessels broadcasting within the search radius. \\
+\texttt{PARTIALLY\_DARK} & STS candidate detected; AIS dataset supplied; exactly one vessel broadcasting. \\
+\texttt{AIS\_PRESENT}    & STS candidate detected; AIS dataset supplied; two or more vessels broadcasting. \\
+\texttt{DETECTED\_ONLY}  & STS candidate detected; no AIS dataset supplied. \\
+\texttt{NO\_STS}         & No STS candidate detected. \\
+\texttt{AIS\_ERROR}      & STS candidate detected; AIS correlation failed for this tile. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Graphical user interface}
+
+The GUI is a single-page Flask application with two operational modes. \emph{User Mode} is intended for maritime analysts and enforcement personnel and exposes six tabs: \textit{Intelligence HQ} displays cumulative detection statistics; \textit{Scan Images} accepts one or more satellite tiles, selects a detection sensitivity, and optionally points at an AIS directory for verification; \textit{STS Events} renders candidate detections as cards with annotated imagery, vessel metadata, and GPS coordinates; \textit{Live Map} plots detection locations on an OpenStreetMap base layer with clickable popups; \textit{Export Report} provides CSV and JSON download of results; and \textit{AIS Manager} controls the integrated AIS download/filtering pipeline (Section~\ref{sec:ais-manager}). \emph{Developer Mode} exposes a single-image detection tab for model validation, a lightweight training tab that runs Ultralytics retraining as a daemon thread, and a reference tab. The developer training tab is intentionally a lightweight retraining frontend; the reproducibility-first multi-step workflow is the responsibility of the training pipeline tool (Section~\ref{sec:training-tool}).
+
+\subsection{AIS data manager}
+\label{sec:ais-manager}
+
+The AIS Manager provides integrated access to the Marine Cadastre vessel-traffic database, distributed by the U.S.\ National Oceanic and Atmospheric Administration (NOAA). Operators may download AIS data for a single date, a date range, a full month, or a full year. Geographic filtering by bounding box reduces raw file sizes (approximately 500~MB per day, global) to the few megabytes typical of a single region of interest. Five preset regions are provided (Gulf of Mexico, Persian Gulf, West Africa, South China Sea, Mediterranean), and custom coordinate entry is also supported. Downloaded files are automatically decompressed from the source \texttt{.zst} format, stored locally, and can be applied to subsequent scans with a single click.
+
+\subsection{Scan history and reporting}
+
+Scan results are serialized to JSON on disk after each scan and restored on application restart, so detection records persist across sessions. A clearance function is provided to remove all history when required. Results can be exported as CSV or JSON for downstream reporting.
+
+\subsection{Implementation notes}
+
+The application is implemented in Python with Flask, OpenCV for image handling, the Ultralytics library with PyTorch for YOLO inference, Chart.js for in-page statistics visualization, and Leaflet.js for map rendering. A NVIDIA GPU is recommended; CPU operation is supported with degraded throughput. The development environment uses Windows; cross-platform deployment requires updating the application's base-directory configuration. The released bundle ships with a polygon-to-bounding-box conversion utility (Section~\ref{sec:data-bbox-correction}) and a small bounding-box-preview script for visual QA.
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Detection Results}
+\label{sec:results}
+% ─────────────────────────────────────────────────────────────
+
+\subsection{Datasets used in the cited experiments}
+\label{sec:results-datasets}
+
+All eleven detector runs reported in this section were trained on a single Sentinel-2 dataset, with every bounding box produced or corrected inside OpenDarkSTS. The source tiles are drawn from Sentinel-2 Level-2A acquisitions between 1~January~2020 and 31~December~2025 (Section~\ref{sec:data-satellite}), sampled across three geographically distinct maritime regions---the Gulf of Mexico off the coast of Texas, the Strait of Gibraltar, and the Singapore Strait---to give the training data a range of sea-surface conditions, sun angles, and vessel mixes that no single area of interest would provide. To attack the STS-pair class imbalance described in Section~\ref{sec:data-annotation}, 521 offline-generated STS-pair image crops are introduced into the \emph{training} partition only; validation and held-out test partitions consist exclusively of non-augmented source images, in line with the Step~4 split contract (Section~\ref{sec:training-tool}). Per-class split counts are reported in Table~\ref{tab:dataset-splits}.
+
+
+\begin{table}[h]
+\caption{V4 balanced dataset --- split counts (instances).}
+\label{tab:dataset-splits}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Class} & \textbf{Train} & \textbf{Val} & \textbf{Test} \\
+\midrule
+\texttt{ship}  & 1{,}888 & 41 & 62 \\
+\texttt{ships} & 1{,}925 & 36 & 30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_bbox_grid.png}
+    \caption{Representative view of the manually reviewed pre-augmented bounding boxes from the YOLO training dataset. Image crops are drawn from a reviewed dataset of 473 Sentinel-2 images and 2,519 vessel boxes (2,116 ship and 403 ships). The left block is the single-vessel ship class and the right block is the ships (STS) class. The examples span the three source regions (Gulf of Mexico, Strait of Gibraltar, and Singapore Strait) and capture a range of sea-surface conditions, water colors, and sun angles, as well as both near-shore and open-water scenes. Vessel configurations include isolated single ships, large-large ship pairs, large-small pairs, small-small pairs, and triple-vessel clusters; some are truncated where a vessel lies at an image boundary.}
+    \label{fig:placeholder}
+\end{figure*}
+
+\subsection{Cross-architecture training protocol}
+\label{sec:results-protocol}
+
+Eleven YOLO-family architectures---YOLOv8n/s, YOLOv9s, YOLOv10n/s, YOLO11n/s, YOLO12n/s, and YOLO26n/s---were trained under an identical configuration on the v4 balanced dataset. Each run used the architecture-matched COCO-pretrained YOLO detection checkpoint as the starting point, an input image size of 960~px, a maximum of 300 training epochs with early stopping after 60 epochs without improvement on the validation split, a batch size of 8, and a fixed random seed of 42. The augmentation regime included full $\pm 180^\circ$ rotation, horizontal and vertical flipping (probability 0.5 each), modest HSV jitter (hue 0.015, saturation 0.35, value 0.25), light MixUp (0.05), mosaic compositing (1.0), and modest scale (0.4) and translation (0.1) jitter; copy-paste augmentation was disabled. Holding the dataset, the image size, the optimizer schedule, the augmentation, and the random seed fixed across all eleven runs makes the comparison genuinely a comparison of architectures rather than of mixtures of changes. The runs were executed on a single workstation with an NVIDIA RTX~5070~Ti GPU.
+
+\subsection{Held-out test results}
+\label{sec:results-test}
+
+After training, each detector was evaluated against the held-out test split---21 images and 92 bounding-box instances that were never seen during training or validation. We report the standard object-detection metrics: precision~($P$, the fraction of detections that are correct), recall~($R$, the fraction of real targets that are found), mean average precision at the 0.5 box-overlap threshold (mAP50, the headline detection score), and the same averaged over stricter overlap thresholds (mAP50-95). The metrics in Table~\ref{tab:cross-arch} and Table~\ref{tab:yolo11s-perclass} are held-out test metrics; the validation-split metrics produced during training were used only for early stopping and checkpoint selection. The held-out test mAP50 is typically several points lower than the corresponding validation-split number (for example, YOLO26s reaches a validation mAP50 of approximately 0.910 but a held-out test mAP50 of 0.869), which is why we report the two separately and headline on test. Table~\ref{tab:cross-arch} reports the held-out test metrics for all eleven architectures, sorted by mAP50.
+
+\begin{table*}[t]
+\caption{Cross-architecture comparison on held-out test split (v4 balanced dataset, 21 images, 92 instances), sorted by overall mAP50. Identical training configuration across all rows.}
+\label{tab:cross-arch}
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Architecture} & \textbf{P} & \textbf{R} & \textbf{mAP50} & \textbf{mAP50-95} \\
+\midrule
+YOLO11s   & 0.830 & 0.820 & \textbf{0.895} & 0.544 \\
+YOLOv12n  & 0.801 & 0.838 & 0.886 & \textbf{0.572} \\
+YOLO26s   & 0.750 & 0.793 & 0.869 & 0.571 \\
+YOLOv8s   & 0.751 & 0.811 & 0.857 & 0.501 \\
+YOLO26n   & 0.768 & 0.837 & 0.854 & 0.522 \\
+YOLOv9s   & 0.810 & 0.770 & 0.839 & 0.524 \\
+YOLOv10s  & 0.753 & 0.770 & 0.838 & 0.536 \\
+YOLOv10n  & 0.684 & 0.795 & 0.832 & 0.534 \\
+YOLOv8n   & 0.725 & 0.788 & 0.832 & 0.501 \\
+YOLO11n   & 0.916 & 0.641 & 0.827 & 0.553 \\
+YOLOv12s  & 0.859 & 0.616 & 0.761 & 0.491 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The headline detector is YOLO11s, with overall mAP50 of 0.895 on the held-out test split. The next strongest architecture by mAP50, YOLOv12n at 0.886, has the strongest mAP50-95 score (0.572 vs. YOLO11s 0.544); a paper that took mAP50-95 as its headline metric would therefore prefer YOLOv12n. The rank of an architecture on this small held-out test is not perfectly stable across the two metrics, so the headline-detector choice is reported with both numbers rather than only one.
+
+\subsection{Headline detector --- YOLO11s per-class results}
+
+The YOLO11s detector (101 layers, 9.4M parameters, 21.3 GFLOPs) achieves the per-class held-out test results shown in Table~\ref{tab:yolo11s-perclass}. The rare STS-pair class (\texttt{ships}) actually scores higher than the more common single-vessel class on this test split (mAP50 0.920 vs. 0.869), which is the central rare-class result and is consistent with---though not by itself proof of---the train-only STS-crop augmentation strategy described in Section~\ref{sec:results-datasets}.
+
+\begin{table}[h]
+\caption{YOLO11s held-out test results, per class.}
+\label{tab:yolo11s-perclass}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Class} & \textbf{Inst.} & \textbf{P} & \textbf{R} & \textbf{mAP50} & \textbf{mAP50-95} \\
+\midrule
+\texttt{ship}  & 62 & 0.812 & 0.806 & 0.869 & 0.512 \\
+\texttt{ships} & 30 & 0.849 & 0.833 & 0.920 & 0.575 \\
+\midrule
+all            & 92 & 0.830 & 0.820 & 0.895 & 0.544 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Qualitative reading}
+\label{sec:results-qualitative}
+
+A qualitative inspection of YOLO11s predictions on the held-out test split is consistent with Table~\ref{tab:yolo11s-perclass}. Tightly framed single-vessel detections are largely correct, and several STS pairs are recovered with bounding boxes that enclose both hulls together, as the \texttt{ships} class is designed to do. The visible failure modes are (i) occasional near-misses in which two adjacent but disengaged vessels are predicted as an STS pair, and (ii) clusters of small, low-contrast vessels in which individual \texttt{ship} instances are merged into a single box. Both failure modes are natural targets for the next round of human review and the next training cycle.
+
+
+% ─────────────────────────────────────────────────────────────
+\section{System Performance}
+\label{sec:sysperf}
+% ─────────────────────────────────────────────────────────────
+
+System-performance figures below are reported from the development workstation (NVIDIA RTX~5070~Ti, 15.8~GB VRAM) and should be read as setup notes rather than as a controlled benchmark. End-to-end scan throughput is dominated by YOLO inference, with the YOLO11s headline detector reporting approximately 6.8~ms of inference per image at 960~px on this hardware, plus on the order of 1.8~ms of preprocessing and 0.5~ms of postprocessing per image. AIS download for a single day's worldwide Marine Cadastre file (raw size $\approx$~500~MB) takes minutes over a residential network connection; bounding-box filtering to a single region of interest is performed locally after decompression. These figures are GPU- and network-dependent and are reproduced here only as guidance for new operators sizing their deployment.
+
+
+% ─────────────────────────────────────────────────────────────
+\section{Conclusions}
+\label{sec:conclusions}
+% ─────────────────────────────────────────────────────────────
+
+This paper has presented OpenDarkSTS, an open-source system for detecting candidate dark-fleet ship-to-ship transfer events from freely available Sentinel-2 satellite imagery and cross-checking detections against AIS broadcasts. The system is released as two complementary tools---a reproducibility-first training pipeline and a Flask-based operator GUI---that share trained weights and a common AIS-correlation backend. The headline YOLO11s detector achieves a held-out test mAP50 of 0.895, with 0.920 on the STS-pair class specifically, on a corpus drawn from publicly available Sentinel-2 imagery and curated entirely inside the OpenDarkSTS tool. The eleven-architecture cross-comparison was produced from a single training configuration with only the architecture varied, demonstrating in concrete terms what the training pipeline's run-group facility was designed to enable.
+
+Three caveats are worth stating plainly. First, the held-out test split (21 images, 92 instances) is small; the absolute mAP50 numbers should be read as a snapshot of current detector quality on the curated corpus, not as a population-level guarantee. Second, the AIS-correlation backend is presented in this paper as implemented system architecture; a quantitative evaluation of dark-status classification accuracy against a labeled set of confirmed dark events is left to a separate study. Third, the rare-class result on STS pairs is consistent with the train-only STS-crop augmentation strategy but does not in isolation establish causation; an ablation across augmentation strategies is a natural follow-up.
+
+Future work includes (i)~expanding the reviewed corpus, (ii)~incorporating SAR imagery for all-weather operation, (iii)~extending the AIS correlation to multi-date trajectory analysis so that vessels which briefly disable their transponders can be flagged, and (iv)~conducting the AIS-classification accuracy study described above.
+
+The full codebase, including the training pipeline, the operator GUI, the annotation utilities, and the cross-architecture training scripts, is released at \url{https://github.com/gavingavinchan/OpenDarkSTS}.
+
+
+% ─────────────────────────────────────────────────────────────
+\section*{Acknowledgements}
+% ─────────────────────────────────────────────────────────────
+
+The authors thank the European Space Agency for providing Sentinel-2 imagery through the Sentinel Hub and the Copernicus Data Space Ecosystem; the U.S.\ National Oceanic and Atmospheric Administration for Marine Cadastre AIS data; and the maintainers of the publicly available vessel-detection dataset used as one of the three sources in the v4 balanced dataset.
+
+
+\printbibliography[title={References}]
+
+\end{document}
