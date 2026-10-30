@@ -24,8 +24,8 @@
       <details class="card"><summary>Records needed to repeat a training run</summary><p>Preserve the imagery import record, per-image review records, dataset selection record, exported dataset, training configuration, run-metadata snapshot, evaluation report, and final weight file together. Steps 1–6 produce the dataset and trained detector; this step produces the evaluation report and selects the operational model.</p></details>
       <section class="card">
         <h2>Training batch</h2>
-        <div class="row">
-          <label class="field" style="flex:1;"><span>Training batch</span><select id="groupSelect"></select></label>
+        <div class="row evaluation-batch-controls">
+          <label class="field"><span>Training batch</span><select id="groupSelect"></select></label>
           <button id="loadGroup" class="primary" type="button">Load Results</button>
           <button id="refreshGroups" type="button">Refresh batches</button>
         </div>
@@ -78,6 +78,8 @@
           <div class="row">
             <button id="promoteWeight" class="danger" type="button" disabled>Use trained model in Detect</button>
           </div>
+          <p id="promoteHelp" class="hint" role="status">Load a training batch, choose a run, and enter a saved model filename to enable promotion.</p>
+          <p id="promotionWarning" class="status err" role="status"></p>
           <div class="status" id="promoteStatus"></div>
           <pre class="code" id="promoteDetail" style="display:none;"></pre>
         </section>
@@ -262,12 +264,21 @@
       const hasRun = Boolean(document.getElementById('promoteRun').value);
       const hasName = Boolean(document.getElementById('targetName').value.trim());
       document.getElementById('promoteWeight').disabled = !(hasRun && hasName);
+      document.getElementById('promoteHelp').textContent = !hasRun ? 'Load a training batch and choose a run to enable promotion.' :
+        !hasName ? 'Enter a saved model filename above to enable Use trained model in Detect.' : 'The selected checkpoint will become the model used for new detection runs.';
+      const run = state.runs.find(item => item.run_name === document.getElementById('promoteRun').value);
+      document.getElementById('promotionWarning').textContent = (run || {}).promotion_warning || '';
     }
 
     async function promoteWeight() {
       const runName = document.getElementById('promoteRun').value;
       const targetName = document.getElementById('targetName').value.trim();
       const detail = document.getElementById('promoteDetail');
+      const warning = document.getElementById('promotionWarning').textContent;
+      if (warning && !window.confirm(warning + '\n\nUse this trained model in Detect?')) {
+        P.logInteraction('promotion_cancelled', {run_name: runName, reason: warning});
+        return;
+      }
       P.setStatus('promoteStatus', 'Promoting ' + runName + '…');
       try {
         const data = await P.api('/api/training/promote-weight', {

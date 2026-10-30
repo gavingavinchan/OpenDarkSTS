@@ -116,11 +116,21 @@ def export_results(directory, format):
         raise ValueError("Export format must be csv, json, or geojson")
     from .sts_utils import PIPELINE_CSV_FIELDS, flatten_pipeline_result
     stream = io.StringIO(newline="")
-    writer = csv.DictWriter(stream, fieldnames=[*PIPELINE_CSV_FIELDS, "human_review"])
+    review_fields = {"review_verdict": "verdict", "review_label": "training_label", "reviewer": "reviewer", "review_time": "reviewed_at"}
+    writer = csv.DictWriter(stream, fieldnames=[*PIPELINE_CSV_FIELDS, *review_fields])
     writer.writeheader()
     for row in rows:
-        writer.writerow({**flatten_pipeline_result(row), "human_review": json.dumps(row["human_review"])})
+        decision = row.get("human_review") or {}
+        writer.writerow({**flatten_pipeline_result(row), **{field: decision.get(key) or "" for field, key in review_fields.items()}})
     return stream.getvalue().encode()
+
+
+def export_filename(directory, extension):
+    root = run_directory(directory)
+    record = json.loads((root / "run.json").read_text())
+    timestamp = re.sub(r"[^0-9A-Za-z_-]", "-", str(record.get("started_at") or root.name))
+    identity = hashlib.sha256(str(root).encode()).hexdigest()[:8]
+    return f"reviewed_candidates_{timestamp[:60]}_{identity}.{extension}"
 
 
 def send_to_improve(directory, detection_id):

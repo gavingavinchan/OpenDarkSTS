@@ -394,6 +394,10 @@
       try {
         const data = await P.api('/api/dataset-selections');
         state.selections = data.selections || [];
+        if (!state.lastSelectionPath && !state.selected.size) {
+          const latest = state.selections.find(item => item.exported && item.export_is_current);
+          if (latest) restoreSelection(latest);
+        }
         const body = document.getElementById('selectionBody');
         if (!state.selections.length) {
           body.innerHTML = '<tr><td colspan="7" class="empty">No saved selections yet.</td></tr>';
@@ -406,7 +410,8 @@
             '<td>' + (counts.train || 0) + ' / ' + (counts.val || 0) + ' / ' + (counts.test || 0) + '</td>' +
             '<td><span class="pill ' + (item.exported ? 'ok' : 'warn') + '">' + (item.exported ? 'exported' : 'not exported') + '</span></td>' +
             '<td>' + P.esc(P.shortTime(item.updated_at)) + '</td>' +
-            '<td><button type="button" class="ghost export-one" data-path="' + P.esc(item.selection_path) + '">Export</button></td></tr>';
+            '<td><button type="button" class="ghost load-one" data-path="' + P.esc(item.selection_path) + '">Load selection</button> ' +
+            '<button type="button" class="ghost export-one" data-path="' + P.esc(item.selection_path) + '">Export</button></td></tr>';
         }).join('');
         body.querySelectorAll('button.export-one').forEach(function (button) {
           button.addEventListener('click', function () {
@@ -414,10 +419,35 @@
             exportSelection(button.dataset.path);
           });
         });
+        body.querySelectorAll('button.load-one').forEach(button => button.addEventListener('click', () => {
+          restoreSelection(state.selections.find(item => item.selection_path === button.dataset.path));
+          P.logInteraction('load_saved_selection', {selection_path: button.dataset.path});
+        }));
         P.setStatus('selectionStatus', state.selections.length + ' saved selections.', '');
       } catch (error) {
         P.setStatus('selectionStatus', 'Could not load selections: ' + error.message, 'err');
       }
+    }
+
+    function restoreSelection(item) {
+      if (!item || !item.selection) return;
+      const selection = item.selection, policy = selection.split_policy || {};
+      state.selected = new Set((selection.items || []).map(entry => entry.image_key));
+      state.splits = Object.fromEntries((selection.items || []).map(entry => [entry.image_key, entry.split]));
+      document.getElementById('datasetName').value = selection.dataset_name;
+      document.getElementById('datasetVersion').value = selection.dataset_version;
+      document.getElementById('datasetDescription').value = selection.description || '';
+      document.getElementById('seed').value = policy.seed ?? 42;
+      document.getElementById('splitMode').value = policy.split_mode || 'image';
+      const ratios = policy.default_ratios || {train:.8, val:.1, test:.1};
+      [['ratioTrain','train'],['ratioVal','val'],['ratioTest','test']].forEach(([id, split]) => document.getElementById(id).value = ratios[split]*100);
+      state.lastSelectionPath = item.selection_path;
+      state.lastSavedSignature = selectionSignature();
+      state.lastExportDir = item.export_is_current ? item.export_output_dir : null;
+      state.lastExportSignature = item.export_is_current ? state.lastSavedSignature : null;
+      renderCandidates();
+      renderSplitPreview({...selection.split_summary, ...policy});
+      P.setStatus('saveStatus', 'Loaded saved selection ' + selection.dataset_name + ' ' + selection.dataset_version + (item.export_is_current ? '. Export is current; continue to Training Setup.' : '. Export the selection before training.'), 'ok');
     }
 
     function wire() {
@@ -458,7 +488,7 @@
       document.getElementById('saveSelection').addEventListener('click', function () { saveSelection(); });
       document.getElementById('exportSelection').addEventListener('click', function () { exportSelection(null); });
       document.getElementById('continueToSetup').addEventListener('click', function () {
-        window.location.href = '/training-setup';
+        window.location.href = '/training-setup?' + new URLSearchParams({selection_path: state.lastSelectionPath});
       });
       P.autoLogControls(document);
       P.captureConsoleErrors();

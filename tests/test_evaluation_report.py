@@ -137,4 +137,4 @@ def test_evaluation_markdown_shows_best_and_final_validation(tmp_path: Path) -> 
 
     markdown = paths["markdown_path"].read_text()
     assert "Best epoch" in markdown and "Final val mAP50" in markdown
-    assert "| peaks_early | 2 | 0.9 | 0.1 |" in markdown
+    assert "| peaks_early | 2 | 0.900 | 0.100 |" in markdown

@@ -122,3 +122,6 @@ details.advanced:not([open]) > .advanced-body { display: none; }
   .card { padding: 20px; }
   .cols { grid-template-columns: minmax(0, 1fr); }
 }
+/* Keep the training batch picker usable beside wrapping actions on small screens. */
+.evaluation-batch-controls .field { flex: 1 1 260px; min-width: 0; }
+.evaluation-batch-controls select { width: 100%; min-width: 0; }

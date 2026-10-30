@@ -2428,6 +2428,7 @@ def list_dataset_selections(selections_dir: str | Path = DEFAULT_DATASET_SELECTI
             "groups_spanning_splits": summary["groups_spanning_splits"],
             "export_is_current": export_selection_is_current(path, export_path),
             "selection_path": repo_relative(path),
+            "selection": selection,
             "dataset_name": selection.get("dataset_name"),
             "dataset_version": selection.get("dataset_version"),
             "description": selection.get("description"),
@@ -2649,6 +2650,15 @@ def build_yolo_train_command(training_config: dict[str, Any], dataset_dir: str |
     if bool(training_config.get("overwrite")):
         command.append("exist_ok=True")
     return command
+
+
+def display_shell_command(command: list[str], *, windows: bool | None = None) -> str:
+    """Copyable bash or PowerShell command; argv itself remains unmodified."""
+    if windows is None:
+        windows = os.name == "nt"
+    if windows:
+        return "& " + " ".join("'" + str(arg).replace("'", "''") + "'" for arg in command)
+    return shlex.join(str(arg) for arg in command)
 
 
 def parse_float(value: Any) -> float | None:
@@ -3023,7 +3033,8 @@ def write_training_metadata(
 def metric_value(metrics: dict[str, Any] | None, name: str) -> Any:
     if not isinstance(metrics, dict):
         return ""
-    return metrics.get(name, "")
+    value = metrics.get(name)
+    return f"{float(value):.3f}" if value is not None and value != "" else "—"
 
 
 def evaluation_markdown(report: dict[str, Any]) -> str:
@@ -3233,6 +3244,9 @@ def starting_weight_entry(path: Path, source: str, doc_text: str) -> dict[str, A
         "source": source,
         "size_bytes": size_bytes,
         "documented": documented,
+        "recreation_document": (repo_relative(path.with_suffix(".recreation.json")) if path.with_suffix(".recreation.json").is_file()
+                                else "opendarksts/assets/weight_recreation.md" if path.name == default_manifest()["filename"]
+                                else "docs/yolo_weight_recreation.md"),
         "provenance_warning": None,
     }
     if not documented:
@@ -4022,7 +4036,10 @@ import json, sys
 from ultralytics import YOLO
 
 weights, data_yaml, imgsz, device, split, output = sys.argv[1:7]
-metrics = YOLO(weights).val(data=data_yaml, imgsz=int(imgsz), device=device, split=split, verbose=False)
+model = YOLO(weights)
+counts = {}
+model.add_callback("on_val_end", lambda validator: counts.update(images=int(validator.seen)))
+metrics = model.val(data=data_yaml, imgsz=int(imgsz), device=device, split=split, verbose=False)
 results = {}
 for key, value in (getattr(metrics, "results_dict", {}) or {}).items():
     try:
@@ -4037,12 +4054,19 @@ payload = {
     "device": device,
     "results_dict": results,
     "metrics": {
+        "split": split,
+        **counts,
+        "instances": int(metrics.nt_per_class.sum()),
         "precision": results.get("metrics/precision(B)"),
         "recall": results.get("metrics/recall(B)"),
         "mAP50": results.get("metrics/mAP50(B)"),
         "mAP50-95": results.get("metrics/mAP50-95(B)"),
     },
 }
+for row in metrics.summary(decimals=8):
+    prefix = str(row["Class"]) + "_"
+    for source, key in {"Instances": "instances", "Box-P": "precision", "Box-R": "recall", "mAP50": "mAP50", "mAP50-95": "mAP50_95"}.items():
+        payload["metrics"][prefix + key] = int(row[source]) if source == "Instances" else float(row[source])
 with open(output, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2, sort_keys=True)
     handle.write("\\n")
@@ -4115,7 +4139,25 @@ def run_evaluation_summary(run_dir: str | Path) -> dict[str, Any]:
     test_metrics = None
     if test_metrics_path.is_file():
         try:
-            test_metrics = (load_json(test_metrics_path).get("metrics") or None)
+            test_record = load_json(test_metrics_path)
+            test_metrics = test_record.get("metrics") or None
+            if test_metrics:
+                test_metrics = {**test_metrics, "split": "test"}
+                if test_record.get("images") is not None:
+                    test_metrics.setdefault("images", test_record["images"])
+                # Older evaluations omitted image counts. Recover them only from
+                # the unchanged, checksummed dataset record used for training.
+                try:
+                    metadata_path = target / TRAINING_METADATA_FILENAME
+                    if "images" not in test_metrics and metadata_path.is_file():
+                        metadata = load_json(metadata_path)
+                        manifest_path = repo_resolve(metadata.get("dataset_manifest_path") or "")
+                        if manifest_path.is_file() and file_hash(manifest_path) == metadata.get("dataset_manifest_sha256"):
+                            files = load_json(manifest_path).get("exported_files") or []
+                            images = [item for item in files if str(item.get("path", "")).replace("\\", "/").startswith("images/test/")]
+                            test_metrics["images"] = len(images)
+                except (OSError, ValueError, TypeError):
+                    pass  # Ancillary legacy metadata cannot invalidate recorded scores.
         except Exception:
             test_metrics = None
     best_metrics, best_epoch = best_results_row(target / "results.csv")
@@ -4166,7 +4208,9 @@ def collect_run_group_summaries(run_group: str, runs_dir: str | Path = DEFAULT_R
     summaries = []
     for child in sorted(group_dir.iterdir()):
         if path_is_relative_to(child, group_dir) and child.is_dir() and (child / "results.csv").is_file():
-            summaries.append(run_evaluation_summary(child))
+            summary = run_evaluation_summary(child)
+            summary["promotion_warning"] = promotion_warning(summary.get("test_metrics"), selected_model_metrics())
+            summaries.append(summary)
     return summaries
 
 
@@ -4278,6 +4322,20 @@ def run_test_split(
     }
 
 
+def selected_model_metrics(model_weights_dir: str | Path = DEFAULT_MODEL_WEIGHTS_DIR) -> dict[str, Any]:
+    record = repo_resolve(model_weights_dir) / "current.json"
+    return (load_json(record).get("metrics") or {}) if record.is_file() else {}
+
+
+def promotion_warning(candidate: dict[str, Any] | None, current: dict[str, Any] | None) -> str | None:
+    candidate, current = candidate or {}, current or {}
+    new, old = candidate.get("mAP50"), current.get("mAP50")
+    if new is not None and old is not None and current.get("split") == "test" and float(old) - float(new) >= .1:
+        return (f"This model's recorded test mAP50 is {float(new):.3f}, far below the current model's {float(old):.3f}. "
+                "Using it may reduce detection quality. Results from different datasets are not directly comparable.")
+    return None
+
+
 def promote_weight(
     *,
     run_group: str,
@@ -4288,6 +4346,7 @@ def promote_weight(
     model_weights_dir: str | Path = DEFAULT_MODEL_WEIGHTS_DIR,
     doc_path: str | Path = WEIGHT_RECREATION_DOC,
     overwrite: bool = False,
+    warn=None,
 ) -> dict[str, Any]:
     clean_target = str(target_name or "").strip()
     if not clean_target:
@@ -4303,6 +4362,11 @@ def promote_weight(
     source = resolve_training_run_dir(run_dir / "weights" / "best.pt")
     if not source.is_file():
         raise ValueError(f"Run weights not found: {repo_relative(source)}")
+
+    evaluation = run_evaluation_summary(run_dir)
+    warning = promotion_warning(evaluation.get("test_metrics"), selected_model_metrics(model_weights_dir))
+    if warning and warn:
+        warn(warning)
 
     destination = contained(repo_resolve(model_weights_dir) / clean_target, WORKSPACE_DIR)
     metadata_path = run_dir / TRAINING_METADATA_FILENAME
@@ -4349,7 +4413,9 @@ def promote_weight(
         "run_group": run_group, "run_name": run_name, "reproducibility_gaps": gaps, **provenance,
     })
     shutil.copy2(source, destination)
-    set_current_model(destination, recreation_path=repo_relative(recreation_path), run_group=run_group, run_name=run_name, metrics=run_evaluation_summary(run_dir)["validation_metrics"])
+    metrics = evaluation.get("test_metrics") or evaluation["validation_metrics"]
+    metrics = {**metrics, "split": "test" if evaluation.get("test_metrics") else "val"}
+    set_current_model(destination, recreation_path=repo_relative(recreation_path), run_group=run_group, run_name=run_name, metrics=metrics)
     return {
         "run_group": str(run_group),
         "run_name": str(run_name),
@@ -4359,4 +4425,5 @@ def promote_weight(
         "sha256": file_hash(destination),
         "size_bytes": destination.stat().st_size,
         "documented": True,
+        "warnings": [warning] if warning else [],
     }

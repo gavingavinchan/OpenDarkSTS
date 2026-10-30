@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,7 @@ def print_human(payload: dict[str, Any]) -> None:
         if key in result:
             print(f"{key}: {result[key]}")
     if "command_line" in result:
-        print("command_line: " + " ".join(str(part) for part in result["command_line"]))
+        print("command_line: " + pipeline.display_shell_command(result["command_line"]))
 
 
 def print_response(payload: dict[str, Any], *, pretty: bool = False, human: bool = False) -> None:
@@ -324,6 +325,8 @@ def command_build_train_command(args: argparse.Namespace) -> tuple[int, dict[str
     output_root = pipeline.repo_resolve(config.get("output_dir") or pipeline.WORKSPACE_DIR / "runs")
     result = {
         "command_line": command_line,
+        "display_command": pipeline.display_shell_command(command_line),
+        "shell": "PowerShell" if os.name == "nt" else "bash",
         "run_dir": str(output_root / run_group / run_name),
         "data_yaml": str(dataset_dir / "data.yaml"),
     }
@@ -711,6 +714,7 @@ def command_promote_weight(args: argparse.Namespace) -> tuple[int, dict[str, Any
             runs_dir=args.runs_dir,
             model_weights_dir=args.model_weights_dir,
             overwrite=bool(args.overwrite),
+            warn=lambda message: print("Warning: " + message, file=sys.stderr),
         )
     except ValueError as exc:
         return 2, envelope("promote-weight", ok=False, errors=[str(exc)])

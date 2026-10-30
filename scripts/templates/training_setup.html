@@ -136,7 +136,8 @@
       document.getElementById('computeSummary').textContent = label + (auto ? ' · automatic' : ' · selected');
       document.getElementById('computeHint').textContent = (auto && compute && compute.backend === 'cpu') || device === 'cpu'
         ? 'CPU training is available. A GPU can reduce training time.' : 'GPU acceleration is available for this run.';
-      document.getElementById('epochSummary').textContent = document.getElementById('epochs').value + ' epochs';
+      const epochs = document.getElementById('epochs').value;
+      document.getElementById('epochSummary').textContent = epochs + (Number(epochs) === 1 ? ' epoch' : ' epochs');
       document.getElementById('imageSummary').textContent = document.getElementById('imageSize').value + ' pixels';
       document.getElementById('batchSummary').textContent = document.getElementById('batch').value;
     }
@@ -190,6 +191,9 @@
       const latestSelection = state.selections.find(function(selection) { return selection.exported && selection.export_is_current; });
       const recommended = state.datasets.findIndex(function(dataset) { return latestSelection && dataset.selection_path === latestSelection.selection_path; });
       if (recommended >= 0) document.getElementById('datasetSelect').value = String(recommended);
+      const requested = new URLSearchParams(window.location.search).get('selection_path');
+      const requestedIndex = state.datasets.findIndex(dataset => dataset.selection_path === requested);
+      if (requestedIndex >= 0) document.getElementById('datasetSelect').value = String(requestedIndex);
       onDatasetChange();
     }
 
@@ -236,7 +240,7 @@
       const hint = document.getElementById('weightHint');
       if (!weight) { hint.textContent = 'No starting weights found.'; return; }
       if (weight.documented) {
-        hint.textContent = 'Provenance documented in docs/yolo_weight_recreation.md (' + weight.source + ').';
+        hint.textContent = 'Provenance documented in ' + weight.recreation_document + ' (' + weight.source + ').';
         hint.style.color = '';
       } else {
         hint.textContent = 'WARNING: ' + weight.provenance_warning;
@@ -344,7 +348,7 @@
           method: 'POST',
           body: { selection_path: dataset.selection_path, config_path: state.configPath },
         });
-        document.getElementById('commandPreview').textContent = (data.command_line || []).join(' \\\n  ');
+        document.getElementById('commandPreview').textContent = '# ' + data.shell + '\n' + data.display_command;
         document.getElementById('commandMeta').innerHTML =
           '<dt>run dir</dt><dd>' + P.esc(data.run_dir) + '</dd>' +
           '<dt>data.yaml</dt><dd>' + P.esc(data.data_yaml) + '</dd>' +
