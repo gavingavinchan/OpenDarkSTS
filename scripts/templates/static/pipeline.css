@@ -21,7 +21,7 @@
 body { margin: 0; min-height: 100vh; color: var(--ink); font: 14px/1.5 var(--sans); font-feature-settings: normal; background: var(--paper); }
 .shell { min-height: calc(100vh - 48px); display: grid; grid-template-rows: auto 1fr; }
 header {
-  display: block; padding: 20px 32px 0; border-bottom: 1px solid var(--line);
+  display: block; min-width: 0; padding: 20px 32px 0; border-bottom: 1px solid var(--line);
   background: var(--card); position: sticky; top: 0; z-index: 6;
 }
 .titleblock { max-width: 1376px; margin: 0 auto; display: flex; gap: 24px; align-items: center; min-height: 64px; }

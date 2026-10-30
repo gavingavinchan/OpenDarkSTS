@@ -771,6 +771,16 @@ Selection manifests are JSON files under `workspace/dataset_selections/`. A typi
 
 Labels marked `neither` are not exported as YOLO labels. Background negatives can be exported as empty label files when enabled.
 
+## Augmentation presets
+
+`training-defaults` reports the shared `none`, `light`, `default`, and `heavy`
+augmentation presets used by Step 5. Pass `save-training-config --aug-preset light`
+to fill those values; repeat `--aug key=value` to override individual values. The
+saved configuration contains the explicit augmentation values. Without a preset,
+unspecified values continue to use the training library defaults. `none` explicitly
+disables the supported transforms, whereas clearing the GUI fields restores library
+defaults. These presets apply during training and do not create extra image files.
+
 ## Safety Notes
 
 - Run from the repository root so relative workspace paths resolve correctly.

@@ -60,7 +60,8 @@ def test_operation_pages_and_project_api_share_settings(isolated):
             with urlopen(server.base_url + path) as response:
                 html = response.read().decode()
             assert "app-navigation" in html
-            assert 'href="/results"' not in html
+            if path != '/import':
+                assert 'href="/results"' in html
         status, result = post_json_capture(server.base_url + "/api/operations/project", {"start": "2024-01-01", "end": "2024-01-02"})
         assert status == 200
         assert result["start"] == "2024-01-01"

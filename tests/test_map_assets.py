@@ -68,7 +68,7 @@ const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const viewerAvailable = JSON.parse(process.argv[2]);
 const elements = {}, logs = [], callbacks = {}, tileImages = [{complete:true,naturalWidth:0}];
-const element = id => elements[id] ||= {value:'', hidden:false, disabled:false, textContent:'', classList:{toggle(){}}, add(){}, querySelectorAll(){return tileImages}};
+const element = id => elements[id] ||= {value:'', hidden:false, disabled:false, textContent:'', classList:{toggle(){}}, add(){}, addEventListener(){}, querySelectorAll(){return tileImages}};
 const project = {bbox:[-94.73,29.07,-94.57,29.205],start:'2020-04-01',end:'2020-04-01',images:'/test/images'};
 const map = {setView(){return this}, fitBounds(){}, on(){}};
 const tiles = {on(name,handler){callbacks[name]=handler;return this},addTo(){callbacks.loading();return this},redraw(){callbacks.loading();return this}};
@@ -80,6 +80,12 @@ const context = {window:{L:viewerAvailable ? L : undefined,Pipeline:{api:async()
  await vm.runInNewContext(source,context);
  assert.equal(element('start').value,'2020-04-01');
  assert.equal(typeof element('areaForm').onsubmit,'function');
+ element('start').value='2024-02-10';element('datePeriod').value='month';element('datePeriod').onchange();
+ assert.equal(element('start').value,'2024-02-01');assert.equal(element('end').value,'2024-02-29');
+ element('datePeriod').value='year';element('datePeriod').onchange();
+ assert.equal(element('start').value,'2024-01-01');assert.equal(element('end').value,'2024-12-31');
+ element('datePeriod').value='date';element('datePeriod').onchange();
+ assert.equal(element('start').value,element('end').value);
  element('preset').value='Test';element('preset').onchange();
  assert.equal(element('west').value,'-95.00000');
  if (!viewerAvailable) {

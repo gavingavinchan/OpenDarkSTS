@@ -105,9 +105,10 @@
         const link = document.createElement('a'); link.href = '/api/operations/jobs/' + job.job_id + '/output?format=' + extension; link.textContent = 'Download ' + extension.toUpperCase(); $('jobOutput').append(link);
       }
       const summary = job.result.summary;
-      const text = document.createElement('p'); text.textContent = summary.detections + ' candidate detections'; $('jobOutput').append(text);
+      const text = document.createElement('p'); text.textContent = summary.detections ? summary.detections + ' candidate detections' : 'NO_STS — no STS candidates detected.'; $('jobOutput').append(text);
+      const resultsLink = document.createElement('a'); resultsLink.href = '/results?' + new URLSearchParams({directory: job.result.output_dir}); resultsLink.textContent = 'Open STS Events & Live Map'; $('jobOutput').append(resultsLink);
       const presence = document.createElement('p');
-      presence.textContent = 'Same-day AIS: ' + (summary.FULLY_DARK || 0) + ' with no nearby vessels; ' + (summary.PARTIALLY_DARK || 0) + ' with one; ' + (summary.AIS_PRESENT || 0) + ' with two or more.';
+      presence.textContent = 'Same-day AIS: FULLY_DARK ' + (summary.FULLY_DARK || 0) + ' (no nearby vessels); PARTIALLY_DARK ' + (summary.PARTIALLY_DARK || 0) + ' (one); AIS_PRESENT ' + (summary.AIS_PRESENT || 0) + ' (two or more).';
       $('jobOutput').append(presence);
       const unknown = (summary.AIS_MISSING || 0) + (summary.AIS_INVALID || 0);
       if (unknown) { const warning = document.createElement('p'); warning.className = 'status error'; warning.textContent = 'AIS presence is unknown for ' + unknown + ' candidates because records are missing or invalid. Check the AIS source on Data.'; $('jobOutput').append(warning); }
@@ -118,6 +119,8 @@
     const settings = dashboard.project;
     $(page + 'Panel').hidden = false;
     if (page === 'home') {
+      const totals = dashboard.detection_summary;
+      $('detectionTotals').textContent = totals.runs + ' completed scans / ' + totals.detections + ' candidate detections. FULLY_DARK: ' + totals.FULLY_DARK + '; PARTIALLY_DARK: ' + totals.PARTIALLY_DARK + '; AIS_PRESENT: ' + totals.AIS_PRESENT + '; AIS unavailable: ' + (totals.AIS_MISSING + totals.AIS_INVALID) + '. Counts describe the selected workspace history.';
       if ($('modelSummary')) $('modelSummary').textContent = dashboard.model ? 'STS detector selected' : 'No model selected';
       $('modelName').textContent = dashboard.model ? dashboard.model.filename : 'No model selected';
       $('modelInfo').textContent = dashboard.model_error || (dashboard.model && dashboard.model.metrics && dashboard.model.metrics.mAP50 ? (dashboard.model.metrics.split === 'test' ? 'Clean test mAP50: ' : 'Validation mAP50: ') + P.fmt(dashboard.model.metrics.mAP50, 3) : 'Used by Detect and Improve.');
@@ -137,6 +140,21 @@
       $('preset').onchange = () => { if (dashboard.presets[$('preset').value]) drawBounds(dashboard.presets[$('preset').value], true); P.logInteraction('choose_area_preset', {preset: $('preset').value}); };
       ['west','south','east','north'].forEach(id => $(id).onchange = () => { $('preset').value = ''; drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false); });
       ['start','end','images'].forEach(key => $(key).value = settings[key]);
+      function applyDatePeriod() {
+        const date = $('start').value, period = $('datePeriod').value;
+        if (!date || period === 'range') return;
+        const [year, month] = date.split('-').map(Number);
+        if (period === 'date') $('end').value = date;
+        if (period === 'month') {
+          $('start').value = date.slice(0, 7) + '-01';
+          $('end').value = date.slice(0, 7) + '-' + new Date(Date.UTC(year, month, 0)).getUTCDate();
+        }
+        if (period === 'year') { $('start').value = year + '-01-01'; $('end').value = year + '-12-31'; }
+        P.logInteraction('choose_date_period', {period, start: $('start').value, end: $('end').value});
+      }
+      $('datePeriod').onchange = applyDatePeriod;
+      $('start').addEventListener('change', applyDatePeriod);
+      $('end').addEventListener('change', () => { $('datePeriod').value = 'range'; });
       $('drawArea').onclick = () => { corners = []; $('mapHint').textContent = 'Click the first corner, then the opposite corner.'; P.logInteraction('draw_area_started', {}); };
       if (map) map.on('click', e => { if (corners === null) return; corners.push(e.latlng); if (corners.length === 2) { const b = L.latLngBounds(corners); $('preset').value = ''; drawBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], false); corners = null; $('mapHint').textContent = 'Area selected. Save to continue.'; P.logInteraction('draw_area_done', {}); } });
       $('mapExtent').onclick = () => { const b = map.getBounds(); $('preset').value = ''; drawBounds([b.getWest(),b.getSouth(),b.getEast(),b.getNorth()], false); P.logInteraction('use_map_extent', {}); };
@@ -154,6 +172,14 @@
       $('runModel').textContent = dashboard.model ? 'Current model: ' + dashboard.model.filename : dashboard.model_error;
       $('runButton').disabled = !dashboard.readiness.ready;
       $('confidence').value = settings.confidence; $('radius').value = settings.radius;
+      Object.entries(dashboard.sensitivity_presets).forEach(([name, value]) => $('sensitivity').add(new Option(name + ' / ' + value.toFixed(2), String(value))));
+      function syncSensitivity() {
+        const value = Number($('confidence').value);
+        $('sensitivity').value = Object.values(dashboard.sensitivity_presets).includes(value) ? String(value) : '';
+      }
+      syncSensitivity();
+      $('confidence').addEventListener('input', syncSensitivity);
+      $('sensitivity').onchange = () => { if ($('sensitivity').value) $('confidence').value = $('sensitivity').value; P.logInteraction('choose_sensitivity', {confidence: Number($('confidence').value)}); };
       $('runInputs').textContent = countLabel(dashboard.readiness.image_count, 'image file') + (dashboard.readiness.image_count === 1 ? ' matches ' : ' match ') + settings.start + ' to ' + settings.end + '. Same-day AIS records will be checked within ' + P.fmt(settings.radius, 0) + ' metres.';
       const readinessBox = $('runReadiness').closest('.run-readiness-box');
       if (readinessBox) readinessBox.dataset.ready = String(dashboard.readiness.ready);

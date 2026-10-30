@@ -552,10 +552,10 @@ def test_every_pipeline_page_renders_200_with_nav(tmp_path: Path, monkeypatch) -
 
     pages = {
         "/import": "Intake",
-        "/bbox-overview": "BBox Overview",
+        "/bbox-overview": "Reviewed bounding-box overview",
         "/datasets": "Dataset Selection",
         "/training-setup": "Training Setup",
-        "/training": "Train YOLO",
+        "/training": "Train detector",
         "/evaluation": "Evaluate",
     }
     with UiServer(ui.TrainingPipelineHandler) as server:
@@ -590,7 +590,7 @@ def test_page_aliases_match_the_plan_route_names(tmp_path: Path, monkeypatch) ->
     from scripts import training_pipeline_ui as ui
 
     with UiServer(ui.TrainingPipelineHandler) as server:
-        for alias, marker in (("/dataset-selection", "Dataset Selection"), ("/train-yolo", "Train YOLO"), ("/evaluate", "Evaluate")):
+        for alias, marker in (("/dataset-selection", "Dataset Selection"), ("/train-yolo", "Train detector"), ("/evaluate", "Evaluate")):
             status, _, body = get_text(f"{server.base_url}{alias}")
             assert status == 200 and marker in body
 

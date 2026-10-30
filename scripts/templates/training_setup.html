@@ -47,7 +47,7 @@
       <div class="titleblock">
         <div class="filenum">05<sup>/07</sup></div>
         <div>
-          <h1>Training Setup</h1>
+          <h1>Augmentation &amp; training setup</h1>
           <p class="subtitle">Choose your dataset. We will prepare a training run with recommended settings.</p>
         </div>
       </div>
@@ -99,7 +99,7 @@
               <label class="field"><span>Data loading workers</span><input id="workers" type="number" value="4"></label>
             </div><p class="hint">Auto chooses an available GPU, then CPU. The saved setup records the actual device so it can be reproduced.</p>
           </section>
-          <section class="advanced-section"><h3>Image augmentation</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button">Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
+          <section class="advanced-section"><h3>Image augmentation</h3><p class="hint">Optional changes to training images, such as rotation and colour variation. Empty fields use the training library's defaults.</p><label class="field"><span>Augmentation preset</span><select id="augPreset" disabled><option value="">Custom / library defaults</option><option value="none">None</option><option value="light">Light</option><option value="default">Default</option><option value="heavy">Heavy</option></select></label><p class="hint">Presets fill explicit values below. Adjust them before saving. Augmentation affects training images only.</p><div class="grid3" id="augFields"></div><div class="row"><button id="augDefaults" type="button" disabled>Fill default augmentation</button><button id="augClear" type="button">Clear augmentation</button></div></section>
           <section class="advanced-section"><h3>Save and inspect</h3><div class="row"><button id="saveOnly" type="button">Save without continuing</button><button id="previewCommand" type="button" disabled>Preview command</button></div><pre class="code" id="commandPreview">Save a setup to preview the exact training command.</pre><dl class="kv" id="commandMeta"></dl></section>
           <section class="advanced-section"><h3>Saved training setups</h3><div class="scroll"><table><thead><tr><th>Config</th><th>Run group</th><th>Run name</th><th>Model</th><th>Epochs</th><th>Batch</th><th>Device</th><th>Complete</th><th></th></tr></thead><tbody id="configBody"></tbody></table></div></section>
         </div>
@@ -113,12 +113,12 @@
     const AUG_KEYS = ['hsv_h', 'hsv_s', 'hsv_v', 'degrees', 'translate', 'scale', 'shear',
                       'perspective', 'flipud', 'fliplr', 'mosaic', 'mixup', 'copy_paste',
                       'erasing', 'crop_fraction'];
-    const AUG_DEFAULTS = { hsv_h: 0.015, hsv_s: 0.7, hsv_v: 0.4, degrees: 10, translate: 0.1,
-                           scale: 0.5, fliplr: 0.5, mosaic: 1.0 };
     const state = { datasets: [], selections: [], weights: [], configPath: null, ready: false, defaults: null, autoGroup: null };
 
     async function loadDefaults() {
       state.defaults = await P.api('/api/training/defaults');
+      document.getElementById('augPreset').disabled = false;
+      document.getElementById('augDefaults').disabled = false;
       const defaults = state.defaults.defaults;
       ['imageSize','epochs','batch','patience','seed','workers','device'].forEach(function(id) {
         const key = id === 'imageSize' ? 'image_size' : id;
@@ -438,6 +438,7 @@
       setFieldValue('configName', String(config.config_path || '').split('/').pop().replace(/\.json$/, ''));
       document.getElementById('overwrite').checked = Boolean(config.overwrite);
       const augmentation = config.augmentation || {};
+      document.getElementById('augPreset').value = '';
       document.querySelectorAll('input.aug').forEach(function (input) {
         const value = augmentation[input.dataset.key];
         input.value = (value === null || value === undefined) ? '' : String(value);
@@ -456,17 +457,23 @@
 
     function wire() {
       renderAugFields();
+      document.querySelectorAll('input.aug').forEach(input => input.addEventListener('input', () => { document.getElementById('augPreset').value = ''; }));
       document.getElementById('datasetSelect').addEventListener('change', onDatasetChange);
       document.getElementById('weightSelect').addEventListener('change', onWeightChange);
-      document.getElementById('augDefaults').addEventListener('click', function () {
+      function applyAugmentationPreset(name) {
         invalidateSavedSetup();
+        const values = (state.defaults && state.defaults.augmentation_presets[name]) || {};
+        document.getElementById('augPreset').value = name;
         document.querySelectorAll('input.aug').forEach(function (input) {
-          input.value = AUG_DEFAULTS[input.dataset.key] === undefined ? '' : AUG_DEFAULTS[input.dataset.key];
+          input.value = values[input.dataset.key] === undefined ? '' : values[input.dataset.key];
         });
-      });
+        P.logInteraction('augmentation_preset', {preset: name, values});
+      }
+      document.getElementById('augPreset').addEventListener('change', function () { applyAugmentationPreset(this.value); });
+      document.getElementById('augDefaults').addEventListener('click', function () { applyAugmentationPreset('default'); });
       document.getElementById('augClear').addEventListener('click', function () {
         invalidateSavedSetup();
-        document.querySelectorAll('input.aug').forEach(function (input) { input.value = ''; });
+        applyAugmentationPreset('');
       });
       document.getElementById('saveConfig').addEventListener('click', function() { saveConfig(true); });
       document.getElementById('saveOnly').addEventListener('click', function() { saveConfig(false); });

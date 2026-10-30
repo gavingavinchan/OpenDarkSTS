@@ -254,7 +254,7 @@ def imagery_tiles(bbox):
                    west + (east-west)*(x+1)/nx, south + (north-south)*(y+1)/ny], [max(1, math.ceil(width/nx)), max(1, math.ceil(height/ny))]
 
 
-def acquire_imagery(start: str, end: str | None = None, *, bbox, output_dir=None, max_cloud=30, client=None, log=print) -> dict:
+def acquire_imagery(start: str, end: str | None = None, *, bbox, output_dir=None, max_cloud=35, client=None, log=print) -> dict:
     days = date_range(start, end)
     bounds = validate_bbox(bbox)
     if not math.isfinite(max_cloud) or not 0 <= max_cloud <= 100:

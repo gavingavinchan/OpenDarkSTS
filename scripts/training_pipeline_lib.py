@@ -3148,6 +3148,19 @@ def normalize_augmentation(augmentation: dict[str, Any] | None) -> dict[str, Any
     return normalized
 
 
+def augmentation_presets() -> dict[str, dict[str, float]]:
+    """Explicit, editable online augmentation values shared by GUI and CLI."""
+    none = dict.fromkeys(ALLOWED_AUGMENTATION_KEYS, 0.0)
+    none["crop_fraction"] = 1.0
+    default = {**none, "hsv_h": .015, "hsv_s": .7, "hsv_v": .4, "degrees": 10.,
+               "translate": .1, "scale": .5, "fliplr": .5, "mosaic": 1.}
+    return {"none": none,
+            "light": {**none, "hsv_h": .01, "hsv_s": .2, "hsv_v": .2, "degrees": 5.,
+                      "translate": .05, "scale": .2, "fliplr": .5},
+            "default": default,
+            "heavy": {**default, "degrees": 180., "flipud": .5, "mixup": .05}}
+
+
 def doc_mentions_weight_name(weight_name: str, doc_text: str) -> bool:
     """True when `doc_text` names this exact weight file, not merely a longer name.
 
@@ -3338,7 +3351,7 @@ def training_defaults() -> dict[str, Any]:
         pass
     return {"defaults": {"image_size": 960, "epochs": 150, "batch": 8, "patience": 30,
                          "seed": 42, "workers": 4, "device": "auto", "augmentation": {}},
-            "compute": compute, "recommended_model": recommended}
+            "compute": compute, "recommended_model": recommended, "augmentation_presets": augmentation_presets()}
 
 
 def save_training_config(

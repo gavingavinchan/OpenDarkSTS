@@ -28,7 +28,7 @@ def build_parser():
         command.add_argument("--output-dir")
         command.add_argument("--background", action="store_true")
         if kind == "imagery":
-            command.add_argument("--max-cloud", type=float, default=30)
+            command.add_argument("--max-cloud", type=float, default=35)
     run = commands.add_parser("run")
     run.add_argument("--images", nargs="+", required=True)
     run.add_argument("--ais-dir")

@@ -500,12 +500,12 @@ STATIC_DIR = TEMPLATES_DIR / "static"
 TEMPLATE_CACHE: dict[str, str] = {}
 
 PIPELINE_STAGE_LABELS: list[str] = [
-    "Import Data",
-    "Manual Review",
-    "BBox Overview",
+    "Import & albums",
+    "Annotation",
+    "Reviewed boxes",
     "Dataset Selection",
     "Training Setup",
-    "Train YOLO",
+    "Train detector",
     "Evaluate",
 ]
 
@@ -649,9 +649,6 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
     def _results_request(self, path, parsed, *, post=False):
         if path != "/results" and not path.startswith("/api/results"):
             return False
-        if os.environ.get("OPENDARKSTS_EXPERIMENTAL_RESULTS") != "1":
-            self._respond_json({"error": "not found"}, status=404)
-            return True
         try:
             if path == "/results" and not post:
                 self._respond_html(render_template("results"))
@@ -696,8 +693,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         return True
 
     def _operations_get(self, path, parsed):
-        pages = {"/": ("home", "Your field workspace"), "/detect": ("area", "Area & dates"),
-                 "/data": ("data", "Bring in the data"), "/run": ("run", "Run detection"), "/jobs": ("jobs", "Jobs")}
+        pages = {"/": ("home", "Intelligence HQ"), "/detect": ("area", "Area & dates"),
+                 "/data": ("data", "Data & AIS Manager"), "/run": ("run", "Scan Images"), "/jobs": ("jobs", "Jobs & scan history")}
         if path in pages:
             page, title = pages[path]
             self._respond_html(render_template("operations", page=page, page_title=title))
