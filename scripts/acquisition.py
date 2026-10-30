@@ -7,7 +7,6 @@ import io
 import json
 import math
 import os
-import shutil
 import tarfile
 import tempfile
 import time

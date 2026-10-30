@@ -181,6 +181,14 @@ def test_explicit_csv_date_is_established_by_contents(tmp_path: Path) -> None:
         sts_utils.resolve_ais_file(target, "2020-01-04")
 
 
+def test_malformed_explicit_csv_has_a_preflight_error(tmp_path: Path) -> None:
+    sts_utils = load_module("scripts.sts_utils")
+    target = tmp_path / "records.csv"
+    target.write_text('MMSI,BaseDateTime,LAT,LON\n1,"unterminated')
+    with pytest.raises(ValueError, match="Cannot read selected AIS CSV"):
+        sts_utils.ais_content_dates(target)
+
+
 def test_resolve_ais_file_raises_when_date_is_missing(tmp_path: Path) -> None:
     sts_utils = load_module("scripts.sts_utils")
     with pytest.raises(FileNotFoundError):

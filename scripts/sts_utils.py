@@ -310,7 +310,10 @@ def ais_content_dates(path: str | Path) -> frozenset[str]:
     # Small operator-selected files can be rewritten within one filesystem clock
     # tick; inspecting them directly is inexpensive and avoids stale preflight.
     inspect = _ais_content_dates.__wrapped__ if stat.st_size < 1024 * 1024 else _ais_content_dates
-    return inspect(str(target), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    try:
+        return inspect(str(target), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    except (csv.Error, UnicodeError) as exc:
+        raise ValueError(f"Cannot read selected AIS CSV: {exc}") from exc
 
 
 def resolve_ais_file(ais_dir: str | Path, date_str: str) -> Path:
