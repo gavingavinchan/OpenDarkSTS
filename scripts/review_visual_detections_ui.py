@@ -1074,7 +1074,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <h3>Overview Controls</h3>
           <div class="class-picker">
             <select id="newClassSelect" class="cls-${{defaultClassValue === 1 ? 'ships' : 'ship'}}" onchange="onClassSelectChange(this)">${{defaultClassOptions.map(opt => `<option value="${{opt.value}}" ${{opt.value === defaultClassValue ? 'selected' : ''}}>${{opt.label}}</option>`).join('')}}</select>
-            <div class="shortcut-hint"><kbd>Tab</kbd> cycle single vessel / STS pair / false detection locally</div>
+            <div class="shortcut-hint"><kbd>Tab</kbd> change the class (single vessel / STS pair / false detection); this saves the box as reviewed</div>
           </div>
           <p class="selection">${{selectedDetection ? `Selected <strong>#${{selectedDetection.detection_id}}</strong> - ${{detectionName(selectedDetection)}}` : 'No detection selected. Click a box to enter edit mode.'}}</p>
           <div class="button-row">

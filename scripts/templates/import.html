@@ -1587,7 +1587,7 @@
       if (album) return renderAlbumDossier(album);
       const im = (state.manifest?.images || []).find(x => x.image_key === state.selectedKey);
       if (!im) return '<div class="detail-empty">Select an album or image to see its details and review progress.</div>';
-      const editAction = `<div class="detail-actions"><button class="detail-action" onclick="editInManualReview('${escape(im.image_key)}')">Edit in manual review</button></div>`;
+      const editAction = `<div class="detail-actions"><button class="detail-action" onclick="editInManualReview('${escape(im.image_key)}')">Edit in Annotation</button></div>`;
       return `
         <p class="detail-eyebrow">Manifest record</p>
         <h3 class="detail-title">${escape(im.original_filename || im.image_key)}</h3>

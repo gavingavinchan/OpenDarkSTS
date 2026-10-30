@@ -126,7 +126,7 @@
       presence.textContent = 'Same-day AIS: FULLY_DARK ' + (summary.FULLY_DARK || 0) + ' (no nearby vessels); PARTIALLY_DARK ' + (summary.PARTIALLY_DARK || 0) + ' (one); AIS_PRESENT ' + (summary.AIS_PRESENT || 0) + ' (two or more).';
       $('jobOutput').append(presence);
       const unknown = (summary.AIS_MISSING || 0) + (summary.AIS_INVALID || 0);
-      if (unknown) { const warning = document.createElement('p'); warning.className = 'status error'; warning.textContent = 'AIS presence is unknown for ' + unknown + ' candidates because records are missing or invalid. Check the AIS source on Data.'; $('jobOutput').append(warning); }
+      if (unknown) { const warning = document.createElement('p'); warning.className = 'status error'; warning.textContent = 'AIS presence is unknown for ' + unknown + (unknown === 1 ? ' candidate' : ' candidates') + ' because records are missing or invalid. Check the AIS source on Data.'; $('jobOutput').append(warning); }
     }
   }
   try {
