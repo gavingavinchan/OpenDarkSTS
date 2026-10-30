@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import subprocess
 import sys
@@ -37,7 +38,7 @@ def scan_description(options, timestamp):
             pass
     period = options.get("date") or (" to ".join([min(dates), max(dates)]) if len(dates) > 1 else next(iter(dates), "date unknown"))
     time = datetime.fromisoformat(timestamp).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if timestamp else "time unknown"
-    return f"{source} / {period} / sensitivity {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
+    return f"{source} / {period} / threshold {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
 
 
 def job_dir(job_id):
@@ -100,7 +101,11 @@ def _read_job(job_id, *, reconcile=True):
     if log.is_file():
         with log.open("rb") as handle:
             handle.seek(max(0, log.stat().st_size - 24000))
-            record["log_tail"] = handle.read().decode("utf-8", errors="replace").splitlines()[-100:]
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+            # OpenCV does not use GeoTIFF georeferencing tags. The georeferencing
+            # stage reads them separately; retain every other warning/error.
+            harmless = re.compile(r"TIFF_Warning\b.*Unknown field with tag (33550|33922|34735|34736|34737|42112|42113)(?: |\(|$)")
+            record["log_tail"] = [line for line in lines if not harmless.search(line)][-100:]
     if record["kind"] == "run":
         record["description"] = scan_description(record["options"], record.get("started_at") or record["created_at"])
     record["cancel_requested"] = (directory / "cancel.json").is_file()

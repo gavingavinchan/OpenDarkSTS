@@ -65,3 +65,36 @@
 @media(max-width:760px){.detect-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.detect-steps a{min-width:0}.detect-steps a span:last-child{overflow-wrap:anywhere}}
 /* Keep readable scan settings within the existing history table. */
 .operations-page .job-select{white-space:normal;overflow-wrap:anywhere}
+
+/* Shared content and responsive controls. */
+.example-card{margin-bottom:24px}.example-card button{justify-self:start}
+#modelDetails{display:grid;gap:14px;min-width:0}#modelDetails .scroll{max-height:none}#modelDetails table{min-width:540px}
+.results-page .ops-main{max-width:1440px;width:100%}.results-page .ops-heading h1{font:600 28px/1.2 var(--sans)}
+.results-page .ops-split{align-items:start}.results-page #vessels{font:13px/1.65 var(--sans);overflow-wrap:anywhere;margin:0}
+.results-page #resultReading{color:#174e56;font-weight:600}.verdict-actions{display:flex;gap:10px;flex-wrap:wrap}
+.results-page .scroll{max-width:100%;overflow-x:auto}.results-page .scroll table{min-width:520px}
+.app-navigation{flex-wrap:wrap}.app-navigation a{white-space:nowrap}
+@media(max-width:760px){
+ .app-navigation{gap:10px 18px}.app-navigation .app-brand{flex-basis:100%;margin:0}
+ .rail{height:auto;overflow:visible;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .rail .stage{min-width:0;white-space:normal;height:auto;padding:8px 5px}
+ .row>.field{min-width:0!important;max-width:100%}
+ .ledger-scroll{overflow-x:auto;max-width:100%}.ledger-table{min-width:850px}
+ .ledger-table .row-num{white-space:nowrap;overflow-wrap:normal;word-break:normal;min-width:55px}
+ #candidateTable{min-width:860px}#candidateTable td{overflow-wrap:normal;word-break:normal}
+ #candidateTable td:nth-child(2){min-width:230px;overflow-wrap:break-word;word-break:normal}
+}
+
+#homePanel .ops-three{grid-template-columns:repeat(2,minmax(0,1fr))}
+#homePanel .ops-three>article:first-child{grid-column:1/-1}
+@media(max-width:760px){#homePanel .ops-three{grid-template-columns:minmax(0,1fr)}}
+
+@media(max-width:760px){
+ .results-page .scroll table{min-width:0}
+ .results-page .scroll thead{display:none}
+ .results-page #candidates tr,.results-page #candidates td{display:block}
+ .results-page #candidates td{padding:10px;overflow-wrap:break-word}
+ .results-page #candidates td::before{content:attr(data-label);display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px}
+}
+#modelCard{min-width:0;overflow-wrap:anywhere}
+#modelCard table{display:block;max-width:100%;overflow-x:auto}

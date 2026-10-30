@@ -43,6 +43,7 @@ def build_parser():
     jobs.add_argument("job_id", nargs="?")
     jobs.add_argument("--cancel", action="store_true", help="Cancel a download and remove its partial files")
     project = commands.add_parser("project", help="Inspect or save the Detect settings")
+    project.add_argument("--use-example", action="store_true", help="Select the bundled imagery, AIS, date, and area")
     project.add_argument("--set", dest="settings", help="JSON object of project settings")
     project.add_argument("--start-job", choices=["ais", "imagery", "run"])
     project.add_argument("--check-ready", action="store_true", help="Check detection inputs for the saved dates")
@@ -88,6 +89,8 @@ def execute(args):
             return {"output": str(target)}
         return {"detections": results.read_results(args.directory)}
     if args.command == "project":
+        if args.use_example:
+            operations.use_bundled_example()
         if args.settings:
             operations.save_project(json.loads(args.settings))
         if args.check_ready:

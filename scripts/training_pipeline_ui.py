@@ -500,13 +500,13 @@ STATIC_DIR = TEMPLATES_DIR / "static"
 TEMPLATE_CACHE: dict[str, str] = {}
 
 PIPELINE_STAGE_LABELS: list[str] = [
-    "Import & albums",
+    "Import imagery & albums",
     "Annotation",
-    "Reviewed boxes",
+    "Reviewed bounding-box overview",
     "Dataset Selection",
     "Training Setup",
     "Train detector",
-    "Evaluate",
+    "Evaluate & Promote",
 ]
 
 
@@ -700,11 +700,18 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             page, title = pages[path]
             self._respond_html(render_template("operations", page=page, page_title=title))
             return True
+        if path == "/model-card":
+            from importlib.resources import files
+            card = files("opendarksts").joinpath("assets", "model_card.md").read_text(encoding="utf-8")
+            self._respond_html('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenDarkSTS / Model card</title><link rel="stylesheet" href="/static/pipeline.css"></head><body><main class="shell"><h1>Bundled YOLO11s model card</h1><p><a href="/evaluation">Evaluate &amp; Promote</a></p><div id="modelCard"></div></main><script src="/static/pipeline.js"></script><script>document.getElementById("modelCard").innerHTML=Pipeline.renderMarkdown(' + json.dumps(card).replace('<', '\u003c') + ');</script></body></html>')
+            return True
         if not path.startswith("/api/operations/"):
             return False
         try:
             if path == "/api/operations/health":
                 self._respond_json({"instance": os.environ.get("OPENDARKSTS_SERVER_INSTANCE"), "workspace": str(WORKSPACE_DIR)})
+            elif path == "/api/operations/model":
+                self._respond_json(operations.model_information())
             elif path == "/api/operations/dashboard":
                 self._respond_json(operations.dashboard())
             elif path == "/api/operations/project":
@@ -738,7 +745,11 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
     def _operations_post(self, path):
         try:
             payload = self._json_body()
-            if path == "/api/operations/project":
+            if path == "/api/operations/example":
+                result = operations.use_bundled_example()
+                self._log_training_action("use_bundled_example", result)
+                self._respond_json(result)
+            elif path == "/api/operations/project":
                 result = operations.save_project(payload)
                 self._log_training_action("save_detection_project", result)
                 self._respond_json(result)
@@ -1731,7 +1742,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         return value or None
 
     def _respond_html(self, html: str, status: int = 200) -> None:
-        navigation = '<nav class="app-navigation" aria-label="Main"><a class="app-brand" href="/">OpenDarkSTS</a><a href="/">Home</a><a href="/detect">Detect</a><a href="/import">Improve</a><a href="/jobs">Jobs</a></nav>'
+        navigation = '<nav class="app-navigation" aria-label="Main"><a class="app-brand" href="/">OpenDarkSTS</a><a href="/">Intelligence HQ</a><a href="/detect">Detect</a><a href="/import">Improve</a><a href="/jobs">Jobs</a></nav>'
         html = html.replace("</head>", '<link rel="stylesheet" href="/static/operations.css"></head>')
         html = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + navigation, html, count=1)
         self.send_response(status)
