@@ -43,10 +43,11 @@ one current model.
 | Run | Detection -> georeference -> AIS matching over the chosen tiles. | Today's `scripts/pipeline.py` |
 | Results | Table + map of what the run found. Per detection: the crop, nearby AIS vessels, a plainly worded AIS status, and buttons *real STS / not STS / unclear*. Export CSV / JSON / GeoJSON. Reviewed detections can be sent to Improve as training data. | New page, reusing the step 2 review screen; design reference is Madhulika's dashboard |
 
-**The Results page is experimental until Gavin has checked it.** It is built behind a
-switch, is not linked from the navigation, and is not mentioned in user-facing docs until
-he confirms it. Until then the official output of a run stays `dark_sts.csv`,
-`dark_sts.json` and the preview PNGs.
+**Paper-alignment release update (29 October 2026):** the existing Results page is
+now linked as Results / STS Events, with Live Map and Export Report. The requested
+paper-alignment work exposed it after software acceptance checks; see
+`docs/paper_release_alignment.md` for evidence and remaining differences. Original
+`dark_sts.csv`, `dark_sts.json` and preview PNG outputs remain available.
 
 ### Improve (the existing training tool, steps 1-7)
 
@@ -141,9 +142,9 @@ Area & dates, Data, Run, Jobs pages on the one server, following the existing te
 and navigation conventions in `scripts/templates/`. Long tasks run as managed background
 jobs with on-disk records, using the same launch-locking approach as training runs.
 
-### Phase 4 — Results page (experimental)
+### Phase 4 — Results page
 
-Built as described in section 2, hidden until Gavin signs off. Includes the
+Built as described in section 2; exposed by the October paper-alignment update. Includes the
 "send to Improve" link so a reviewed detection becomes training data without being
 reviewed twice. An AIS outcome never becomes a label by itself; only the human's verdict
 on the image does.

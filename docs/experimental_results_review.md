@@ -1,8 +1,9 @@
-# Internal review checklist: candidate results
+# Candidate results review checklist
 
-This feature is prepared for review and is not linked from the application navigation.
-Set `OPENDARKSTS_EXPERIMENTAL_RESULTS=1` on the local server and visit `/results`.
-Do not advertise it as an official workflow until the UI has been checked.
+The paper-alignment release exposes this existing feature at Detect → Results /
+STS Events and from completed detection jobs. The environment switch is no longer
+required. Software acceptance evidence is recorded in `paper_release_alignment.md`;
+the checklist below remains applicable to scientific and operator review.
 
 A completed operational output has an immutable `dark_sts.json` and a separate
 `decisions.json`. Table, map, crop, nearby AIS records, and CSV/JSON/GeoJSON exports
@@ -19,8 +20,8 @@ transfer returns the original record. Edit a transferred label in Improve.
 
 Backend/CLI checks use `python -m scripts.application_cli results DIRECTORY` with
 `--detection ID --verdict real_sts`, `--send-to-improve`, or
-`--format geojson --output WORKSPACE/exports/candidates.geojson`. The switch controls
-the HTTP surface; backend helpers remain directly testable.
+`--format geojson --output WORKSPACE/exports/candidates.geojson`. The switch controlled
+the HTTP surface in earlier releases; backend helpers remain directly testable.
 
 Review a positive, rejected and unclear candidate; verify crop framing, map context,
 exports and the resulting completed review in Improve. Do not interpret sample

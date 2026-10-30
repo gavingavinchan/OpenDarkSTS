@@ -62,15 +62,11 @@ def test_exports_include_human_decision_and_coordinates(run):
         results.run_directory(results.WORKSPACE_DIR.parent)
 
 
-def test_results_http_switch_and_review(run, monkeypatch):
+def test_results_http_available_by_default_and_review(run, monkeypatch):
     from scripts import training_pipeline_ui as ui
     monkeypatch.setattr(ui, 'TRAINING_UI_INTERACTION_LOG_PATH', results.WORKSPACE_DIR/'interactions.jsonl')
     monkeypatch.delenv('OPENDARKSTS_EXPERIMENTAL_RESULTS', raising=False)
     with UiServer(ui.TrainingPipelineHandler) as server:
-        with pytest.raises(HTTPError) as exc:
-            urlopen(server.base_url+'/results')
-        assert exc.value.code == 404
-        monkeypatch.setenv('OPENDARKSTS_EXPERIMENTAL_RESULTS', '1')
         assert urlopen(server.base_url+'/results').status == 200
         status, decision = post_json_capture(server.base_url+'/api/results/review', {'directory':str(run), 'detection_id':'one', 'verdict':'real_sts'})
         assert status == 200

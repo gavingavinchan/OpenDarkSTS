@@ -795,8 +795,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       <div class="titleblock">
         <div class="filenum">02<sup>/07</sup></div>
         <div>
-          <h1>Manual Review</h1>
-          <p class="subtitle">Review each detection and correct vessel labels.</p>
+          <h1>Auto-assisted annotation</h1>
+          <p class="subtitle">Manual Review: correct proposed boxes and draw missed single vessels or STS pairs.</p>
         </div>
       </div>
       {stage_nav}
