@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenDarkSTS / Train YOLO</title>
+  <title>OpenDarkSTS / Train detector</title>
   <link rel="stylesheet" href="/static/pipeline.css">
 </head>
 <body data-page="training">
@@ -65,7 +65,7 @@
             <h2>Training performance</h2>
             <div class="spark" id="spark"></div>
             <div class="scroll" style="max-height:220px;">
-              <table><thead><tr><th>Epoch</th><th>box_loss</th><th>mAP50</th><th>mAP50-95</th></tr></thead>
+              <table><thead><tr><th>Epoch</th><th>Box location error (box_loss)</th><th>mAP50</th><th>mAP50-95</th></tr></thead>
               <tbody id="metricsBody"></tbody></table>
             </div>
           </section>
@@ -300,7 +300,7 @@
         '<dt>ended</dt><dd>' + P.esc(P.shortTime(data.ended_at)) + '</dd>' +
         '<dt>best mAP50</dt><dd>' + P.fmt((best['metrics/mAP50(B)'] || {}).value) + '</dd>' +
         '<dt>run dir</dt><dd>' + P.esc(data.run_dir) + '</dd>' +
-        '<dt>best.pt</dt><dd>' + P.esc(data.best_weights_path || '—') + '</dd>' +
+        '<dt>Best saved model (best.pt)</dt><dd>' + P.esc(data.best_weights_path || '—') + '</dd>' +
         '<dt>last.pt</dt><dd>' + P.esc(data.last_weights_path || '—') + '</dd>' +
         '<dt>metadata</dt><dd>' + P.esc(data.training_metadata_path || '—') + '</dd>' +
         '<dt>command</dt><dd>' + P.esc((data.command_line || []).join(' ')) + '</dd>';

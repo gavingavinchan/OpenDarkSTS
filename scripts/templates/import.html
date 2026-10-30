@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenDarkSTS / Intake</title>
+  <title>OpenDarkSTS / Import imagery &amp; albums</title>
   <style>
     :root {
       --ink: #111713;
@@ -946,7 +946,7 @@
       __STAGE_NAV__
     </header>
 
-    <p class="subtitle">Byte-identical copies are recognised; re-encoded copies are treated as new images.</p>
+    <p class="subtitle">Exact copies are recognised automatically. Images saved in a different format are treated as new files.</p>
     <main id="main"></main>
   </div>
 
@@ -1231,7 +1231,7 @@
             <span>Target:</span>
             <strong>${escape(target.album_name || target.album_id)}</strong>
             <span>(append)</span>
-            <span class="album-id">${escape(target.album_id)}</span>
+
             <button class="clear-target" data-action="clear-target">New album instead</button>
           </div>
         `;
@@ -1262,7 +1262,7 @@
               <span><strong>${album.image_count || 0}</strong> img</span>
               <span><strong>${reviewLine.review_completed || 0}</strong>/${reviewLine.review_total || 0} reviewed</span>
               <span>${escape(updated || '—')}</span>
-              <span class="album-id">${escape(album.album_id)}</span>
+
             </div>
           </div>
           <div class="album-actions">
@@ -1308,17 +1308,17 @@
             <div class="intake-stamp">UNFILED</div>
             <p class="intake-eyebrow">Step 01 / Training Pipeline</p>
             <h2 class="intake-title">Bring your <em>imagery</em> into the workspace.</h2>
-            <p class="intake-lede">Pick image files or a folder. We will compute a stable <code>image_key</code>, render a browser-friendly cache, and create review stubs so manual review is ready immediately.</p>
+            <p class="intake-lede">Choose image files or a folder. Images are prepared for viewing and review; original files remain unchanged.</p>
             <div class="intake-actions">
               <button class="pick-btn" id="pickFiles">
-                <span class="glyph">⌥</span>
+                <span class="glyph" aria-hidden="true">+</span>
                 <span class="label">${escape(primaryLabel)}</span>
                 <span class="hint">${escape(primaryHint)}</span>
               </button>
               <button class="pick-btn secondary" id="pickFolder">
-                <span class="glyph">▢</span>
+                <span class="glyph" aria-hidden="true">+</span>
                 <span class="label">${target ? 'Add Folder To Album' : 'Pick Folder'}</span>
-                <span class="hint">recursive scan, hidden skipped</span>
+                <span class="hint">Includes subfolders; skips hidden files</span>
               </button>
             </div>
             ${target ? '' : `<div class="intake-actions" style="grid-template-columns:1fr;margin-top:-12px;"><button class="pick-btn secondary" id="newAlbumImport"><span class="glyph">＋</span><span class="label">Import to a NEW album…</span><span class="hint">name it first, then choose files or folder</span></button></div>`}
@@ -1343,7 +1343,7 @@
             <button class="toolbar-btn" id="pickFiles">+ Pick Images</button>
             <button class="toolbar-btn ghost" id="pickFolder">+ Pick Folder</button>
             <button class="toolbar-btn ghost" id="newAlbumImport" title="Name a new album, then pick files or folder">+ New Album…</button>
-            <span class="pill"><strong>${m.image_count}</strong> images · ${(sc.imported || 0) + (sc.regenerated_cache || 0) + (sc.already_imported || 0)} imported · ${(sc.review_only || 0)} from earlier reviews</span>
+            <span class="pill"><strong>${m.image_count}</strong> ${m.image_count === 1 ? 'image' : 'images'} · ${(sc.imported || 0) + (sc.regenerated_cache || 0) + (sc.already_imported || 0)} imported · ${(sc.review_only || 0)} from earlier reviews</span>
             <span class="pill"><strong>${state.selectedKeys.length}</strong> selected · ${matchingCount} matching filter</span>
             <select class="sort-select filter-select" id="filter">
               ${renderFilterOptions()}
@@ -1457,7 +1457,7 @@
           <td class="row-name">${escape(im.original_filename || im.image_key)}</td>
           <td>${im.width || '?'}×${im.height || '?'}</td>
           <td>${formatBytes(im.source_size_bytes)}</td>
-          <td>${escape(im.render_profile_kind || '-')}</td>
+          <td>${escape(im.render_profile_kind === 'rgb_original' ? 'Original colour' : im.render_profile_kind || '-')}</td>
           <td class="row-status"><span class="status-tag ${escape(im.import_status)}">${escape(im.import_status)}</span></td>
           <td>${formatTime(im.imported_at).slice(0, 19)}</td>
         </tr>
@@ -1515,7 +1515,7 @@
             <button class="clear-focus" data-action="album-focus-clear" title="Close album panel">× CLOSE</button>
             <p class="detail-eyebrow">Edit album details</p>
             <h3 class="detail-title">Renaming…</h3>
-            <div class="detail-key">${escape(album.album_id)}</div>
+            <details><summary>Internal album reference</summary><div class="detail-key">${escape(album.album_id)}</div></details>
             <form class="album-rename-form" data-action="album-rename-form" autocomplete="off">
               <label>Album name<input id="albumDraftName" value="${escape(draftName)}" required></label>
               <label>Description<textarea id="albumDraftDesc">${escape(draftDesc)}</textarea></label>
@@ -1555,9 +1555,9 @@
       return `
         <section class="album-dossier">
           <button class="clear-focus" data-action="album-focus-clear" title="Close album panel">× CLOSE</button>
-          <p class="detail-eyebrow">Album dossier</p>
+          <p class="detail-eyebrow">Album details</p>
           <h3 class="detail-title">${escape(album.album_name || album.album_id)}</h3>
-          <div class="detail-key">${escape(album.album_id)}</div>
+          <details><summary>Internal album reference</summary><div class="detail-key">${escape(album.album_id)}</div></details>
           ${album.album_description ? `<p style="font-family:var(--serif);font-style:italic;color:var(--ink-soft);font-size:14px;margin:0 0 12px;">${escape(album.album_description)}</p>` : ''}
           <div class="album-meta-grid">
             <div class="cell"><span class="label">Images</span><span class="value"><strong>${album.image_count || 0}</strong></span></div>
@@ -1598,7 +1598,7 @@
           <dt>Status</dt><dd class="value-strong"><span class="status-tag ${escape(im.import_status)}">${escape(im.import_status)}</span></dd>
           <dt>Dimensions</dt><dd>${im.width || '?'} × ${im.height || '?'}</dd>
           <dt>Source size</dt><dd>${formatBytes(im.source_size_bytes)}</dd>
-          <dt>Render profile</dt><dd>${escape(im.render_profile_kind || '-')}</dd>
+          <dt>Render profile</dt><dd>${escape(im.render_profile_kind === 'rgb_original' ? 'Original colour' : im.render_profile_kind || '-')}</dd>
           <dt>Loader</dt><dd>${escape(im.loader || '-')}</dd>
           <dt>Imported at</dt><dd>${formatTime(im.imported_at)}</dd>
           <dt>Updated at</dt><dd>${formatTime(im.updated_at)}</dd>
@@ -1873,20 +1873,20 @@
           <div class="stamp">UNFILED</div>
           <p class="eyebrow">Step 01.A — New Album</p>
           <h3 id="namingTitle">Name <em>this album</em>.</h3>
-          <p class="lede">An album bundles a batch of images. The name shows up in the dossier and album list; the <code>album_id</code> is generated automatically and is immutable.</p>
+          <p class="lede">An album bundles a batch of images. Choose a name that describes the images. An internal reference is assigned automatically.</p>
           <label>Album name<input id="namingAlbumName" autocomplete="off" required></label>
           <label>Description<textarea id="namingAlbumDesc" rows="2" placeholder="optional"></textarea></label>
           <div class="err" id="namingErr" style="display:none;"></div>
           <div class="pick-row">
             <button data-naming-action="pick-files">
-              <span class="glyph">⌥</span>
+              <span class="glyph" aria-hidden="true">+</span>
               <span class="label">Pick Images &amp; Import</span>
               <span class="hint">.png .jpg .tif</span>
             </button>
             <button class="secondary" data-naming-action="pick-folder">
-              <span class="glyph">▢</span>
+              <span class="glyph" aria-hidden="true">+</span>
               <span class="label">Pick Folder &amp; Import</span>
-              <span class="hint">recursive scan, hidden skipped</span>
+              <span class="hint">Includes subfolders; skips hidden files</span>
             </button>
           </div>
           <div class="footer-row">

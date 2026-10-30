@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_import_explains_byte_identity_and_bounds_both_dialogs():
     html = (ROOT / 'scripts/templates/import.html').read_text()
-    assert 'Byte-identical copies are recognised; re-encoded copies are treated as new images.' in html
+    assert 'Exact copies are recognised automatically. Images saved in a different format are treated as new files.' in html
     for selector in ('.naming-card {', '.conflict-modal {'):
         css = html.split(selector, 1)[1].split('}', 1)[0]
         assert 'max-height: calc(100dvh - 48px)' in css

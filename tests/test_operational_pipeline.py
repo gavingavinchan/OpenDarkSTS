@@ -601,15 +601,17 @@ def test_default_weights_points_at_the_promoted_weight() -> None:
 )
 def test_integration_detect_on_a_real_tile_if_weights_exist(tmp_path: Path) -> None:
     pipeline = load_module("scripts.pipeline")
-    if not pipeline.DEFAULT_WEIGHTS.exists():
-        pytest.skip("promoted weight is not available")
+    import os
+    weights = Path(os.environ.get("OPENDARKSTS_TEST_WEIGHTS", pipeline.DEFAULT_WEIGHTS))
+    if not weights.exists():
+        pytest.skip("Set OPENDARKSTS_TEST_WEIGHTS to the documented release checkpoint")
     detect = load_module("scripts.detect")
     tile = REPO_ROOT / "workspace" / "inputs" / "2020_01_04"
     if not tile.exists():
-        pytest.skip("no local tile inputs to run integration inference on")
+        tile = REPO_ROOT / "opendarksts" / "example"
     image_paths = pipeline.select_images([str(tile)], warn=lambda message: None)
     if not image_paths:
         pytest.skip("no readable tiles available")
-    detections = detect.detect_images(image_paths=image_paths[:1], weights=pipeline.DEFAULT_WEIGHTS, conf=0.25)
+    detections = detect.detect_images(image_paths=image_paths[:1], weights=weights, conf=0.25)
     for detection in detections:
         assert detection["class_name"] == "ships"
