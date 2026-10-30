@@ -25,7 +25,9 @@ def isolated(tmp_path, monkeypatch):
 
 
 def test_job_failure_persists_and_is_readable_from_cli(isolated):
-    record = jobs.submit_job("run", {"images": [str(isolated / "missing.tiff")]})
+    image = isolated / "2020-01-24_corrupt.tiff"
+    image.write_bytes(b"corrupt raster")
+    record = jobs.submit_job("run", {"images": [str(image)]})
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         record = jobs.read_job(record["job_id"])
@@ -227,7 +229,9 @@ def test_explicit_ais_preflight_uses_contents_and_rechecks_changes(isolated, mon
 def test_foreground_run_updates_jobs_and_dashboard(isolated, monkeypatch):
     summary = {'detections': 1, 'AIS_PRESENT': 1}
     monkeypatch.setattr(jobs, 'execute_job', lambda *a, **kw: {'output_dir': str(isolated / 'output'), 'summary': summary})
-    result = jobs.run_foreground('run', {'images': ['2020-01-24_scene.tiff'], 'conf': .1, 'radius': 70})
+    image = isolated / '2020-01-24_scene.tiff'
+    image.touch()
+    result = jobs.run_foreground('run', {'images': [str(image)], 'conf': .1, 'radius': 70})
     record = jobs.list_jobs()[0]
     assert record['status'] == 'completed' and record['result'] == result
     assert all(word in record['description'] for word in ['2020-01-24_scene.tiff', 'threshold 0.1', 'radius 70 m', 'UTC'])
@@ -239,8 +243,10 @@ def test_foreground_failure_is_recorded(isolated, monkeypatch):
     def fail(*a, **kw):
         raise ValueError('bad input')
     monkeypatch.setattr(jobs, 'execute_job', fail)
+    image = isolated / '2020-01-24_scene.tiff'
+    image.touch()
     with pytest.raises(ValueError, match='bad input'):
-        jobs.run_foreground('run', {'images': ['missing.tiff']})
+        jobs.run_foreground('run', {'images': [str(image)]})
     assert jobs.list_jobs()[0]['status'] == 'failed'
 
 

@@ -23,10 +23,12 @@ SENSITIVITY_PRESETS = {"Low": .10, "Medium": .25, "High": .45}
 
 def project():
     if PROJECT_PATH.is_file():
-        return json.loads(PROJECT_PATH.read_text())
+        settings = json.loads(PROJECT_PATH.read_text())
+        settings.setdefault("date_period", "date" if settings["start"] == settings["end"] else "range")
+        return settings
     return {"bbox": PRESETS["Bundled example (Gulf of Mexico)"], "start": "2020-01-24", "end": "2020-01-24",
             "images": str(WORKSPACE_DIR / "inputs" / "imagery"), "ais_dir": str(WORKSPACE_DIR / "inputs" / "ais" / "full"),
-            "confidence": .25, "radius": 1000, "max_cloud": 35}
+            "confidence": .25, "radius": 1000, "max_cloud": 35, "date_period": "date"}
 
 
 def save_project(payload):
@@ -48,6 +50,12 @@ def _save_project(payload):
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError("Unknown project settings")
     settings = {**project(), **payload}
+    if "date_period" not in payload and ("start" in payload or "end" in payload):
+        settings["date_period"] = "date" if settings["start"] == settings["end"] else "range"
+    if settings["date_period"] not in {"date", "range", "month", "year"}:
+        raise ValueError("Choose Single date, Date range, Full month, or Full year")
+    if settings["date_period"] == "date":
+        settings["end"] = settings["start"]
     settings["bbox"] = validate_bbox(settings["bbox"])
     date_range(settings["start"], settings["end"])
     for key, lower, upper in [("confidence", 0, 1), ("radius", 1, 100000), ("max_cloud", 0, 100)]:
@@ -131,6 +139,7 @@ def use_bundled_example():
         raise ValueError("The bundled example is not installed. Run opendarksts init for this workspace first.")
     return save_project({"bbox": PRESETS["Bundled example (Gulf of Mexico)"],
                          "start": "2020-01-24", "end": "2020-01-24",
+                         "date_period": "date",
                          "images": str(root), "ais_dir": str(root / "AIS_2020_01_24.csv"),
                          "confidence": .25, "radius": 1000})
 

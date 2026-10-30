@@ -124,3 +124,46 @@ def test_same_crop_from_another_run_reuses_review_and_rejects_conflicting_label(
     doc = json.loads(open(first['review_path']).read())
     assert doc['detections'][0]['review_label'] == 'ships_sts'
     assert doc['operational_source']['directory'] == str(run)
+
+
+@pytest.mark.parametrize('center', [(610, 540), (18, 22), (1580, 1180)])
+def test_training_transfer_uses_native_context_and_correct_georeference(run, center):
+    from scripts import visual_review_lib as review
+    source = results.WORKSPACE_DIR/'2020-01-04_tile_0_0.png'
+    Image.new('RGB', (1600, 1200), '#30485f').save(source)
+    row = json.loads((run/'dark_sts.json').read_text())[0]
+    row.update(cx_px=center[0], cy_px=center[1], w_px=30, h_px=24)
+    (run/'dark_sts.json').write_text(json.dumps([row]))
+    results.review_detection(run, 'one', 'real_sts')
+    crop, _, bounds = results.crop_detection(run, 'one', training_context=True)
+    transfer = results.send_to_improve(run, 'one')
+    doc = json.loads(open(transfer['review_path']).read())
+    box = doc['detections'][0]
+    assert Image.open(doc['cache_path']).size == crop.size
+    assert crop.width >= 480 and crop.height >= 480
+    assert box['width'] < .1 and box['height'] < .1
+    assert box['x_center']*crop.width+bounds[0] == pytest.approx(center[0])
+    assert box['y_center']*crop.height+bounds[1] == pytest.approx(center[1])
+    manifest = training.load_import_manifest(results.WORKSPACE_DIR/'manifests'/'training_import_manifest.json')
+    entry = manifest['images'][transfer['image_key']]
+    west, south, east, north = entry['operational_source']['bounds']
+    assert west == pytest.approx(-94.7+bounds[0]/1600*.1)
+    assert north == pytest.approx(29.2-bounds[1]/1200*.1)
+    assert east == pytest.approx(-94.7+bounds[2]/1600*.1)
+    assert south == pytest.approx(29.2-bounds[3]/1200*.1)
+    assert entry['operational_source'] == doc['operational_source']
+    sidecar = json.loads(__import__('pathlib').Path(entry['source_path']).with_suffix('.json').read_text())
+    assert sidecar['bbox'] == [west,south,east,north]
+    assert entry['render']['metadata']['bounds']['left'] == west
+
+
+def test_different_candidates_in_identical_context_keep_distinct_labels(run):
+    row = json.loads((run/'dark_sts.json').read_text())[0]
+    second = dict(row, detection_id='two', cx_px=60)
+    (run/'dark_sts.json').write_text(json.dumps([row,second]))
+    results.review_detection(run,'one','real_sts')
+    results.review_detection(run,'two','not_sts',training_label='ship_non_sts')
+    first = results.send_to_improve(run,'one')
+    second = results.send_to_improve(run,'two')
+    assert first['image_key'] != second['image_key']
+    assert json.loads(open(first['review_path']).read())['detections'][0]['review_label'] == 'ships_sts'

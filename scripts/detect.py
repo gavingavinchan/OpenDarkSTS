@@ -5,6 +5,8 @@ import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from PIL import Image
+
 if TYPE_CHECKING:  # pragma: no cover - import only for type checking
     from ultralytics import YOLO
 
@@ -31,7 +33,15 @@ def detect_image(image_path: str | Path, model: YOLO, conf: float = 0.25) -> lis
     image_width, image_height = load_image_size(image_path)
     image_date = parse_image_date(image_path)
 
-    results = model.predict(source=str(image_path), conf=conf, verbose=False)
+    # Decode 8-bit RGB GeoTIFFs with Pillow: OpenCV's TIFF reader emits "unknown
+    # field" warnings for valid georeferencing tags. RGB pixels are unchanged;
+    # other formats retain the model's usual decoder and its diagnostics.
+    source = str(image_path)
+    if image_path.suffix.lower() in {".tif", ".tiff"}:
+        with Image.open(image_path) as image:
+            if image.mode in {"RGB", "RGBA"}:
+                source = image.convert("RGB")
+    results = model.predict(source=source, conf=conf, verbose=False)
     if not results:
         return []
 

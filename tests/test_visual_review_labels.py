@@ -94,6 +94,7 @@ def test_geometry_update_without_class_preserves_saved_class() -> None:
         width=0.25,
         height=0.15,
         class_id=None,
+        user_edited=True,
     )
 
     detection = review["detections"][0]

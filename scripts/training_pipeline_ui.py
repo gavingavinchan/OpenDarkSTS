@@ -679,7 +679,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                     format = query_text(parsed, "format")
                     data = results.export_results(directory, format)
                     mime = "text/csv" if format == "csv" else "application/json"
-                    filename = "reviewed_candidates." + format
+                    filename = results.export_filename(directory, format)
                 self.send_response(200)
                 self.send_header("Content-Type", mime)
                 self.send_header("Content-Length", str(len(data)))
@@ -728,7 +728,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                     data = results.export_results(job["result"]["output_dir"], extension)
                     self.send_response(200)
                     self.send_header("Content-Type", "text/csv" if extension == "csv" else "application/json")
-                    self.send_header("Content-Disposition", f'attachment; filename="reviewed_candidates.{extension}"')
+                    filename = results.export_filename(job["result"]["output_dir"], extension)
+                    self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
@@ -1418,6 +1419,8 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         self._respond_json({
             "command_line": command_line,
+            "display_command": pipeline.display_shell_command(command_line),
+            "shell": "PowerShell" if os.name == "nt" else "bash",
             "run_dir": pipeline.repo_relative(run_dir),
             "data_yaml": pipeline.repo_relative(dataset_dir / "data.yaml"),
         })

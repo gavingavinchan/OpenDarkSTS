@@ -7,13 +7,13 @@ import tempfile
 from importlib.resources import files
 from pathlib import Path
 
-from .workspace import WORKSPACE_DIR, atomic_json, contained, current_model, default_manifest, exclusive_lock, set_current_model, sha256
+from .workspace import WORKSPACE_DIR, atomic_json, contained, current_model, default_manifest, operation_lock, set_current_model, sha256
 
 
 def initialize(*, weights=None, no_model=False, example=True):
     manifest = default_manifest()
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    with exclusive_lock(WORKSPACE_DIR / ".init.lock", blocking=True):
+    with operation_lock(WORKSPACE_DIR / ".init.lock", blocking=True):
         for name in ["inputs", "model_weights", "reports", "jobs", "reviews", "runs", "datasets", "manifests"]:
             contained(WORKSPACE_DIR / name, WORKSPACE_DIR).mkdir(parents=True, exist_ok=True)
         installed = None

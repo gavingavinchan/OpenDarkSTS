@@ -9,7 +9,7 @@ import math
 import re
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, PngImagePlugin
 
 from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock, sha256
 from .jobs import now, scan_description
@@ -72,7 +72,7 @@ def review_detection(directory, detection_id, verdict, *, reviewer="default", tr
         return decisions[detection_id]
 
 
-def crop_detection(directory, detection_id, *, annotate=False):
+def crop_detection(directory, detection_id, *, annotate=False, training_context=False):
     row = find_detection(directory, detection_id)
     source = Path(row["image_path"]).resolve()
     record = json.loads((run_directory(directory) / "run.json").read_text())
@@ -92,10 +92,17 @@ def crop_detection(directory, detection_id, *, annotate=False):
         if right <= left or bottom <= top:
             raise ValueError("Detection is outside the image")
         display_box = (max(0,left-24), max(0,top-24), min(width,right+24), min(height,bottom+24)) if annotate else (left,top,right,bottom)
+        if training_context:
+            # Native-resolution context, comparable to the 960 px training tiles.
+            # Larger boxes retain at least four box-widths of context where the
+            # source permits it. Clip the window at the original tile boundary.
+            size = max(960, math.ceil(4 * w), math.ceil(4 * h))
+            display_box = (max(0, math.floor(cx-size/2)), max(0, math.floor(cy-size/2)),
+                           min(width, math.ceil(cx+size/2)), min(height, math.ceil(cy+size/2)))
         crop = image.convert("RGB").crop(display_box)
     if annotate:
         ImageDraw.Draw(crop).rectangle((left-display_box[0],top-display_box[1],right-display_box[0],bottom-display_box[1]), outline="#eab849", width=1)
-    return crop, row, (left, top, right, bottom)
+    return crop, row, display_box if training_context else (left, top, right, bottom)
 
 
 def export_results(directory, format):
@@ -109,11 +116,21 @@ def export_results(directory, format):
         raise ValueError("Export format must be csv, json, or geojson")
     from .sts_utils import PIPELINE_CSV_FIELDS, flatten_pipeline_result
     stream = io.StringIO(newline="")
-    writer = csv.DictWriter(stream, fieldnames=[*PIPELINE_CSV_FIELDS, "human_review"])
+    review_fields = {"review_verdict": "verdict", "review_label": "training_label", "reviewer": "reviewer", "review_time": "reviewed_at"}
+    writer = csv.DictWriter(stream, fieldnames=[*PIPELINE_CSV_FIELDS, *review_fields])
     writer.writeheader()
     for row in rows:
-        writer.writerow({**flatten_pipeline_result(row), "human_review": json.dumps(row["human_review"])})
+        decision = row.get("human_review") or {}
+        writer.writerow({**flatten_pipeline_result(row), **{field: decision.get(key) or "" for field, key in review_fields.items()}})
     return stream.getvalue().encode()
+
+
+def export_filename(directory, extension):
+    root = run_directory(directory)
+    record = json.loads((root / "run.json").read_text())
+    timestamp = re.sub(r"[^0-9A-Za-z_-]", "-", str(record.get("started_at") or root.name))
+    identity = hashlib.sha256(str(root).encode()).hexdigest()[:8]
+    return f"reviewed_candidates_{timestamp[:60]}_{identity}.{extension}"
 
 
 def send_to_improve(directory, detection_id):
@@ -121,17 +138,21 @@ def send_to_improve(directory, detection_id):
     from .sts_utils import load_bbox_for_image
     root = run_directory(directory)
     with exclusive_lock(root / ".review.lock", blocking=True), exclusive_lock(WORKSPACE_DIR / ".results-import.lock", blocking=True):
-        crop, row, bounds_px = crop_detection(root, detection_id)
+        crop, row, bounds_px = crop_detection(root, detection_id, training_context=True)
         decision = row.get("human_review") or {}
         if decision.get("transfer"):
             return decision["transfer"]
         if decision.get("verdict") not in {"real_sts", "not_sts"} or not decision.get("training_label"):
             raise ValueError("A human training label is required; for not STS choose single ship or neither")
-        token = hashlib.sha256((str(root)+detection_id).encode()).hexdigest()[:20]
+        token = hashlib.sha256(("context-v1:"+str(root)+detection_id).encode()).hexdigest()[:20]
         source = contained(WORKSPACE_DIR / "inputs" / "reviewed_candidates" / f"{row['date']}_{token}.png", WORKSPACE_DIR)
         source.parent.mkdir(parents=True, exist_ok=True)
         if not source.exists():
-            crop.save(source)
+            # Different candidates may share the same context pixels. Keep their
+            # annotation identities distinct, and identical candidates deduplicable.
+            info = PngImagePlugin.PngInfo()
+            info.add_text("candidate", json.dumps([row["image_path"], *[row[k] for k in ("cx_px", "cy_px", "w_px", "h_px")]]))
+            crop.save(source, pnginfo=info)
         manifest_path = WORKSPACE_DIR / "manifests" / "training_import_manifest.json"
         reviews_dir = WORKSPACE_DIR / "reviews"
         result = training.import_training_data([source], manifest_path=manifest_path,
@@ -152,9 +173,19 @@ def send_to_improve(directory, detection_id):
         # A duplicate crop keeps its original provenance and split group.
         if not entry.get("operational_source"):
             parent_bounds = load_bbox_for_image(row["image_path"])
-            entry.setdefault("render", {}).setdefault("metadata", {})["bounds"] = list(parent_bounds)
+            with Image.open(row["image_path"]) as parent:
+                parent_width, parent_height = parent.size
+            west, south, east, north = parent_bounds
+            left, top, right, bottom = bounds_px
+            crop_bounds = [west + left/parent_width*(east-west), north-bottom/parent_height*(north-south),
+                           west + right/parent_width*(east-west), north-top/parent_height*(north-south)]
+            entry.setdefault("render", {}).setdefault("metadata", {})["bounds"] = dict(zip(("left", "bottom", "right", "top"), crop_bounds))
             entry["date"] = row["date"]
-            entry["operational_source"] = {"directory": str(root), "detection_id": detection_id, "image_path": row["image_path"], "crop_pixels": list(bounds_px)}
+            entry["operational_source"] = {"directory": str(root), "detection_id": detection_id, "image_path": row["image_path"],
+                "source_sha256": sha256(Path(row["image_path"])), "source_bounds": list(parent_bounds),
+                "crop_pixels": list(bounds_px), "bounds": crop_bounds, "crs": "EPSG:4326",
+                "candidate_pixels": {key: row[key] for key in ("cx_px", "cy_px", "w_px", "h_px")}}
+            atomic_json(source.with_suffix(".json"), {"bbox": crop_bounds, "crs": "EPSG:4326", "operational_source": entry["operational_source"]})
             training.write_json(manifest_path, manifest)
         if doc["review_status"] != "completed":
             label = decision["training_label"]
@@ -162,7 +193,9 @@ def send_to_improve(directory, detection_id):
             doc.update(review_status="completed", detail_cursor=None, date=row["date"], operational_source=entry["operational_source"])
             doc["detections"] = [{"detection_id": "human-0001", "source_type": "manual", "parent_detection_id": None,
                 "class_id": class_id, "class_name": review.CLASS_ID_TO_NAME[class_id], "confidence": None,
-                "x_center": .5, "y_center": .5, "width": 1., "height": 1., "review_label": label,
+                "x_center": (row["cx_px"] - bounds_px[0]) / crop.width,
+                "y_center": (row["cy_px"] - bounds_px[1]) / crop.height,
+                "width": row["w_px"] / crop.width, "height": row["h_px"] / crop.height, "review_label": label,
                 "reviewed": True, "reviewed_at": decision["reviewed_at"], "source_models": []}]
             review.save_review_document(doc, path)
         transfer = {"image_key": key, "review_path": str(path), "transferred_at": now()}

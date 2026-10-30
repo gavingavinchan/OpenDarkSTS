@@ -6,7 +6,7 @@ import errno
 import json
 import os
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -105,6 +105,31 @@ def exclusive_lock(path: str | Path, *, blocking=False):
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@contextmanager
+def operation_lock(legacy_path: str | Path, *, blocking=False):
+    """Keep stable lock anchors outside outputs; retire an unlocked legacy file.
+
+    Live lock anchors must never be unlinked, since waiters could then lock a
+    different inode. Only the former per-output markers are removed, after the
+    shared anchor has serialized new callers and any legacy holder has exited.
+    """
+    legacy = contained(legacy_path)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    token = hashlib.sha256(str(legacy).encode()).hexdigest()
+    with exclusive_lock(WORKSPACE_DIR / ".locks" / (token + ".lock"), blocking=blocking):
+        had_legacy = legacy.exists()
+        retire = False
+        try:
+            with ExitStack() as stack:
+                if had_legacy:
+                    stack.enter_context(exclusive_lock(legacy, blocking=False))
+                    retire = True
+                yield
+        finally:
+            if retire:
+                legacy.unlink(missing_ok=True)
 
 
 def model_selection_status(model_weights_dir: str | Path | None = None) -> dict[str, Any]:
