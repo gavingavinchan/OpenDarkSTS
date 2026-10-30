@@ -214,5 +214,13 @@ Coastal Management and US Coast Guard (Marine Cadastre).
 
 ## Citation
 
-If you use OpenDarkSTS, please cite the SNAME Maritime Convention 2026 paper
-(full reference to be added).
+If you use OpenDarkSTS, please cite:
+
+```bibtex
+@inproceedings{opendarksts2026,
+  title     = {OpenDarkSTS: Open-Source Dark Ship-to-Ship Transfers Detector},
+  author    = {Chan, Pou Hei and Dey, Madhulika and Ansari, Sohail and Koola, Paul M.},
+  booktitle = {Proceedings of the SNAME Maritime Convention},
+  year      = {2026}
+}
+```
