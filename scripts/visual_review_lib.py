@@ -789,22 +789,31 @@ def update_detection_geometry(
     width: float,
     height: float,
     class_id: int | None = None,
+    *,
+    user_edited: bool = False,
 ) -> None:
+    """Save geometry without treating display/rounding saves as human decisions.
+
+    Callers must identify a user-made edit explicitly. Existing decisions, including
+    their timestamps and rejected labels, remain intact for automatic saves.
+    """
     detection = find_detection(review, detection_id)
-    reviewed_at = utcnow_iso()
+    if not user_edited:
+        return
     x_center, y_center, width, height = clamp_bbox_to_unit(x_center, y_center, width, height)
     detection["x_center"] = clamp_norm(x_center)
     detection["y_center"] = clamp_norm(y_center)
     detection["width"] = clamp_norm(width)
     detection["height"] = clamp_norm(height)
-    if class_id is not None:
+    if class_id is not None and user_edited:
         detection["class_id"] = int(class_id)
         detection["class_name"] = CLASS_ID_TO_NAME[int(class_id)]
         detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(class_id)]
-    elif detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
+    elif user_edited and detection.get("review_label") not in EXPORTABLE_REVIEW_LABELS:
         detection["review_label"] = CLASS_ID_TO_REVIEW_LABEL[int(detection["class_id"])]
-    detection["reviewed"] = True
-    detection["reviewed_at"] = reviewed_at
+    if user_edited:
+        detection["reviewed"] = True
+        detection["reviewed_at"] = utcnow_iso()
 
 
 def label_detection(

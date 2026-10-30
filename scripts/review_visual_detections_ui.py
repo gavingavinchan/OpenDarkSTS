@@ -991,12 +991,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     function getCycleReviewedCount() {{
-      if (!state || !state.counts) return 0;
-      const total = state.counts.active_detections || 0;
-      if (total <= 0) return 0;
-      const persistedCount = getPersistedTraversalCount();
-      const liveCount = reviewCursorIndex < 0 ? 0 : Math.min(reviewCursorIndex + 1, total);
-      return Math.max(persistedCount, liveCount);
+      return state?.counts?.reviewed_active_detections || 0;
     }}
 
     function renderReviewProgress() {{
@@ -1196,7 +1191,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         );
         layer.detection = detection;
         layer.on('click', () => selectLayer(layer));
-        layer.on('edit drag', () => updateLabelPosition(layer));
+        layer.on('edit drag', () => {{
+          layer.userEdited = true;
+          updateLabelPosition(layer);
+        }});
         layer.on('dragend moveend', () => clampLayerToImageBounds(layer));
         detectionGroup.addLayer(layer);
         layerIndex.set(detection.detection_id, layer);
@@ -1217,7 +1215,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         labelIndex.set(detection.detection_id, labelMarker);
       }});
 
-      if (selectedDetectionId) {{
+      if (selectedDetectionId && state.image.review_status !== 'detail') {{
         const selectedLayer = findLayerByDetectionId(selectedDetectionId);
         if (selectedLayer) selectLayer(selectedLayer, false);
       }}
@@ -1235,7 +1233,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     async function selectLayer(layer, rerender=true) {{
-      await autoSaveGeometryIfNeeded();
+      // Rendering a cursor/selection never constitutes a review decision.
+      if (rerender) await autoSaveGeometryIfNeeded();
       disableAllEditing();
       selectedDetectionId = layer.detection.detection_id;
       layerIndex.forEach((item, detectionId) => {{
@@ -1555,6 +1554,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       await postJson('/api/save-detection', {{
         image_id: state.image.image_id,
         detection_id: selectedDetectionId,
+        user_edited: Boolean(layer.userEdited || classId !== layer.detection.class_id),
         class_id: classId,
         x_center: geometry.x_center,
         y_center: geometry.y_center,
@@ -1586,11 +1586,12 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       }}
       const classId = pendingLabel ? (pendingLabel === 'ships_sts' ? 1 : 0) : null;
       const pendingClassChange = pendingLabel && pendingLabel !== layer.detection.review_label;
-      if (!pendingClassChange && geometryMatchesDetection(geometry, layer.detection)) return;
+      if (!pendingClassChange && (!layer.userEdited || geometryMatchesDetection(geometry, layer.detection))) return;
       try {{
         const payload = {{
           image_id: state.image.image_id,
           detection_id: targetId,
+          user_edited: Boolean(layer.userEdited || pendingClassChange),
           x_center: geometry.x_center,
           y_center: geometry.y_center,
           width: geometry.width,
@@ -1598,6 +1599,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         }};
         if (classId !== null) payload.class_id = classId;
         await postJson('/api/save-detection', payload);
+        Object.assign(layer.detection, geometry, {{reviewed: true}});
+        layer.userEdited = false;
         delete layer.detection.pending_review_label;
       }} catch (e) {{
         console.warn('Autosave failed:', e);
@@ -2067,7 +2070,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 else:
                     detection_id = str(detection_id)
                     class_id = int(payload["class_id"]) if "class_id" in payload else None
-                    update_detection_geometry(review, str(detection_id), x_center, y_center, width, height, class_id=class_id)
+                    update_detection_geometry(review, str(detection_id), x_center, y_center, width, height,
+                                              class_id=class_id, user_edited=payload.get("user_edited") is True)
                 refresh_detection_crop(review, review_path, str(detection_id))
                 save_review(review, review_path)
                 self._respond_json(build_state(image_id, album_id=album_id))
