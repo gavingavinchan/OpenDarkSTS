@@ -181,3 +181,80 @@ def test_dashboard_skips_nonobject_legacy_records(isolated):
     dashboard = operations.dashboard()
     assert dashboard['training_inventory']['images'] == 0
     assert not dashboard['readiness']['ready']
+
+
+@pytest.mark.parametrize('kind', ['ais', 'imagery'])
+def test_readiness_blocks_only_downloads_of_selected_inputs(isolated, monkeypatch, kind):
+    model = isolated / 'model.pt'
+    model.touch()
+    monkeypatch.setattr(operations, 'current_model', lambda: model)
+    images = isolated / 'images'
+    images.mkdir()
+    (images / '2020-01-24_scene.tiff').touch()
+    operations.save_project({'images': str(images), 'start': '2020-01-24', 'end': '2020-01-24'})
+    selected = isolated / 'ais' if kind == 'ais' else images
+    operations.save_project({'ais_dir': str(isolated / 'ais')})
+    active = {'kind': kind, 'status': 'running', 'options': {'start': '2020-01-24', 'output_dir': str(isolated / 'unrelated')}}
+    monkeypatch.setattr(jobs, 'list_jobs', lambda: [active])
+    assert operations.detection_readiness()['ready']
+    active['options']['output_dir'] = str(selected)
+    assert not operations.detection_readiness()['ready']
+    active['options']['start'] = '2020-01-25'
+    assert operations.detection_readiness()['ready']
+    active['options']['start'] = '2020-01-24'
+    active['status'] = 'cancelled'
+    assert operations.detection_readiness()['ready']
+
+
+def test_explicit_ais_preflight_uses_contents_and_rechecks_changes(isolated, monkeypatch):
+    model = isolated / 'model.pt'
+    model.touch()
+    monkeypatch.setattr(operations, 'current_model', lambda: model)
+    image = isolated / '2020-01-24_scene.tiff'
+    image.touch()
+    csv = isolated / 'my-vessel-records.csv'
+    csv.write_text('MMSI,BaseDateTime,LAT,LON\n1,2020-01-24T01:00:00,28,-94\n')
+    operations.save_project({'images': str(image), 'ais_dir': str(csv), 'start': '2020-01-24', 'end': '2020-01-24'})
+    assert operations.detection_readiness()['ready']
+    csv.write_text('MMSI,BaseDateTime,LAT,LON\n1,unknown,28,-94\n')
+    assert 'Cannot establish' in ' '.join(operations.detection_readiness()['blockers'])
+    csv.write_text('MMSI,BaseDateTime,LAT,LON\n1,2020-01-25T01:00:00,28,-94\n')
+    assert 'no records for image date' in ' '.join(operations.detection_readiness()['blockers'])
+
+
+def test_foreground_run_updates_jobs_and_dashboard(isolated, monkeypatch):
+    summary = {'detections': 1, 'AIS_PRESENT': 1}
+    monkeypatch.setattr(jobs, 'execute_job', lambda *a, **kw: {'output_dir': str(isolated / 'output'), 'summary': summary})
+    result = jobs.run_foreground('run', {'images': ['2020-01-24_scene.tiff'], 'conf': .1, 'radius': 70})
+    record = jobs.list_jobs()[0]
+    assert record['status'] == 'completed' and record['result'] == result
+    assert all(word in record['description'] for word in ['2020-01-24_scene.tiff', 'sensitivity 0.1', 'radius 70 m', 'UTC'])
+    assert operations.dashboard()['detection_summary']['runs'] == 1
+    assert operations.dashboard()['detection_summary']['AIS_PRESENT'] == 1
+
+
+def test_foreground_failure_is_recorded(isolated, monkeypatch):
+    def fail(*a, **kw):
+        raise ValueError('bad input')
+    monkeypatch.setattr(jobs, 'execute_job', fail)
+    with pytest.raises(ValueError, match='bad input'):
+        jobs.run_foreground('run', {'images': ['missing.tiff']})
+    assert jobs.list_jobs()[0]['status'] == 'failed'
+
+
+@pytest.mark.parametrize('kind', ['ais', 'imagery'])
+def test_cancel_download_via_http_and_cli_is_cooperative(isolated, monkeypatch, kind):
+    from scripts.training_pipeline_ui import TrainingPipelineHandler
+    original_popen = subprocess.Popen
+    monkeypatch.setattr(jobs.subprocess, 'Popen', lambda *a, **kw: type('Process', (), {'pid': 12345})())
+    monkeypatch.setattr(jobs, 'process_is_alive', lambda *a: True)
+    record = operations.submit_project_job(kind)
+    monkeypatch.setattr(jobs.subprocess, 'Popen', original_popen)
+    with UiServer(TrainingPipelineHandler) as server:
+        status, cancelled = post_json_capture(server.base_url + '/api/operations/jobs/' + record['job_id'] + '/cancel', {})
+    assert status == 202 and cancelled['cancel_requested']
+    jobs.worker(record['job_id'])
+    assert jobs.read_job(record['job_id'])['status'] == 'cancelled'
+    completed = subprocess.run([sys.executable, '-m', 'scripts.application_cli', 'jobs', record['job_id'], '--cancel'], capture_output=True, text=True)
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout)['result']['status'] == 'cancelled'

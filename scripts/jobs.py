@@ -23,6 +23,23 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def scan_description(options, timestamp):
+    """Human-readable identity shared by Jobs and the Results selector."""
+    from .sts_utils import parse_image_date
+    images = options.get("images", [])
+    names = [Path(path).name for path in images]
+    source = names[0] if len(names) == 1 else f"{Path(images[0]).parent.name} ({len(names)} images)" if names else "Detection"
+    dates = set()
+    for path in images:
+        try:
+            dates.add(parse_image_date(Path(path)))
+        except ValueError:
+            pass
+    period = options.get("date") or (" to ".join([min(dates), max(dates)]) if len(dates) > 1 else next(iter(dates), "date unknown"))
+    time = datetime.fromisoformat(timestamp).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if timestamp else "time unknown"
+    return f"{source} / {period} / sensitivity {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
+
+
 def job_dir(job_id):
     if not isinstance(job_id, str) or len(job_id) != 32 or any(c not in "0123456789abcdef" for c in job_id):
         raise ValueError("Invalid job id")
@@ -84,6 +101,9 @@ def _read_job(job_id, *, reconcile=True):
         with log.open("rb") as handle:
             handle.seek(max(0, log.stat().st_size - 24000))
             record["log_tail"] = handle.read().decode("utf-8", errors="replace").splitlines()[-100:]
+    if record["kind"] == "run":
+        record["description"] = scan_description(record["options"], record.get("started_at") or record["created_at"])
+    record["cancel_requested"] = (directory / "cancel.json").is_file()
     return record
 
 
@@ -106,6 +126,49 @@ def write_job(job_id, record):
     directory = job_dir(job_id)
     with exclusive_lock(directory / ".state.lock", blocking=True):
         atomic_json(directory / "job.json", record)
+
+
+def cancel_job(job_id):
+    directory = job_dir(job_id)
+    with exclusive_lock(directory / ".state.lock", blocking=True):
+        record = _read_job(job_id)
+        if record["kind"] not in {"ais", "imagery"}:
+            raise ValueError("Only download jobs can be cancelled")
+        if record["status"] not in TERMINAL:
+            atomic_json(directory / "cancel.json", {"requested_at": now()})
+    return read_job(job_id)
+
+
+def check_cancelled(job_id):
+    if (job_dir(job_id) / "cancel.json").is_file():
+        raise acquisition.Cancelled("Download cancelled; partial files removed. Completed cached inputs are retained.")
+
+
+def run_foreground(kind, options, log=print):
+    """Record CLI execution in the same history as detached GUI workers."""
+    options = validate_options(kind, options)
+    job_id = uuid.uuid4().hex
+    directory = job_dir(job_id)
+    directory.mkdir(parents=True)
+    record = {"job_id": job_id, "kind": kind, "options": options, "status": "running",
+              "created_at": now(), "started_at": now(), "pid": os.getpid(),
+              "start_ticks": read_process_start_ticks(os.getpid())}
+    write_job(job_id, record)
+    with (directory / "job.log").open("w", encoding="utf-8") as output:
+        def logged(message):
+            print(message, file=output, flush=True)
+            log(message)
+        try:
+            with acquisition.cancellation(lambda: check_cancelled(job_id)):
+                record["result"] = execute_job(kind, options, log=logged)
+            record["status"] = "completed"
+            return record["result"]
+        except (Exception, KeyboardInterrupt) as exc:
+            record.update(status="cancelled" if isinstance(exc, (acquisition.Cancelled, KeyboardInterrupt)) else "failed", error=str(exc))
+            raise
+        finally:
+            record["ended_at"] = now()
+            write_job(job_id, record)
 
 
 def list_jobs(*, include_training=False):
@@ -190,11 +253,16 @@ def worker(job_id):
     record.update(status="running", started_at=now())
     write_job(job_id, record)
     try:
-        record["result"] = execute_job(record["kind"], record["options"], log=lambda message: print(message, flush=True))
+        with acquisition.cancellation(lambda: check_cancelled(job_id)):
+            record["result"] = execute_job(record["kind"], record["options"], log=lambda message: print(message, flush=True))
+            check_cancelled(job_id)
         if record.get('project_update') and record['result'].get('files'):
             from .operations import apply_project_update
             record['project_update_applied'] = apply_project_update(record['project_update'])
         record["status"] = "completed"
+    except acquisition.Cancelled as exc:
+        record.update(status="cancelled", error=str(exc))
+        print(str(exc), flush=True)
     except Exception as exc:
         record.update(status="failed", error=str(exc))
         print(str(exc), flush=True)

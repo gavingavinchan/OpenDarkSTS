@@ -81,8 +81,8 @@ def detection_readiness(settings=None):
             blockers.append("No detection model is available. Initialize the workspace or select a model in Improve.")
     except (ValueError, OSError) as exc:
         blockers.append(str(exc))
-    if any(job["kind"] in {"ais", "imagery"} and job["status"] not in jobs.TERMINAL for job in jobs.list_jobs()):
-        blockers.append("Wait for the active downloads to finish before starting detection.")
+    if any(download_overlaps_inputs(job, settings) for job in jobs.list_jobs()):
+        blockers.append("Wait for the download of the selected inputs to finish, or cancel it in Jobs before starting detection.")
     ais = Path(settings["ais_dir"]).expanduser()
     has_ais = bool(str(settings["ais_dir"]).strip()) and ((ais.is_file() and ais.suffix.lower() == ".csv") or (ais.is_dir() and any(
         path.is_file() and path.suffix.lower() == ".csv" for path in ais.rglob("*"))))
@@ -98,6 +98,20 @@ def detection_readiness(settings=None):
         except (ValueError, OSError) as exc:
             blockers.append(str(exc))
     return {"ready": not blockers, "image_count": len(images), "blockers": blockers, "warnings": warnings}
+
+
+def download_overlaps_inputs(job, settings):
+    """Only acquisition jobs writing the selected source and dates block a scan."""
+    kind = job["kind"]
+    if kind not in {"ais", "imagery"} or job["status"] in jobs.TERMINAL:
+        return False
+    options = job["options"]
+    if not set(date_range(options["start"], options.get("end"))) & set(date_range(settings["start"], settings["end"])):
+        return False
+    default = WORKSPACE_DIR / "inputs" / ("ais" if kind == "ais" else "imagery")
+    output = Path(options.get("output_dir") or default).expanduser().resolve()
+    selected = Path(settings["ais_dir" if kind == "ais" else "images"]).expanduser().resolve()
+    return selected.is_relative_to(output) or output.is_relative_to(selected)
 
 
 def dashboard():

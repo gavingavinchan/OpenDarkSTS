@@ -746,6 +746,11 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                 result = jobs.submit_job(kind, payload["options"]) if "options" in payload else operations.submit_project_job(kind)
                 self._log_training_action("start_operation", {"job_id": result["job_id"], "kind": kind})
                 self._respond_json(result, status=202)
+            elif path.startswith("/api/operations/jobs/") and path.endswith("/cancel"):
+                job_id = unquote(path[len("/api/operations/jobs/"):-len("/cancel")])
+                result = jobs.cancel_job(job_id)
+                self._log_training_action("cancel_operation", {"job_id": job_id, "kind": result["kind"]})
+                self._respond_json(result, status=202)
             else:
                 self._respond_json({"error": "not found"}, status=404)
         except (ValueError, OSError) as exc:
