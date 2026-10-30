@@ -159,7 +159,12 @@
       const currentPreset = Object.entries(dashboard.presets).find(([, bbox]) => bbox.every((value, i) => Math.abs(value - settings.bbox[i]) < .00001));
       if (currentPreset) $('preset').value = currentPreset[0];
       $('preset').onchange = () => { if (dashboard.presets[$('preset').value]) drawBounds(dashboard.presets[$('preset').value], true); P.logInteraction('choose_area_preset', {preset: $('preset').value}); };
-      ['west','south','east','north'].forEach(id => $(id).onchange = () => { $('preset').value = ''; drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false); });
+      ['west','south','east','north'].forEach(id => $(id).onchange = () => {
+        $('preset').value = '';
+        const values = ['west','south','east','north'].map(key => $(key).value.trim());
+        if (values.some(value => value === '')) return;
+        drawBounds(values.map(Number), false);
+      });
       ['start','end','images'].forEach(key => $(key).value = settings[key]);
       $('datePeriod').value = settings.date_period || (settings.start === settings.end ? 'date' : 'range');
       function applyDatePeriod() {

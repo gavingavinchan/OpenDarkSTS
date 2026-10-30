@@ -128,3 +128,24 @@ def test_import_tip_help_model_card_and_public_paths():
     assert 'Edit in Annotation' in (ROOT/'scripts/templates/bbox_overview.html').read_text()
     for file in ['training_pipeline_cli.md','paper_release_alignment.md','yolo_weight_recreation.md']:
         assert '/home/gavin/' not in (ROOT/'docs'/file).read_text()
+
+
+def test_coordinate_blur_does_not_turn_empty_input_into_zero():
+    source=(ROOT/'scripts/templates/static/operations.js').read_text()
+    run_js(r'''
+const assert=require('assert/strict'),elements={};
+const el=id=>elements[id]||=({value:'',textContent:'',disabled:false,hidden:true,add(){},addEventListener(){},classList:{toggle(){}}});
+const settings={bbox:[-95,28,-94,29],date_period:'date',start:'2020-01-24',end:'2020-01-24',images:'/example'};
+const document={body:{dataset:{page:'area'}},getElementById:el,querySelectorAll:()=>[]};
+let saves=0;
+const window={Pipeline:{api:async(path,options)=>{if(options.body){saves++;return {}}return {project:settings,presets:{}}},setStatus:(node,text)=>node.textContent=text,logInteraction(){}}};
+const location={search:''},Option=function(){};
+(async()=>{
+'''+'await '+source.rstrip().rstrip(';')+r''';
+el('east').value='';el('east').onchange();
+assert.equal(el('east').value,'');
+await el('areaForm').onsubmit({preventDefault(){}});
+assert.equal(saves,0);
+assert.match(el('areaError').textContent,/Enter a coordinate for east/);
+})().catch(e=>{console.error(e);process.exitCode=1});
+''')
