@@ -763,3 +763,7 @@ Local validation copies also reside in this worktree's gitignored
 `workspace/model_weights/` and isolated installed-example workspaces under
 `workspace/reports/`. All are byte-identical to the source checkpoint and covered
 by this recipe. No `.pt` file is committed.
+
+## User workspace promotion records
+
+Improve and CLI promotion preserve `<target-name>.recreation.json` adjacent to each promoted workspace checkpoint. These records preserve the recorded command, configuration, dataset hashes, source revision, environment, weight hash, and known reproducibility gaps. User-trained checkpoints do not require edits to this tracked document. The bundled default filename is reserved so restoration remains possible. Legacy runs without training metadata require an explicit existing recreation recipe, which is copied into the adjacent record.

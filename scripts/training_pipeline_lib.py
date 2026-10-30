@@ -24,11 +24,11 @@ from PIL import Image
 
 try:
     from . import visual_review_lib as review_lib
-    from .workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock, contained
+    from .workspace import current_model, set_current_model, model_selection_status, restore_default_model, default_manifest, WORKSPACE_DIR, exclusive_lock, contained
     from . import process_support
 except ImportError:
     import visual_review_lib as review_lib
-    from workspace import current_model, set_current_model, WORKSPACE_DIR, exclusive_lock, contained
+    from workspace import current_model, set_current_model, model_selection_status, restore_default_model, default_manifest, WORKSPACE_DIR, exclusive_lock, contained
     import process_support
 
 try:
@@ -2593,6 +2593,11 @@ def check_training_readiness(selection_path: str | Path, training_config: str | 
     output_root = config.get("output_dir") or WORKSPACE_DIR / "runs"
     if run_name:
         run_dir = resolve_training_run_ref(output_root, str(run_group), str(run_name))
+        live = active_run_process(run_dir)
+        if live:
+            missing.append("This training setup is already running")
+            return {"ready": False, "missing": missing, "warnings": warnings,
+                    "already_running": True, "run_dir": repo_relative(run_dir), "pid": live.get("pid")}
         if run_dir.exists() and not bool(config.get("overwrite")):
             missing.append("output run name would overwrite an existing run; enable overwrite to proceed")
 
@@ -2990,12 +2995,15 @@ def write_training_metadata(
     if not data_yaml.exists():
         raise FileNotFoundError(f"data.yaml not found next to dataset manifest: {data_yaml}")
 
+    training_config = load_json(config_file)
+    starting_weight = repo_resolve(training_config["model"]) if training_config.get("model") else None
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "training_config_path": str(config_file),
         "training_config_sha256": file_hash(config_file),
-        "training_config": load_json(config_file),
+        "training_config": training_config,
+        "starting_weight_sha256": file_hash(starting_weight) if starting_weight and starting_weight.is_file() else None,
         "dataset_manifest_path": str(dataset_manifest_file),
         "dataset_manifest_sha256": file_hash(dataset_manifest_file),
         "data_yaml_path": str(data_yaml),
@@ -3025,8 +3033,9 @@ def evaluation_markdown(report: dict[str, Any]) -> str:
         f"# Evaluation: {report['run_group']}",
         "",
         f"Generated: {report['generated_at']}",
+        f"Recommended/selected: {report['recommendation']['run_name'] or 'none'}",
         f"Promoted: {promoted_text}",
-        f"Reason: {promotion['reason']}",
+        f"Selection reason: {report['recommendation']['reason']}",
         "",
         "## Runs",
         "",
@@ -3076,17 +3085,25 @@ def write_evaluation_report(
     validate_run_segment(str(run_group), "run_group")
     output_dir = contained(repo_resolve(reports_dir), WORKSPACE_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
+    actual_run = None
+    record_path = WORKSPACE_DIR / "model_weights" / "current.json"
+    if record_path.is_file():
+        try:
+            record = load_json(record_path)
+            if record.get("run_group") == run_group:
+                current_model(WORKSPACE_DIR / "model_weights")
+                actual_run = record.get("run_name")
+        except (ValueError, OSError):
+            pass
     report = {
         "schema_version": SCHEMA_VERSION,
         "run_group": run_group,
         "generated_at": generated_at or utcnow_iso_for_training(),
         "runs": runs,
         "baseline": baseline,
-        "promotion": {
-            "promoted": promoted_run_name is not None,
-            "run_name": promoted_run_name,
-            "reason": promotion_reason,
-        },
+        "recommendation": {"run_name": promoted_run_name, "reason": promotion_reason},
+        "promotion": {"promoted": actual_run is not None, "run_name": actual_run,
+                      "reason": "Current operational model" if actual_run else "No current promotion from this run group"},
     }
     json_path = output_dir / f"{run_group}_evaluation.json"
     markdown_path = contained(output_dir / f"{run_group}_evaluation.md", WORKSPACE_DIR)
@@ -3180,6 +3197,15 @@ def weight_recreation_doc_text(doc_path: str | Path = WEIGHT_RECREATION_DOC) -> 
 
 def weight_is_documented(weight_path: str | Path, *, doc_text: str | None = None, doc_path: str | Path = WEIGHT_RECREATION_DOC) -> bool:
     text = weight_recreation_doc_text(doc_path) if doc_text is None else doc_text
+    candidate = repo_resolve(weight_path)
+    record_path = candidate.with_suffix(".recreation.json")
+    if record_path.is_file() and candidate.is_file():
+        try:
+            record = load_json(record_path)
+            if record.get("sha256") == file_hash(candidate) and (record.get("training_metadata") or record.get("legacy_recreation_document")):
+                return True
+        except (ValueError, OSError):
+            pass
     if not text:
         return False
     candidate = Path(str(weight_path))
@@ -4189,7 +4215,8 @@ def build_run_group_evaluation_report(
         "run_group": run_group,
         "run_count": len(runs),
         "runs": runs,
-        "promoted_run_name": promoted_run_name,
+        "selected_run_name": promoted_run_name,
+        "promoted_run_name": load_json(paths["json_path"])["promotion"]["run_name"],
         "promotion_reason": promotion_reason or auto_reason,
         "report_path": repo_relative(paths["json_path"]),
         "report_markdown_path": repo_relative(paths["markdown_path"]),
@@ -4256,7 +4283,7 @@ def promote_weight(
     run_group: str,
     run_name: str,
     target_name: str,
-    recreation_doc_updated: bool,
+    recreation_doc_updated: bool = False,
     runs_dir: str | Path = DEFAULT_RUNS_DIR,
     model_weights_dir: str | Path = DEFAULT_MODEL_WEIGHTS_DIR,
     doc_path: str | Path = WEIGHT_RECREATION_DOC,
@@ -4265,8 +4292,10 @@ def promote_weight(
     clean_target = str(target_name or "").strip()
     if not clean_target:
         raise ValueError("target_name is required")
-    if not clean_target.endswith(".pt"):
+    if not clean_target.lower().endswith(".pt"):
         clean_target += ".pt"
+    if clean_target.casefold() == default_manifest()["filename"].casefold():
+        raise ValueError("The bundled default is reserved; choose a different target_name")
     if "/" in clean_target or "\\" in clean_target:
         raise ValueError("target_name must be a bare filename, not a path")
 
@@ -4276,26 +4305,57 @@ def promote_weight(
         raise ValueError(f"Run weights not found: {repo_relative(source)}")
 
     destination = contained(repo_resolve(model_weights_dir) / clean_target, WORKSPACE_DIR)
-    if not recreation_doc_updated:
-        raise ValueError(
-            "Refusing to promote: pass recreation_doc_updated after documenting the weight in docs/yolo_weight_recreation.md"
-        )
-    doc_text = weight_recreation_doc_text(doc_path)
-    if not doc_mentions_weight_name(clean_target, doc_text):
-        raise ValueError(
-            f"Refusing to promote: {clean_target} is not mentioned in docs/yolo_weight_recreation.md; document it first"
-        )
+    metadata_path = run_dir / TRAINING_METADATA_FILENAME
+    if metadata_path.is_file():
+        metadata = load_json(metadata_path)
+        required = ("command_line", "training_config", "training_config_sha256",
+                    "dataset_manifest_sha256", "data_yaml_sha256", "git", "package_versions")
+        missing = [key for key in required if not metadata.get(key)]
+        if missing:
+            raise ValueError("Training recreation metadata is incomplete: " + ", ".join(missing))
+        provenance = {"training_metadata": metadata}
+        gaps = ["Exact numerical reproduction can vary with hardware and library versions."]
+        # Preserve available inputs as well as their recorded training-time hashes.
+        for name, path_key, hash_key in (
+            ("dataset_manifest", "dataset_manifest_path", "dataset_manifest_sha256"),
+            ("data_yaml", "data_yaml_path", "data_yaml_sha256"),
+        ):
+            input_path = repo_resolve(metadata[path_key]) if metadata.get(path_key) else None
+            if input_path and input_path.is_file() and file_hash(input_path) == metadata[hash_key]:
+                provenance[name] = input_path.read_text(encoding="utf-8")
+            else:
+                gaps.append(f"{name} is unavailable or has changed; retain the original input matching its recorded hash.")
+        if not metadata["git"].get("commit") or metadata["git"].get("dirty"):
+            gaps.append("Source revision is unavailable or includes uncommitted changes; retain the original application source.")
+        if not metadata.get("starting_weight_sha256"):
+            gaps.append("Starting weight hash was not recorded by this training version; retain the model named in training_config.")
+    else:
+        # Older/manual runs may still use an explicit existing recreation recipe.
+        doc_text = weight_recreation_doc_text(doc_path)
+        if not recreation_doc_updated or not doc_mentions_weight_name(clean_target, doc_text):
+            raise ValueError("Training recreation metadata is missing; train through Improve to record provenance automatically, "
+                             "or supply a documented legacy recreation recipe with recreation_doc_updated")
+        provenance = {"legacy_recreation_document": doc_text}
+        gaps = ["Legacy run: training metadata was not recorded; see the supplied recreation recipe."]
     if destination.exists() and not overwrite:
         raise ValueError(f"Refusing to overwrite existing weight {repo_relative(destination)}; pass overwrite to replace it")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = file_hash(source)
+    recreation_path = contained(destination.with_suffix(".recreation.json"), WORKSPACE_DIR)
+    write_json(recreation_path, {
+        "schema_version": SCHEMA_VERSION, "created_at": utcnow_iso_for_training(),
+        "filename": clean_target, "sha256": digest, "source_path": repo_relative(source),
+        "run_group": run_group, "run_name": run_name, "reproducibility_gaps": gaps, **provenance,
+    })
     shutil.copy2(source, destination)
-    set_current_model(destination, run_group=run_group, run_name=run_name, metrics=run_evaluation_summary(run_dir)["validation_metrics"])
+    set_current_model(destination, recreation_path=repo_relative(recreation_path), run_group=run_group, run_name=run_name, metrics=run_evaluation_summary(run_dir)["validation_metrics"])
     return {
         "run_group": str(run_group),
         "run_name": str(run_name),
         "source_path": repo_relative(source),
         "promoted_path": repo_relative(destination),
+        "recreation_path": repo_relative(recreation_path),
         "sha256": file_hash(destination),
         "size_bytes": destination.stat().st_size,
         "documented": True,

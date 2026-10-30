@@ -660,6 +660,7 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
                                  reviewer=payload.get("reviewer") or IMPORT_REVIEWER, training_label=payload.get("training_label"))
                 elif path == "/api/results/improve":
                     result = results.send_to_improve(payload["directory"], payload["detection_id"])
+                    review_ui.invalidate_review_queue_cache()
                 else:
                     raise ValueError("Unknown results action")
                 self._log_training_action(path.rsplit("/", 1)[-1], {"detection_id": payload.get("detection_id"), "verdict": payload.get("verdict")})
@@ -824,6 +825,12 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
         if path == "/api/training/exported-datasets":
             self._handle_list_exported_datasets()
             return
+        if path == "/api/training/model":
+            try:
+                self._respond_json(pipeline.model_selection_status(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
+            except ValueError as exc:
+                self._respond_json({"error": str(exc)}, status=400)
+            return
         if path == "/api/training/configs":
             self._handle_list_training_configs()
             return
@@ -917,6 +924,14 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/training/evaluation-report":
             self._handle_write_evaluation_report()
+            return
+        if parsed.path == "/api/training/restore-default":
+            try:
+                result = pipeline.restore_default_model(pipeline.DEFAULT_MODEL_WEIGHTS_DIR)
+                self._log_training_action("restore_default_model", result)
+                self._respond_json(result)
+            except ValueError as exc:
+                self._respond_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/training/promote-weight":
             self._handle_promote_weight()
@@ -1401,10 +1416,15 @@ class TrainingPipelineHandler(BaseHTTPRequestHandler):
             payload = self._json_body()
             selection_path = payload["selection_path"]
             config_path = payload["config_path"]
+            config = pipeline.load_json(config_path)
+            run_dir = pipeline.run_dir_for_config(config)
+            live = pipeline.active_run_process(run_dir)
+            if live:
+                raise pipeline.TrainingRunActiveError("This training setup is already running", run_dir=pipeline.repo_relative(run_dir), pid=live.get("pid"))
             readiness = pipeline.check_training_readiness(selection_path, config_path)
             if not readiness["ready"]:
                 self._log_training_action("start_training_blocked", {"config_path": str(config_path), "missing": readiness["missing"]})
-                self._respond_json({"error": "Training is not ready", "missing": readiness["missing"]}, status=409)
+                self._respond_json({**readiness, "error": "This training setup is already running" if readiness.get("already_running") else "Training is not ready"}, status=409)
                 return
             result = pipeline.start_training_run(selection_path, config_path)
         except pipeline.TrainingRunActiveError as exc:

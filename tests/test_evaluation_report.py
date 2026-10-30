@@ -46,14 +46,15 @@ def test_write_evaluation_report_outputs_json_and_markdown(tmp_path: Path) -> No
     assert report["runs"] == runs
     assert report["baseline"] == baseline
     assert report["promotion"] == {
-        "promoted": True,
-        "run_name": "yolo26n_fixture",
-        "reason": "Highest test mAP50 with better STS-class performance.",
+        "promoted": False,
+        "run_name": None,
+        "reason": "No current promotion from this run group",
     }
 
     markdown = md_path.read_text()
     assert "# Evaluation: fixture_group" in markdown
-    assert "Promoted: yolo26n_fixture" in markdown
+    assert "Recommended/selected: yolo26n_fixture" in markdown
+    assert "Promoted: none" in markdown
     assert "Highest test mAP50" in markdown
     assert "yolov8n_fixture" in markdown
     assert "yolo26n_fixture" in markdown
@@ -77,7 +78,7 @@ def test_write_evaluation_report_records_non_promotion_reason(tmp_path: Path) ->
     assert report["promotion"] == {
         "promoted": False,
         "run_name": None,
-        "reason": "No completed runs were available for evaluation.",
+        "reason": "No current promotion from this run group",
     }
     assert "Promoted: none" in result["markdown_path"].read_text()
 

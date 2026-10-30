@@ -105,3 +105,23 @@ def exclusive_lock(path: str | Path, *, blocking=False):
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def model_selection_status(model_weights_dir: str | Path | None = None) -> dict[str, Any]:
+    root = Path(model_weights_dir or WORKSPACE_DIR / "model_weights").resolve()
+    manifest = default_manifest()
+    selected = current_model(root)
+    default = contained(root / manifest["filename"], root)
+    available = default.is_file() and sha256(default) == manifest["sha256"]
+    return {"current_model": str(selected), "default_model": manifest["filename"],
+            "default_available": available, "is_default": available and selected == default}
+
+
+def restore_default_model(model_weights_dir: str | Path | None = None) -> dict[str, Any]:
+    root = contained(model_weights_dir or WORKSPACE_DIR / "model_weights")
+    manifest = default_manifest()
+    default = contained(root / manifest["filename"], root)
+    if not default.is_file() or sha256(default) != manifest["sha256"]:
+        raise ValueError("Bundled default is missing or its checksum changed; run opendarksts init to restore it")
+    set_current_model(default, source_url=manifest["url"], metrics=manifest["metrics"])
+    return model_selection_status(root)

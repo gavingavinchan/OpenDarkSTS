@@ -617,8 +617,8 @@ def command_list_starting_weights(args: argparse.Namespace) -> tuple[int, dict[s
 def command_start_training(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     readiness = pipeline.check_training_readiness(args.selection, args.config)
     if not readiness["ready"]:
-        result = {"ready": False, "missing": list(readiness["missing"])}
-        return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["Training is not ready"])
+        result = dict(readiness)
+        return 3, envelope("start-training", ok=False, result=result, warnings=list(readiness.get("warnings") or []), errors=["This training setup is already running" if readiness.get("already_running") else "Training is not ready"])
     try:
         result = pipeline.start_training_run(
             args.selection,
@@ -693,21 +693,21 @@ def command_run_test_split(args: argparse.Namespace) -> tuple[int, dict[str, Any
     return 0, envelope("run-test-split", ok=True, result=result)
 
 
+def command_restore_default(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    try:
+        result = pipeline.restore_default_model(args.model_weights_dir)
+    except ValueError as exc:
+        return 2, envelope("restore-default-model", ok=False, errors=[str(exc)])
+    return 0, envelope("restore-default-model", ok=True, result=result)
+
+
 def command_promote_weight(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
-    if not bool(args.recreation_doc_updated):
-        return 2, envelope(
-            "promote-weight",
-            ok=False,
-            errors=[
-                "Refusing to promote without --recreation-doc-updated; document the weight in docs/yolo_weight_recreation.md first"
-            ],
-        )
     try:
         result = pipeline.promote_weight(
             run_group=args.run_group,
             run_name=args.run_name,
             target_name=args.target_name,
-            recreation_doc_updated=True,
+            recreation_doc_updated=bool(args.recreation_doc_updated),
             runs_dir=args.runs_dir,
             model_weights_dir=args.model_weights_dir,
             overwrite=bool(args.overwrite),
@@ -979,7 +979,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
     evaluation_parser.add_argument("--reports-dir", default=str(pipeline.WORKSPACE_DIR / "reports"))
     evaluation_parser.add_argument("--baseline", help="Path to a baseline metrics JSON file")
-    evaluation_parser.add_argument("--promote-run-name", help="Force the promoted run instead of picking the best mAP50")
+    evaluation_parser.add_argument("--promote-run-name", help="Select the recommended run instead of picking the best mAP50; this does not promote a model")
     evaluation_parser.add_argument("--promotion-reason")
     evaluation_parser.add_argument("--include-runs", action="store_true")
     evaluation_parser.set_defaults(handler=command_write_evaluation_report)
@@ -995,11 +995,15 @@ def build_parser() -> argparse.ArgumentParser:
     test_split_parser.add_argument("--python-executable")
     test_split_parser.set_defaults(handler=command_run_test_split)
 
+    restore_parser = subparsers.add_parser("restore-default-model")
+    restore_parser.add_argument("--model-weights-dir", default=str(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
+    restore_parser.set_defaults(handler=command_restore_default)
+
     promote_parser = subparsers.add_parser("promote-weight")
     promote_parser.add_argument("--run-group", required=True)
     promote_parser.add_argument("--run-name", required=True)
     promote_parser.add_argument("--target-name", required=True, help="Destination filename under workspace/model_weights/")
-    promote_parser.add_argument("--recreation-doc-updated", action="store_true", help="Acknowledge docs/yolo_weight_recreation.md is already updated")
+    promote_parser.add_argument("--recreation-doc-updated", action="store_true", help="Legacy runs only: acknowledge an existing recreation recipe; Improve runs record provenance automatically")
     promote_parser.add_argument("--runs-dir", default=str(pipeline.DEFAULT_RUNS_DIR))
     promote_parser.add_argument("--model-weights-dir", default=str(pipeline.DEFAULT_MODEL_WEIGHTS_DIR))
     promote_parser.add_argument("--overwrite", action="store_true")

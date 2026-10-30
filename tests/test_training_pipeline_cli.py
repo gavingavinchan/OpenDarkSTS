@@ -1621,7 +1621,8 @@ def test_cli_start_training_status_and_evaluation_round_trip(tmp_path: Path) -> 
     report_envelope = parse_envelope(report)
     assert_envelope(report_envelope, command="write-evaluation-report", ok=True)
     assert report_envelope["result"]["run_count"] == 1
-    assert report_envelope["result"]["promoted_run_name"] == "fixture_run"
+    assert report_envelope["result"]["selected_run_name"] == "fixture_run"
+    assert report_envelope["result"]["promoted_run_name"] is None
     assert (tmp_path / "reports" / "fixture_group_evaluation.json").is_file()
     assert "fixture_run" in (tmp_path / "reports" / "fixture_group_evaluation.md").read_text()
 
@@ -1684,7 +1685,7 @@ def test_cli_training_status_requires_pipeline_managed_run(tmp_path: Path) -> No
     assert "No pipeline-managed training run" in envelope["errors"][0]
 
 
-def test_cli_promote_weight_requires_acknowledgement_and_documentation(tmp_path: Path) -> None:
+def test_cli_promote_weight_requires_provenance_for_legacy_runs(tmp_path: Path) -> None:
     run_dir = tmp_path / "runs" / "fixture_group" / "fixture_run" / "weights"
     run_dir.mkdir(parents=True)
     (run_dir / "best.pt").write_bytes(b"fake-best")
@@ -1701,7 +1702,7 @@ def test_cli_promote_weight_requires_acknowledgement_and_documentation(tmp_path:
     assert without_flag.returncode == 2
     envelope = parse_envelope(without_flag)
     assert_envelope(envelope, command="promote-weight", ok=False)
-    assert "--recreation-doc-updated" in envelope["errors"][0]
+    assert "metadata is missing" in envelope["errors"][0]
     assert not weights_dir.exists()
 
     undocumented = run_cli(
@@ -1716,7 +1717,7 @@ def test_cli_promote_weight_requires_acknowledgement_and_documentation(tmp_path:
     assert undocumented.returncode == 2
     envelope = parse_envelope(undocumented)
     assert_envelope(envelope, command="promote-weight", ok=False)
-    assert "yolo_weight_recreation.md" in envelope["errors"][0]
+    assert "metadata is missing" in envelope["errors"][0]
     assert not weights_dir.exists()
 
 

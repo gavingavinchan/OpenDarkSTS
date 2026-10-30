@@ -50,8 +50,8 @@
         <section class="card">
           <h2>Evaluation Report</h2>
           <div class="grid2">
-            <label class="field"><span>Promoted run (optional)</span><select id="promotedRun"><option value="">Auto: best mAP50</option></select></label>
-            <label class="field"><span>Promotion reason (optional)</span><input id="promotionReason" placeholder="why this run wins"></label>
+            <label class="field"><span>Recommended run (optional)</span><select id="promotedRun"><option value="">Auto: best mAP50</option></select></label>
+            <label class="field"><span>Selection reason (optional)</span><input id="promotionReason" placeholder="why this run wins"></label>
           </div>
           <div class="row">
             <button id="writeReport" class="primary" type="button" disabled>Write Evaluation Report</button>
@@ -63,14 +63,14 @@
 
         <section class="card">
           <h2>Promote Weight</h2>
-          <p class="hint">Promotion is a two-step flow. The backend refuses until <code>docs/yolo_weight_recreation.md</code> already documents the target weight name. Update the doc first, then acknowledge below and retry.</p>
+          <p class="hint">Promotion saves a recreation record beside the weight in your workspace, using the command, configuration, dataset hashes, source revision, and environment recorded during training.</p>
+          <p id="currentModel" class="hint">Loading current model…</p>
+          <button id="restoreDefault" type="button">Restore default YOLO11s</button>
+          <div class="status" id="modelStatus"></div>
           <div class="grid2">
             <label class="field"><span>Run to promote</span><select id="promoteRun"></select></label>
             <label class="field"><span>Target weight name</span><input id="targetName" placeholder="yolo26n_myrun_2026-01-01_best.pt"></label>
           </div>
-          <label class="row check" style="font-size:12px;">
-            <input id="ackDoc" type="checkbox"> I have updated docs/yolo_weight_recreation.md for this weight name
-          </label>
           <label class="row check" style="font-size:12px;">
             <input id="overwriteWeight" type="checkbox"> Overwrite an existing promoted weight with this name
           </label>
@@ -229,13 +229,13 @@
         const data = await P.api('/api/training/evaluation-report', { method: 'POST', body: payload });
         state.runs = data.runs || state.runs;
         renderResults();
-        if (data.promoted_run_name) {
-          document.getElementById('promoteRun').value = data.promoted_run_name;
+        if (data.selected_run_name) {
+          document.getElementById('promoteRun').value = data.selected_run_name;
           updatePromoteButton();
         }
         await loadReport(true);
         P.setStatus('reportStatus', 'Wrote ' + data.report_markdown_path + ' (' + data.run_count +
-          ' runs; promoted ' + (data.promoted_run_name || 'none') + ').', 'ok');
+          ' runs; recommended ' + (data.selected_run_name || 'none') + ').', 'ok');
       } catch (error) {
         P.setStatus('reportStatus', 'Report failed: ' + error.message, 'err');
       }
@@ -266,7 +266,6 @@
     async function promoteWeight() {
       const runName = document.getElementById('promoteRun').value;
       const targetName = document.getElementById('targetName').value.trim();
-      const ack = document.getElementById('ackDoc').checked;
       const detail = document.getElementById('promoteDetail');
       P.setStatus('promoteStatus', 'Promoting ' + runName + '…');
       try {
@@ -276,23 +275,36 @@
             run_group: state.group,
             run_name: runName,
             target_name: targetName,
-            recreation_doc_updated: ack,
             overwrite: document.getElementById('overwriteWeight').checked,
           },
         });
         detail.style.display = 'block';
         detail.textContent = JSON.stringify(data, null, 2);
-        P.setStatus('promoteStatus', 'Promoted to ' + data.promoted_path + '.', 'ok');
+        P.setStatus('promoteStatus', 'Promoted to ' + data.promoted_path + '. Recreation record: ' + data.recreation_path, 'ok');
+        await loadCurrentModel();
       } catch (error) {
         detail.style.display = 'block';
-        detail.textContent = 'Backend refusal:\n\n' + error.message +
-          '\n\nStep 1: add this weight name and its recreation recipe to docs/yolo_weight_recreation.md.' +
-          '\nStep 2: tick the acknowledgement box above and press Promote again.';
+        detail.textContent = 'Promotion could not complete:\n\n' + error.message;
         P.setStatus('promoteStatus', 'Promotion refused — see the refusal text below.', 'err');
       }
     }
 
+    async function loadCurrentModel() {
+      const data = await P.api('/api/training/model');
+      document.getElementById('currentModel').textContent = 'Current model: ' + data.current_model + (data.is_default ? ' (bundled default YOLO11s)' : '');
+      document.getElementById('restoreDefault').disabled = data.is_default;
+    }
+
+    async function restoreDefault() {
+      try {
+        await P.api('/api/training/restore-default', { method: 'POST', body: {} });
+        await loadCurrentModel();
+        P.setStatus('modelStatus', 'Restored bundled default YOLO11s. Detect will use it for new scans.', 'ok');
+      } catch (error) { P.setStatus('modelStatus', error.message, 'err'); }
+    }
+
     function wire() {
+      document.getElementById('restoreDefault').addEventListener('click', restoreDefault);
       document.getElementById('loadGroup').addEventListener('click', loadGroupResults);
       document.getElementById('refreshGroups').addEventListener('click', function () { loadGroups(); });
       document.getElementById('writeReport').addEventListener('click', writeReport);
@@ -305,6 +317,7 @@
     }
 
     wire();
+    loadCurrentModel().catch(function (error) { P.setStatus('modelStatus', error.message, 'err'); });
     loadGroups().then(function () {
       if (params.get('run_group')) { return loadGroupResults(); }
       return null;

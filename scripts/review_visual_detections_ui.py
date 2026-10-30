@@ -1863,6 +1863,11 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     document.addEventListener('keydown', event => logDebugInteraction('keydown', event), true);
 
     document.addEventListener('keydown', async event => {{
+      if (event.key === 'Escape' && document.getElementById('hotkeyOverlay')?.classList.contains('visible')) {{
+        event.preventDefault();
+        document.getElementById('hotkeyOverlay').classList.remove('visible');
+        return;
+      }}
       const activeTag = document.activeElement ? document.activeElement.tagName : '';
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
 
