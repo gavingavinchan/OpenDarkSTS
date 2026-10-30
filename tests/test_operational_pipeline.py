@@ -573,7 +573,7 @@ def test_run_pipeline_raises_when_no_readable_images(tmp_path: Path) -> None:
 
 def test_default_weights_points_at_the_promoted_weight() -> None:
     pipeline = load_module("scripts.pipeline")
-    assert pipeline.DEFAULT_WEIGHTS.name == "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
+    assert pipeline.DEFAULT_WEIGHTS.name == "opendarksts_yolo11s_v4_best.pt"
     assert pipeline.DEFAULT_WEIGHTS.parent == REPO_ROOT / "workspace" / "model_weights"
 
 

@@ -7,11 +7,7 @@ import tempfile
 from importlib.resources import files
 from pathlib import Path
 
-from .workspace import WORKSPACE_DIR, atomic_json, contained, current_model, exclusive_lock, set_current_model, sha256
-
-
-def default_manifest():
-    return json.loads(files("opendarksts").joinpath("assets/default_model.json").read_text(encoding="utf-8"))
+from .workspace import WORKSPACE_DIR, atomic_json, contained, current_model, default_manifest, exclusive_lock, set_current_model, sha256
 
 
 def initialize(*, weights=None, no_model=False, example=True):
@@ -42,8 +38,17 @@ def initialize(*, weights=None, no_model=False, example=True):
                 resource = files("opendarksts").joinpath("assets", filename)
                 if resource.is_file():
                     (model_root / filename).write_text(resource.read_text(encoding="utf-8"), encoding="utf-8")
-            # Re-running init must not reset a model explicitly promoted in Improve.
-            if not (model_root / "current.json").exists():
+            # Upgrade an automatically installed former default, while preserving
+            # checkpoints explicitly promoted in Improve (which carry run metadata).
+            record_path = model_root / "current.json"
+            record = json.loads(record_path.read_text(encoding="utf-8")) if record_path.exists() else None
+            former_default = record is not None and set(record) <= {"filename", "sha256", "source_url", "metrics"} and any(
+                record.get("filename") == previous["filename"]
+                and record.get("sha256") == previous["sha256"]
+                and record.get("source_url") == previous["url"]
+                for previous in manifest.get("previous_defaults", [])
+            )
+            if record is None or former_default:
                 set_current_model(target, metrics=manifest["metrics"], source_url=manifest["url"])
             installed = str(current_model(model_root))
         example_dir = contained(WORKSPACE_DIR / "inputs" / "example", WORKSPACE_DIR)

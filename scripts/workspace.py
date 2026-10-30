@@ -7,12 +7,25 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = Path(os.environ.get("OPENDARKSTS_WORKSPACE", Path.cwd() / "workspace")).expanduser().resolve()
-DEFAULT_WEIGHT_NAME = "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
+
+
+def default_manifest() -> dict[str, Any]:
+    # Direct script entry points put scripts/, rather than the project root, on
+    # sys.path. Prefer the adjacent package so another installed checkout cannot
+    # supply a stale manifest. Installed wheels retain the same sibling layout.
+    adjacent = REPO_ROOT / "opendarksts" / "assets" / "default_model.json"
+    if adjacent.is_file():
+        return json.loads(adjacent.read_text(encoding="utf-8"))
+    return json.loads(files("opendarksts").joinpath("assets/default_model.json").read_text(encoding="utf-8"))
+
+
+DEFAULT_WEIGHT_NAME = default_manifest()["filename"]
 
 
 def contained(path: str | Path, root: str | Path = WORKSPACE_DIR) -> Path:

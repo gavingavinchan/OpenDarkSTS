@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reviews-dir", default=str(DEFAULT_REVIEWS_DIR), help="Root directory for per-image review JSON files")
     parser.add_argument("--reviewer", default=DEFAULT_REVIEWER, help="Reviewer name used for initial review stub output")
     parser.add_argument("--weights-yolov8n", help="Optional additional trained STS weight")
-    parser.add_argument("--weights-yolo26n", help="Override the current model")
+    parser.add_argument("--weights", "--weights-yolo26n", dest="weights", help="Override the current model (default: the initialized or promoted checkpoint)")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold for model inference")
     parser.add_argument("--iou", type=float, default=0.5, help="IoU threshold for class-aware NMS")
     parser.add_argument("--date", action="append", dest="dates", help="Only preprocess specific date(s), repeatable")
@@ -81,7 +81,7 @@ def main() -> None:
     if not dates:
         raise ValueError("No dates matched the requested filters")
 
-    model_paths = {"current": args.weights_yolo26n or str(current_model())}
+    model_paths = {"current": args.weights or str(current_model())}
     if args.weights_yolov8n:
         model_paths["additional"] = args.weights_yolov8n
     models = load_yolo_models(model_paths)

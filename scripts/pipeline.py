@@ -18,7 +18,7 @@ from typing import Any, Callable, Sequence
 from PIL import Image, ImageDraw
 
 try:
-    from .workspace import current_model, atomic_json, sha256, WORKSPACE_DIR
+    from .workspace import current_model, atomic_json, sha256, WORKSPACE_DIR, DEFAULT_WEIGHT_NAME
     from .correlate_ais import correlate_detections
     from .detect import detect_images
     from .georeference import georeference_detections
@@ -33,7 +33,7 @@ try:
         write_json,
     )
 except ImportError:
-    from workspace import current_model, atomic_json, sha256, WORKSPACE_DIR
+    from workspace import current_model, atomic_json, sha256, WORKSPACE_DIR, DEFAULT_WEIGHT_NAME
     from correlate_ais import correlate_detections
     from detect import detect_images
     from georeference import georeference_detections
@@ -50,7 +50,7 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_WEIGHTS = WORKSPACE_DIR / "model_weights" / "yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt"
+DEFAULT_WEIGHTS = WORKSPACE_DIR / "model_weights" / DEFAULT_WEIGHT_NAME
 PREVIEW_MARGIN_PX = 120
 PREVIEW_MIN_SIDE_PX = 480
 PREVIEW_CAPTION_LINE_PX = 14
