@@ -31,9 +31,9 @@ table (21 test images):
 
 YOLO11s ranked highest by overall mAP50 among the eleven compared architectures;
 YOLOv12n had the highest mAP50–95 (0.572). These are recorded test metrics, not a
-fresh independent benchmark. Default operational inference uses Ultralytics'
-image size 640 and confidence 0.25, so these metrics do not measure the operational
-pipeline's accuracy or dark-status classification accuracy.
+fresh independent benchmark. Operational inference uses the checkpoint's
+training image size (960) and a default confidence of 0.25; these metrics do not
+measure the accuracy of the whole operational pipeline or of the dark-status labels.
 
 Limitations: the test split contains only 21 images. The v4 dataset derives from
 a pre-augmented source set, so some test images share source scenes with training
