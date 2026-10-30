@@ -85,8 +85,12 @@ def validate_bbox(bbox) -> list[float]:
     if len(values) != 4 or not all(map(math.isfinite, values)):
         raise ValueError("Bounds must contain four finite coordinates")
     west, south, east, north = values
-    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
-        raise ValueError("Bounds must be west, south, east, north in EPSG:4326")
+    if west >= east:
+        raise ValueError("West must be less than East. Check the area coordinates.")
+    if south >= north:
+        raise ValueError("South must be less than North. Check the area coordinates.")
+    if not (-180 <= west <= 180 and -180 <= east <= 180 and -90 <= south <= 90 and -90 <= north <= 90):
+        raise ValueError("Longitude must be between -180 and 180; latitude must be between -90 and 90.")
     return values
 
 

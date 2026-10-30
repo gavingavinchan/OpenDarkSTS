@@ -98,6 +98,7 @@
     if ($('jobDetails') && displayedJob !== selectedJob) $('jobDetails').open = !['completed', 'failed', 'cancelled'].includes(job.status);
     displayedJob = selectedJob;
     $('jobLog').textContent = (job.log_tail || []).join('\n') || job.error || (job.status === 'completed' ? 'Completed successfully. No additional log messages.' : 'Waiting for output…');
+    $('jobLog').scrollTop = $('jobLog').scrollHeight;
     $('jobOutput').replaceChildren();
     if (['ais', 'imagery'].includes(job.kind) && !['completed', 'failed', 'cancelled'].includes(job.status)) {
       const cancel = document.createElement('button'); cancel.type = 'button';
@@ -160,8 +161,10 @@
       $('preset').onchange = () => { if (dashboard.presets[$('preset').value]) drawBounds(dashboard.presets[$('preset').value], true); P.logInteraction('choose_area_preset', {preset: $('preset').value}); };
       ['west','south','east','north'].forEach(id => $(id).onchange = () => { $('preset').value = ''; drawBounds(['west','south','east','north'].map(key => Number($(key).value)), false); });
       ['start','end','images'].forEach(key => $(key).value = settings[key]);
+      $('datePeriod').value = settings.date_period || (settings.start === settings.end ? 'date' : 'range');
       function applyDatePeriod() {
         const date = $('start').value, period = $('datePeriod').value;
+        $('end').disabled = period === 'date';
         if (!date || period === 'range') return;
         const [year, month] = date.split('-').map(Number);
         if (period === 'date') $('end').value = date;
@@ -173,12 +176,24 @@
         P.logInteraction('choose_date_period', {period, start: $('start').value, end: $('end').value});
       }
       $('datePeriod').onchange = applyDatePeriod;
+      applyDatePeriod();
       $('start').addEventListener('change', applyDatePeriod);
       $('end').addEventListener('change', () => { $('datePeriod').value = 'range'; });
       $('drawArea').onclick = () => { corners = []; $('mapHint').textContent = 'Click the first corner, then the opposite corner.'; P.logInteraction('draw_area_started', {}); };
       if (map) map.on('click', e => { if (corners === null) return; corners.push(e.latlng); if (corners.length === 2) { const b = L.latLngBounds(corners); $('preset').value = ''; drawBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], false); corners = null; $('mapHint').textContent = 'Area selected. Save to continue.'; P.logInteraction('draw_area_done', {}); } });
       $('mapExtent').onclick = () => { const b = map.getBounds(); $('preset').value = ''; drawBounds([b.getWest(),b.getSouth(),b.getEast(),b.getNorth()], false); P.logInteraction('use_map_extent', {}); };
-      $('areaForm').onsubmit = async e => { e.preventDefault(); try { await save({bbox: ['west','south','east','north'].map(k => Number($(k).value)), start: $('start').value, end: $('end').value, images: $('images').value}); P.logInteraction('save_area', dashboard.project); location.href = '/data'; } catch (err) {error(err);} };
+      $('areaForm').onsubmit = async e => {
+        e.preventDefault(); P.setStatus($('areaError'), '');
+        try {
+          applyDatePeriod();
+          await save({bbox: ['west','south','east','north'].map(k => Number($(k).value)), start: $('start').value, end: $('end').value, date_period: $('datePeriod').value, images: $('images').value});
+          P.logInteraction('save_area', dashboard.project); location.href = '/data';
+        } catch (err) {
+          P.setStatus($('areaError'), err.message, 'err');
+          $('areaCoordinates').open = true;
+          P.logInteraction('save_area_error', {message: err.message});
+        }
+      };
     }
     if (page === 'data') {
       $('imageCount').textContent = countLabel(dashboard.inventory.images, 'image file'); $('imagePath').textContent = settings.images;

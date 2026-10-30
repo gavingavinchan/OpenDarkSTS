@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock
+from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock, operation_lock
 from . import acquisition, pipeline, process_support
 from . import training_pipeline_lib as training
 from .training_pipeline_lib import process_is_alive, read_process_start_ticks
@@ -36,7 +36,7 @@ def scan_description(options, timestamp):
             dates.add(parse_image_date(Path(path)))
         except ValueError:
             pass
-    period = options.get("date") or (" to ".join([min(dates), max(dates)]) if len(dates) > 1 else next(iter(dates), "date unknown"))
+    period = options.get("date") or (" to ".join([min(dates), max(dates)]) if len(dates) > 1 else next(iter(dates), "no dated imagery found"))
     time = datetime.fromisoformat(timestamp).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if timestamp else "time unknown"
     return f"{source} / {period} / threshold {float(options.get('conf', .25)):g} / radius {float(options.get('radius', 1000)):g} m / {time}"
 
@@ -62,6 +62,30 @@ def validate_options(kind, options):
     elif not isinstance(options.get("images"), list) or not options["images"]:
         raise ValueError("Select at least one imagery folder or file")
     return dict(options)
+
+
+def preflight_options(kind, options):
+    """Reject doomed submissions before creating either a job or a worker."""
+    options = validate_options(kind, options)
+    if kind == "imagery" and not (os.environ.get("CDSE_CLIENT_ID") and os.environ.get("CDSE_CLIENT_SECRET")):
+        raise ValueError("Set CDSE_CLIENT_ID and CDSE_CLIENT_SECRET in the environment before acquiring imagery")
+    if kind == "run":
+        from .sts_utils import resolve_image_inputs, parse_image_date
+        images = resolve_image_inputs(options["images"])
+        if not images:
+            raise ValueError("No imagery files found. Check that this file or folder exists: " + ", ".join(options["images"]))
+        if options.get("date"):
+            acquisition.date_range(options["date"])
+            dated = []
+            for image in images:
+                try:
+                    if parse_image_date(image) == options["date"]:
+                        dated.append(image)
+                except ValueError:
+                    pass
+            if not dated:
+                raise ValueError("No imagery filenames match the requested date " + options["date"])
+    return options
 
 
 def _read_job(job_id, *, reconcile=True):
@@ -108,6 +132,11 @@ def _read_job(job_id, *, reconcile=True):
             record["log_tail"] = [line for line in lines if not harmless.search(line)][-100:]
     if record["kind"] == "run":
         record["description"] = scan_description(record["options"], record.get("started_at") or record["created_at"])
+    elif record["kind"] in {"ais", "imagery"}:
+        options = record["options"]
+        start, end = options.get("start", "dates not recorded"), options.get("end")
+        period = f"{start} to {end}" if end and end != start else start
+        record["description"] = ("AIS download" if record["kind"] == "ais" else "Imagery download") + " / " + period
     record["cancel_requested"] = (directory / "cancel.json").is_file()
     return record
 
@@ -151,7 +180,7 @@ def check_cancelled(job_id):
 
 def run_foreground(kind, options, log=print):
     """Record CLI execution in the same history as detached GUI workers."""
-    options = validate_options(kind, options)
+    options = preflight_options(kind, options)
     job_id = uuid.uuid4().hex
     directory = job_dir(job_id)
     directory.mkdir(parents=True)
@@ -194,7 +223,7 @@ def list_jobs(*, include_training=False):
 
 
 def submit_job(kind, options, *, project_update=None):
-    options = validate_options(kind, options)
+    options = preflight_options(kind, options)
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         with exclusive_lock(JOB_ROOT / ".submit.lock"):
@@ -230,7 +259,7 @@ def execute_job(kind, options, log=print):
     if kind in {"ais", "imagery"}:
         return getattr(acquisition, "acquire_" + kind)(**options, log=log)
     output = contained(options.get("output_dir") or WORKSPACE_DIR / "reports" / "operational" / uuid.uuid4().hex)
-    with exclusive_lock(output / ".run.lock"):
+    with operation_lock(output / ".run.lock"):
         if any(path.name != ".run.lock" for path in output.iterdir()):
             raise ValueError("Detection output directory must be empty; choose a new directory")
         return _execute_pipeline(options, output, log)
