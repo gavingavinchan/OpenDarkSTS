@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from .workspace import WORKSPACE_DIR, atomic_json, contained, exclusive_lock, sha256
-from .jobs import now
+from .jobs import now, scan_description
 
 
 def run_directory(value):
@@ -28,7 +28,10 @@ def list_runs():
         try:
             directory = run_directory(path.parent)
             record = json.loads(path.read_text())
-            records.append({**record, "directory": str(directory)})
+            description = scan_description({"images": record.get("inputs", []), "date": record.get("date"),
+                                           "conf": record.get("confidence", .25), "radius": record.get("ais_radius_m", 1000)},
+                                          record.get("started_at"))
+            records.append({**record, "directory": str(directory), "description": description})
         except (ValueError, OSError):
             continue
     return sorted(records, key=lambda r: r.get("started_at", ""), reverse=True)

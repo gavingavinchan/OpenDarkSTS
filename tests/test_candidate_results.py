@@ -62,6 +62,26 @@ def test_exports_include_human_decision_and_coordinates(run):
         results.run_directory(results.WORKSPACE_DIR.parent)
 
 
+def test_jobs_exports_match_current_results_exports(run, monkeypatch):
+    from scripts import jobs, training_pipeline_ui as ui
+    monkeypatch.setattr(jobs, 'read_job', lambda value: {'kind': 'run', 'status': 'completed', 'result': {'output_dir': str(run)}})
+    with UiServer(ui.TrainingPipelineHandler) as server:
+        for verdict in ['real_sts', 'not_sts']:
+            results.review_detection(run, 'one', verdict, training_label='ship_non_sts' if verdict == 'not_sts' else None)
+            for extension in ['json', 'csv']:
+                with urlopen(server.base_url + '/api/operations/jobs/example/output?format=' + extension) as response:
+                    assert response.read() == results.export_results(run, extension)
+                    assert 'reviewed_candidates' in response.headers['Content-Disposition']
+
+
+def test_run_description_includes_input_dates_and_settings(run):
+    record = {'inputs': [str(run / '2020-01-04_tile.tiff')], 'confidence': .45, 'ais_radius_m': 500,
+              'started_at': '2026-10-30T12:34:56+00:00'}
+    (run / 'run.json').write_text(json.dumps(record))
+    description = results.list_runs()[0]['description']
+    assert all(word in description for word in ['2020-01-04_tile.tiff', 'sensitivity 0.45', 'radius 500 m', '12:34:56 UTC'])
+
+
 def test_results_http_available_by_default_and_review(run, monkeypatch):
     from scripts import training_pipeline_ui as ui
     monkeypatch.setattr(ui, 'TRAINING_UI_INTERACTION_LOG_PATH', results.WORKSPACE_DIR/'interactions.jsonl')
