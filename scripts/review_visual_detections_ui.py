@@ -797,7 +797,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <div class="map-nav-buttons">
             <button onclick="navigateImageButton(-1, event)" data-tooltip="Previous image. Hold Shift while clicking to mark this image fully reviewed first.">Previous Image</button>
             <button onclick="retreatReview()" data-tooltip="Previous bbox [Left arrow]">Previous</button>
-            <button onclick="advanceReview()" data-tooltip="Accept current bbox class and advance [Right arrow / Space]">Next</button>
+            <button onclick="advanceReview()" data-tooltip="Next detection [Right arrow]">Next</button>
             <button class="tooltip-right" onclick="navigateImageButton(1, event)" data-tooltip="Next image. Hold Shift while clicking to mark this image fully reviewed first.">Next Image</button>
           </div>
           <div class="viewer-hint" id="viewerHint">Load an image to review detections. Draw new boxes for misses, select a box to edit it, and use detail mode for labeling.</div>
@@ -820,7 +820,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           <div class="hotkey-row"><span>Show / hide this</span><kbd>?</kbd></div>
         </div>
         <div>
-          <div class="hotkey-row"><span>Advance review</span><kbd>Space</kbd></div>
+          <div class="hotkey-row"><span>Accept current class (detail review)</span><kbd>Space</kbd></div>
           <div class="hotkey-row"><span>Prev detection</span><kbd>&#9664;</kbd></div>
           <div class="hotkey-row"><span>Next detection</span><kbd>&#9654;</kbd></div>
           <div class="hotkey-row"><span>Previous image</span><kbd>[</kbd></div>
@@ -1103,7 +1103,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
           </div>
           <div class="button-row">
             <button class="secondary" onclick="navigateDetail('prev')" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Previous detection [Left arrow]">&#9664; Back</button>
-            <button class="secondary" onclick="advanceReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Right arrow / Space]">Accept / Next &#9654;</button>
+            <button class="secondary" onclick="acceptReview()" ${{current.review_status === 'detail' ? '' : 'disabled'}} data-tooltip="Accept current class and advance [Space]">Accept / Next &#9654;</button>
           </div>
           <div class="button-row">
             <button class="ships" onclick="labelCurrent('ships_sts')" ${{currentDetection ? '' : 'disabled'}} data-tooltip="Label as STS pair [S]">STS pair</button>
@@ -1344,7 +1344,7 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
     }}
 
     async function acceptCurrentReviewChoice() {{
-      // Space/Right persists a pending Tab choice even for already-reviewed bboxes.
+      // Explicit acceptance persists a pending class choice for the current bbox.
       const target = getCurrentReviewTarget();
       if (!target || target.review_label === 'neither' || !target.is_active) return false;
       if (target.pending_review_label === 'neither') {{
@@ -1360,9 +1360,18 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
       return true;
     }}
 
+    async function acceptReview() {{
+      if (!state?.image || state.image.review_status !== 'detail') return;
+      if (await acceptCurrentReviewChoice()) return;
+      await advanceReview();
+    }}
+
     async function advanceReview() {{
       if (!state || !state.image) return;
-      if (await acceptCurrentReviewChoice()) return;
+      if (state.image.review_status === 'detail') {{
+        await navigateDetail('next');
+        return;
+      }}
       const active = getActiveDetections();
       reviewCursorIndex++;
 
@@ -1397,6 +1406,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 
     async function retreatReview() {{
       if (!state || !state.image) return;
+      if (state.image.review_status === 'detail') {{
+        await navigateDetail('prev');
+        return;
+      }}
       const active = getActiveDetections();
 
       if (reviewCursorIndex <= 0) {{
@@ -1738,6 +1751,8 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
 
     async function navigateImageButton(direction, event) {{
       if (event && event.shiftKey) {{
+        const count = state?.counts?.pending_active_detections || 0;
+        if (!confirm(`Accept ${{count}} unreviewed box${{count === 1 ? '' : 'es'}} and mark this image fully reviewed?`)) return;
         const marked = await markCurrentImageReviewed();
         if (!marked) return;
       }}
@@ -1817,10 +1832,10 @@ def render_app_html(default_image_id: str | None, default_detection_id: str | No
         return;
       }}
 
-      // Space: advance through review cycle
+      // Space: advance by explicit acceptance in detail review only
       if (key === ' ') {{
         event.preventDefault();
-        await advanceReview();
+        await acceptReview();
         return;
       }}
 
