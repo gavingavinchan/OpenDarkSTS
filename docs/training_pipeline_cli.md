@@ -790,3 +790,63 @@ defaults. These presets apply during training and do not create extra image file
 - Prefer JSON output for tests, scripts, and agent diagnostics.
 - Use `--dry-run` before exports when checking path overrides or manifest changes.
 - The CLI currently implements backend preparation and diagnostics. It does not yet provide `start-training`, `training-status`, or `stop-training`; those are planned in `docs/training_pipeline_plan.md`.
+
+## Public application and review-state semantics
+
+The installed application exposes the same training commands as
+`opendarksts training <command> [options]`. The repository script remains
+available for development and existing automation.
+
+Annotation proposals remain unreviewed when an image is opened, selected, or
+entered into detail review. Accept, relabel, neither, delete, and an actual
+user-made geometry edit are explicit decisions. The geometry backend helper
+`update_detection_geometry` and `/api/save-detection` require
+`user_edited=True` and `"user_edited": true`, respectively, for edits to an
+existing box. Automatic geometry saves without this flag leave the saved box and
+its review decision unchanged. Creating a new manual box remains an explicit
+annotation action. Existing review files are not migrated or relabelled by this
+change; a historical decision cannot reliably be distinguished from an erroneous
+automatic acceptance after the fact.
+
+`opendarksts results DIRECTORY --detection ID --send-to-improve` transfers a
+human-labelled candidate with a native-resolution context window, normally
+960 pixels square before clipping at the source-tile boundary. The window grows
+for larger candidate boxes. The annotation retains the candidate's actual
+position and size within that window. The imported image sidecar, import record,
+and review record preserve the window bounds and source provenance. Transfers
+already recorded in a run remain unchanged.
+
+`build-train-command` returns both the exact `command_line` argument array and a
+copyable `display_command`: bash quoting on Linux and PowerShell quoting on
+Windows. Saved-selection listings include the selection document and
+`export_is_current`, allowing the GUI to restore a previously exported selection
+without saving or exporting it again.
+
+Test-split evaluation records image and object counts and per-class metrics.
+Model promotion preserves recorded test metrics when available; validation
+metrics are used only when no test evaluation is available and are identified
+accordingly. A decline of at least 0.100 in recorded test mAP50 relative to the
+current model produces a warning before promotion in the GUI and CLI. GUI
+confirmation is required for that warning. Scores from different datasets remain
+subject to the limitations stated in the warning. Evaluation-report tables round
+scores to three decimal places; JSON records retain their original precision.
+
+### Browser regression workflow
+
+`tests/browser/release_fixes.py` verifies the explicit three-box decision sequence,
+the bundled operational example, contextual transfer, the import-to-promotion
+lifecycle, mobile evaluation controls, and AIS job presentation. Run it with
+Playwright and Chromium installed in a separate, disposable environment. Supply
+`--workspace`, `--evidence`, `--app-python`, and optionally `--base-url` (default:
+`http://127.0.0.1:8798`). Initialize and serve a new application workspace first;
+the script requires an initially empty training import and a workspace path
+containing a space. Stop the server with `opendarksts --workspace PATH stop`
+afterwards.
+
+The helper `tests/browser/release_fixes_prepare.py` creates three synthetic
+machine proposals for the review-state regression and dated variants of the
+bundled scene for a short lifecycle check. These fixtures and their evaluation
+scores are intended exclusively for software verification. They do not constitute
+an independent dataset or an accuracy benchmark. The AIS log-scrolling check
+appends a labelled diagnostic fixture to an already cancelled scratch job, after
+preserving its original log.
