@@ -52,3 +52,20 @@ summary is in `gui_acceptance_report.md`.
 Final external checks will include contributor licence agreement, data redistribution
 rights, Windows execution, review of the experimental Results page, and publication.
 These do not prevent preparing and testing the implementation locally.
+
+The SNAME 2026 release default is now the paper's fine-tuned YOLO11s v4 checkpoint,
+`opendarksts_yolo11s_v4_best.pt`. Initialization, operational inference, training
+auto detection and preprocessing share the manifest-backed default. Initialization
+upgrades a recorded automatic installation of the former default while preserving
+explicit promotions. Model documentation records the paper's exact results and
+the 21-image, partially scene-overlapping v4 test split. The clean-split YOLO26n
+remains an alternative.
+
+Local validation with `/home/gavin/OpenDarkSTS/.venv/bin/python -m pytest -q`:
+359 passed. The built wheel was installed and exercised from an isolated working
+directory outside the repository root, with spaces in its path.
+`opendarksts init --weights` accepted the exact source YOLO11s checkpoint; the
+bundled example produced one STS candidate, two AIS matches, CSV/JSON outputs
+and one annotated preview. Relative checkpoint paths used by the Linux/Windows
+example workflow were also verified. Actual Windows execution remains pending.
+No release, upload or push was performed, and no checkpoint was committed.

@@ -11,7 +11,7 @@ Use this tool to detect, classify, count, and locate objects within an image. Tr
 ## 3. Required Inputs
 When writing the execution code for this tool, you must accept the following inputs:
 * `image_path` (string): The absolute or relative file path to the target image.
-* `model_weight_path` (string): The path to the fine-tuned YOLO26 weights (e.g., `"model_weights/best.pt"`). If not provided, default to `"yolo26n.pt"`.
+* `model_weight_path` (string, optional): An explicit trained checkpoint. For OpenDarkSTS STS detection, default to `scripts.workspace.current_model()`, which selects the initialized SNAME 2026 YOLO11s checkpoint (`opendarksts_yolo11s_v4_best.pt`) or an explicitly promoted model. YOLO26 is an optional alternative; a stock COCO checkpoint must not be used as an STS default.
 * `confidence_threshold` (float, optional): Minimum confidence score (0.0 to 1.0). Default is `0.25`.
 
 ## 4. Expected Execution Logic
@@ -19,9 +19,10 @@ When you execute this skill, write Python code that follows this exact pattern:
 
 ```python
 from ultralytics import YOLO
+from scripts.workspace import current_model
 
 # 1. Initialize the model
-model = YOLO(model_weight_path)
+model = YOLO(str(model_weight_path or current_model()))
 
 # 2. Run inference
 results = model.predict(source=image_path, conf=confidence_threshold)

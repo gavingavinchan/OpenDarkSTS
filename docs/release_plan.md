@@ -72,8 +72,9 @@ their logs.
 - **One workspace folder** holds every download and every derived file. Outside folders
   (such as `/home/gavin/Downloads/AIS data`) are only ever read.
 - **One current model.** Every feature that runs the detector uses the promoted weight by
-  default, including step 1 auto-detect (which today still points at an old v2 weight,
-  `training_pipeline_lib.py:49`).
+  default, including step 1 auto-detect. The initial default is the SNAME 2026
+  YOLO11s checkpoint, `opendarksts_yolo11s_v4_best.pt`; explicit promotions take
+  precedence.
 - **Every run records** the weight's checksum, the confidence threshold, the AIS radius
   and the input list, so a result can always be traced.
 
@@ -206,7 +207,11 @@ in history for good; its `.gitignore` rewrite drops our ignores for `workspace/`
 and `.venv/`; its `app.py` runs inference twice per scan, keeps a Windows-only base path,
 and has routes that can delete or read files outside its folders. Madhulika should be told
 about the weight file so she does not rely on it. Her own trained weight is **not needed**
-for the release: the shipped model is our promoted clean-split `yolo26n`.
+for the release: the application default is the fine-tuned SNAME 2026 YOLO11s
+checkpoint, `opendarksts_yolo11s_v4_best.pt`, with classes `ship` and `ships`.
+Its [model card](../opendarksts/assets/model_card.md) records the paper results
+and the small, scene-overlapping v4 test split. The clean-split YOLO26n remains
+an alternative with a separate evaluation.
 
 ---
 

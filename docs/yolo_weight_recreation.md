@@ -709,13 +709,15 @@ If exact recreation is impossible, state the reason explicitly. Acceptable gaps 
 
 ## Installed application copies (release preparation)
 
-`opendarksts init` copies or downloads the clean STS checkpoint named above into
+`opendarksts init` copies or downloads `opendarksts_yolo11s_v4_best.pt` into
 `<workspace>/model_weights/`, verifies its recorded SHA-256, and writes accompanying
 `model_card.md` and `weight_recreation.md`. These are packaged under
 `opendarksts/assets/`; `default_model.json` specifies the proposed GitHub release
 asset. The asset is not published yet. Local review workspaces use byte-identical
-copies of the existing promoted weight and the same documentation. Initialization
-does not reset an already promoted current model. No weight file is added to git.
+copies of the v4 YOLO11s run checkpoint and the same documentation. Initialization
+upgrades a recorded automatically installed former default, while preserving an
+explicitly promoted current model. The former clean-split YOLO26n remains an
+alternative. No weight file is added to git.
 
 ## Isolated GUI acceptance weights (18 September 2026)
 
@@ -728,3 +730,36 @@ target is `gui_acceptance_cpu_smoke_2026-09-18_best.pt` within that isolated
 workspace's `model_weights/`. This is a one-epoch CPU workflow test with reused
 images and model-assisted labels; it provides no independent performance estimate.
 It is not a replacement release model. No weight file is added to git.
+
+## SNAME 2026 release default: YOLO11s v4
+
+The published filename is `opendarksts_yolo11s_v4_best.pt`, installed under
+`<workspace>/model_weights/`. SHA-256:
+`cf11d54de2aa2ba3fa74e23d1118482a281b62cd29a95b2b1e58a06e92b261ea`.
+It is a byte-identical copy of
+`workspace/runs/madhulika_manual_sts_balanced_v4_yolo_suite_aug_e300_img960/yolo11s_aug_e300_img960/weights/best.pt`.
+The proposed release asset is
+https://github.com/gavingavinchan/OpenDarkSTS/releases/download/v0.1/opendarksts_yolo11s_v4_best.pt;
+no asset has been published as part of this change.
+
+The [packaged acquisition and recreation recipe](../opendarksts/assets/weight_recreation.md)
+records the v4 dataset builder, original inputs, COCO-pretrained `yolo11s.pt`
+starting checkpoint, exact training command, 300 epochs, image size 960, batch 8,
+seed 42, patience 60 and augmentation parameters. The v4 suite section above
+records the original run script and logs. Ultralytics checkpoint metadata is
+8.4.23. Exact recreation requires the original dataset/review snapshot and upstream
+starting artifact; byte identity across hardware and dependency changes is not
+guaranteed. The upstream starting asset URL was not recorded.
+
+The [model card](../opendarksts/assets/model_card.md) reproduces the paper's
+held-out test results: overall P 0.830, R 0.820, mAP50 0.895, mAP50–95 0.544;
+`ship` mAP50 0.869, `ships` mAP50 0.920. The 21-image test split is small, and
+the pre-augmented v4 source set causes some source-scene overlap with training.
+These are the paper's reported results, not an independent-scene estimate or a
+replacement for the separate clean-split evaluation recorded above. The default
+selection aligns the application with the SNAME 2026 paper and presentation.
+
+Local validation copies also reside in this worktree's gitignored
+`workspace/model_weights/` and isolated installed-example workspaces under
+`workspace/reports/`. All are byte-identical to the source checkpoint and covered
+by this recipe. No `.pt` file is committed.

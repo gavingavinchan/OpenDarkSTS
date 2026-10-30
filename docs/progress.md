@@ -1,5 +1,17 @@
 # Progress Tracking
 
+## Current Release Default — SNAME 2026
+
+The application default is `opendarksts_yolo11s_v4_best.pt`, the fine-tuned
+YOLO11s checkpoint presented in the paper. Overall held-out test mAP50 is 0.895;
+`ships` mAP50 is 0.920. The 21-image v4 test split shares some source scenes with
+training because the source dataset was pre-augmented. The
+[model card](../opendarksts/assets/model_card.md) records all per-class results
+and limitations. The clean-split YOLO26n remains an alternative. The default
+selection and preprocessing notes below record earlier development stages;
+current detection and auto-detection use the shared initialized or explicitly
+promoted model. The obsolete additional YOLOv8n default has been removed.
+
 ## Current Dataset Workspace
 
 - Source copied from read-only folder: `/home/gavin/Downloads/AIS data/Madhulika/data science dark fleet.v7i.yolov8 (1).zip`

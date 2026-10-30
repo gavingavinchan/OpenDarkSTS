@@ -43,11 +43,14 @@ This document describes the system **as it actually exists today**. It supersede
   badly calibrated. The imagery is the spatial ground truth.
 
 ### Model
-- Promoted weight: `workspace/model_weights/yolo26n_sts_clean_v1_e300_img960_2026-09-15_best.pt`
+- Promoted weight: `workspace/model_weights/opendarksts_yolo11s_v4_best.pt`
 - Classes: `ship` (class 0, a single vessel) and `ships` (class 1, an active STS pair,
   one box around both hulls). The operational pipeline keeps only `ships`.
-- First leak-free evaluation (`sts_clean_v1` test split): overall mAP50 `0.868`,
-  `ships` mAP50 `0.839`. See `docs/progress.md`, section "Clean Evaluation v1".
+- SNAME 2026 YOLO11s held-out test: overall mAP50 `0.895`, mAP50–95 `0.544`;
+  `ships` mAP50 `0.920`. The v4 test has 21 images and shares some source scenes
+  with training because the source set was pre-augmented. See the packaged model card.
+- The clean-split YOLO26n remains an alternative: `sts_clean_v1` test overall
+  mAP50 `0.868`, `ships` mAP50 `0.839`. These use a different dataset.
 - Recreation recipe: `docs/yolo_weight_recreation.md`.
 
 ---
@@ -116,7 +119,7 @@ box, box drawn in red, AIS matches printed underneath) so a human can adjudicate
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `--weights` | promoted `yolo26n_sts_clean_v1_...best.pt` | Override to compare models |
+| `--weights` | `opendarksts_yolo11s_v4_best.pt` (or explicitly promoted model) | Override to compare models |
 | `--conf` | `0.25` | YOLO confidence threshold |
 | `--radius` | `1000` m | AIS search radius from the STS centre |
 | `--date` | inferred per file | Restrict a mixed folder to one acquisition date |
